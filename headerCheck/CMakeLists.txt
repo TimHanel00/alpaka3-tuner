@@ -1,83 +1,49 @@
-#
-# Copyright 2014-2023 Benjamin Worpitz, Axel Huebl, Jan Stephan, Rene Widera
-#
-# This file is part of PIConGPU.
-#
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
-#
-
 cmake_minimum_required(VERSION 3.25)
-project(Alpaka2HeaderTest)
+project(TunerHeaderCheck)
 
-# Add common functions from alpaka.
-include(${CMAKE_CURRENT_SOURCE_DIR}/../cmake/buildDependencies.cmake)
+set(_TARGET_NAME tunerHeaderCheckTest)
 
-set(_TARGET_NAME "headerCheckTest")
+# Location of your headers
+set(TUNER_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../include/tune")
 
-################################################################################
-# Add subdirectories.
-################################################################################
+# Collect all *.hpp recursively
+file(GLOB_RECURSE TUNER_HEADERS RELATIVE "${TUNER_INCLUDE_DIR}" "${TUNER_INCLUDE_DIR}/*.hpp")
 
-# alpaka
-if(NOT TARGET alpaka::alpaka)
-    # hide alpaka_HEADERCHECKS because it can be OFF since this test is build directly.
-    mark_as_advanced(FORCE alpaka_HEADERCHECKS)
-    add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/.." "${CMAKE_BINARY_DIR}/alpaka")
-endif()
+# Directory where generated .cpp files go
+set(_GENERATED_SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(REMOVE_RECURSE "${_GENERATED_SOURCE_DIR}")
+file(MAKE_DIRECTORY "${_GENERATED_SOURCE_DIR}")
 
-# fetch catch2
-if(NOT TARGET Catch2::Catch2WithMain)
-    alpaka_install_catch2()
-endif()
+set(_GENERATED_SOURCES "")
 
-################################################################################
-# Enable CTests
-################################################################################
+# Create a .cpp for each header that includes it twice
+foreach(_H ${TUNER_HEADERS})
+    set(_OUT "${_GENERATED_SOURCE_DIR}/${_H}.cpp")
 
-enable_testing()
+    # Make sure the directory exists
+    get_filename_component(_OUT_DIR "${_OUT}" DIRECTORY)
+    file(MAKE_DIRECTORY "${_OUT_DIR}")
 
-################################################################################
-# Directory of this file.
-################################################################################
-set(ALPAKA_ROOT_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../include/alpaka)
+    file(WRITE "${_OUT}" "#include <tune/${_H}>\n" "#include <tune/${_H}>\n")
 
-# Normalize the path (e.g. remove ../)
-get_filename_component(ALPAKA_ROOT_INCLUDE_DIR "${ALPAKA_ROOT_INCLUDE_DIR}" ABSOLUTE)
-
-#---------------------------------------------------------------------------
-# Create source files.
-set(ALPAKA_SUFFIXED_INCLUDE_DIR "${ALPAKA_ROOT_INCLUDE_DIR}")
-append_recursive_files("${ALPAKA_SUFFIXED_INCLUDE_DIR}" "hpp" "ALPAKA_FILES_HEADER")
-
-set(_GENERATED_SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/src")
-
-file(REMOVE_RECURSE ${_GENERATED_SOURCE_DIR})
-
-foreach(_HEADER_FILE ${ALPAKA_FILES_HEADER})
-    # Remove the parent directory from the path.
-    # NOTE: This is not correct because it does not only replace at the beginning of the string.
-    #  "STRING(REGEX REPLACE" would be correct if there was an easy way to escape arbitrary strings.
-    string(REPLACE "${ALPAKA_SUFFIXED_INCLUDE_DIR}/" "" _HEADER_FILE "${_HEADER_FILE}")
-    set(_SOURCE_FILE "${_GENERATED_SOURCE_DIR}/${_HEADER_FILE}.cpp")
-    file(WRITE "${_SOURCE_FILE}" "#include <alpaka/${_HEADER_FILE}>\n#include <alpaka/${_HEADER_FILE}>\n")
+    list(APPEND _GENERATED_SOURCES "${_OUT}")
 endforeach()
 
-#---------------------------------------------------------------------------
-# Add executable.
+# Add a dummy main
+set(_MAIN "${_GENERATED_SOURCE_DIR}/main.cpp")
+file(WRITE "${_MAIN}" "int main() { return 0; }\n")
+list(APPEND _GENERATED_SOURCES "${_MAIN}")
 
-append_recursive_files_add_to_src_group("${_GENERATED_SOURCE_DIR}" "${_GENERATED_SOURCE_DIR}" "cpp" "_FILES_SOURCE")
-list(APPEND _FILES_SOURCE "src/main.cpp")
+# Build the executable
+add_executable(${_TARGET_NAME} ${_GENERATED_SOURCES})
+target_link_libraries(tunerHeaderCheckTest PRIVATE alpaka::alpakaTune)
+alpaka_finalize(tunerHeaderCheckTest)
+# Add include path
+target_include_directories(${_TARGET_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../include")
 
-# Always add all files to the target executable build call to add them to the build project.
-add_executable(${_TARGET_NAME} ${_FILES_SOURCE})
+# You can link other libs if needed:
+# target_link_libraries(${_TARGET_NAME} PRIVATE alpaka::alpaka)
 
-target_link_libraries(${_TARGET_NAME} PRIVATE Catch2::Catch2WithMain)
-target_compile_definitions(${_TARGET_NAME} PRIVATE "ALPAKA_NO_TPP_INCLUDE")
-target_link_libraries(${_TARGET_NAME} PRIVATE alpaka::alpaka)
-alpaka_finalize(${_TARGET_NAME})
-
-set_target_properties(headerCheckTest PROPERTIES FOLDER "headerCheck")
-
+# Add a CTest entry
+enable_testing()
 add_test(NAME ${_TARGET_NAME} COMMAND ${_TARGET_NAME})

@@ -1,51 +1,38 @@
 #
-# Copyright 2014-2023 Benjamin Worpitz, Axel Huebl, Jan Stephan, Rene Widera
+# Copyright 2025 Tim Hanel
 #
-# This file is part of PIConGPU.
+# This file is part of the dedicated tuning tool for alpaka3
 #
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
 #
 
 cmake_minimum_required(VERSION 3.25)
-project(alpaka3Tuner)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+project(alpakaTune)
+if(NOT TARGET alpaka::alpakaTune)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/alpaka)
+    ## load .cmake files
+    file(GLOB _cmake_files "${CMAKE_CURRENT_SOURCE_DIR}/cmake/*.cmake")
 
-set(_TARGET_NAME "headerCheckTest")
-
-################################################################################
-# Add subdirectories.
-################################################################################
-
-# alpaka
-if(NOT TARGET alpakaTuner::alpakaTuner)
-    # hide alpaka_HEADERCHECKS because it can be OFF since this test is build directly.
-    mark_as_advanced(FORCE alpaka_HEADERCHECKS)
-    add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/.." "${CMAKE_BINARY_DIR}/tuner")
+    ## add alpaka + tuner under common alpaka::alpakaTune interface -- this means we do by default only use the file hierarchy (no alpaka install)
+    add_library(alpakaTune INTERFACE)
+    add_library(alpaka::alpakaTune ALIAS alpakaTune)
+    target_include_directories(alpakaTune INTERFACE ${PROJECT_SOURCE_DIR}/include)
+    target_link_libraries(alpakaTune INTERFACE alpaka::alpaka)
+    foreach(_cmake_file ${_cmake_files})
+        include(${_cmake_file})
+    endforeach()
+endif()
+option(tuner_HEADERCHECKS "Enable header checks (for files specific to this project)" OFF)
+if(tuner_HEADERCHECKS)
+    add_subdirectory(headerCheck)
+endif()
+option(tuner_TESTING "Enable testing for alpaka3-tuner" OFF)
+if(tuner_TESTING)
+    add_subdirectory(tests)
 endif()
 
-################################################################################
-# Enable CTests
-################################################################################
-
-enable_testing()
-
-################################################################################
-# Directory of this file.
-################################################################################
-set(ALPAKATUNER_ROOT_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../include/tuner)
-
-# Normalize the path (e.g. remove ../)
-get_filename_component(ALPAKATUNER_ROOT_INCLUDE_DIR "${ALPAKA_ROOT_INCLUDE_DIR}" ABSOLUTE)
-
-#---------------------------------------------------------------------------
-# Create source files.
-set(ALPAKATUNER_SUFFIXED_INCLUDE_DIR "${ALPAKA_ROOT_INCLUDE_DIR}")
-append_recursive_files("${ALPAKATUNER_SUFFIXED_INCLUDE_DIR}" "hpp" "ALPAKA_FILES_HEADER")
-
-target_compile_definitions(${_TARGET_NAME} PRIVATE "ALPAKA_NO_TPP_INCLUDE")
-target_link_libraries(${_TARGET_NAME} PRIVATE alpaka::alpaka)
-
-set_target_properties(headerCheckTest PROPERTIES FOLDER "headerCheck")
-
-add_test(NAME ${_TARGET_NAME} COMMAND ${_TARGET_NAME})
+option(tuner_EXAMPLES "Enable examples for alpaka3-tuner" OFF)
+if(tuner_EXAMPLES)
+    add_subdirectory(examples)
+endif()
