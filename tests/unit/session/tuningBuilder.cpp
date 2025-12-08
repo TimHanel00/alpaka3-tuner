@@ -1,14 +1,14 @@
-#include <tune/core/SessionBuilder.hpp>
+#include <alpakaTune/core/SessionBuilder.hpp>
 
-#include <tune/core/TuningSession.hpp>
-#include <tune/interfaces/metricInterface.hpp>
-#include <tune/interfaces/strategy.hpp>
-#include <tune/tunable/tunables.hpp>
+#include <alpakaTune/core/TuningSession.hpp>
+#include <alpakaTune/interfaces/metricInterface.hpp>
+#include <alpakaTune/interfaces/strategy.hpp>
+#include <alpakaTune/tunable/tunables.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 using namespace alpaka::onHost;
-using namespace tune;
-namespace frame = tune::frame;
+using namespace aTune;
+namespace frame = aTune::frame;
 
 // =============================================================
 //  Dummy types satisfying concepts
@@ -16,8 +16,8 @@ namespace frame = tune::frame;
 
 struct DummyMetricInterface {
   // required data member
-  tune::internal::returnComparison returnComparison =
-      tune::internal::returnComparison::LowerIsBetter;
+  aTune::internal::returnComparison returnComparison =
+      aTune::internal::returnComparison::LowerIsBetter;
 
   // required methods
   void start() {} // must return void
@@ -89,7 +89,7 @@ TEST_CASE("add constraint through withConstraint()",
           "[TuningBuilder][constraint]") {
   auto builder =
       TuningBuilder{}
-          .withConstraint<tune::frame::numThreads, tune::frame::frameExtent>(
+          .withConstraint<aTune::frame::numThreads, aTune::frame::frameExtent>(
               [](auto a, auto b) { return a <= b; });
 
   using BType = decltype(builder);
@@ -101,7 +101,7 @@ TEST_CASE("multiple constraints can be added via chaining",
           "[TuningBuilder][constraint][chain]") {
   auto builder =
       TuningBuilder{}
-          .withConstraint<tune::frame::numFrames, ::frame::numBlocks>(
+          .withConstraint<aTune::frame::numFrames, aTune::frame::numBlocks>(
               [](auto a, auto b) { return a >= b; })
           .withConstraint<::frame::frameExtent, ::frame::numThreads>(
               [](auto a, auto b) { return a >= b; });
@@ -154,7 +154,7 @@ TEST_CASE("complex chained builder integration",
           .withPersistentHistory("integration.toml")
           .withStrategy(strategy)
           .withMetricInterface(metric)
-          .withConstraint<tune::frame::numThreads, tune::frame::frameExtent>(
+          .withConstraint<aTune::frame::numThreads, aTune::frame::frameExtent>(
               [](auto a, auto b) { return a <= b; })
           .withContextSpecifier("gpu1", std::to_string(512), "problemX");
 
@@ -167,7 +167,7 @@ TEST_CASE("complex chained builder integration",
   STATIC_REQUIRE(std::tuple_size_v<typename BType::T_ConstraintTuple_Type> ==
                  1);
 
-  auto session1 = tune::TuningBuilder{}
+  auto session1 = aTune::TuningBuilder{}
                       .withStrategy(strategy::ExhaustiveSearch{})
                       .withContextSpecifier("sess-CTune");
   std::cout << "size: " << session1.m_sessionSpecifiers.size() << std::endl;

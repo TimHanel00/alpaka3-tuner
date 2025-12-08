@@ -4,7 +4,7 @@
  */
 #include <alpaka/onHost/example/executors.hpp>
 #include <alpaka/onHost/executeForEach.hpp>
-#include <tune/tune.hpp>
+#include <alpakaTune/tune.hpp>
 
 #include <chrono>
 #include <cstdlib>
@@ -75,15 +75,15 @@ static constexpr auto compileTimeTunableID = alpaka::uniqueId();
 
 // trait to define a compile time tunable for the kernel
 template <typename T>
-struct tune::trait::CompileTimeTuneableTrait<VectorAddTunedKernel<T>> {
+struct aTune::trait::CompileTimeTuneableTrait<VectorAddTunedKernel<T>> {
   static constexpr auto tuned_indices =
       alpaka::CVec<std::size_t, static_cast<std::size_t>(0)>{};
   using t = typename T::type;
 
   static auto tuneAbleDefinitions() {
     using type = uint32_t;
-    using Seq =
-        typename tune::generate::c_LogSpace<type(1), type(64), type(2)>::values;
+    using Seq = typename aTune::generate::c_LogSpace<type(1), type(64),
+                                                     type(2)>::values;
     auto tune1 = CTunable<compileTimeTunableID, Seq>();
     return std::tuple{tune1};
   }
@@ -150,29 +150,29 @@ auto example(auto const deviceSpec, auto const exec, size_t numElements,
       divCeil(extent, chunkSize * elementsPerWorker), chunkSize};
   // define a custom tunable for the numThreads
   auto myNumThreadsTune =
-      tune::Tunable<tune::frame::numThreads, Vec<size_t, 1u>>{
-          tune::generate::linSpace(Vec<size_t, 1u>{32}, Vec<size_t, 1u>{512},
-                                   Vec<size_t, 1u>{32}),
+      aTune::Tunable<aTune::frame::numThreads, Vec<size_t, 1u>>{
+          aTune::generate::linSpace(Vec<size_t, 1u>{32}, Vec<size_t, 1u>{512},
+                                    Vec<size_t, 1u>{32}),
           512,               // startValue
           "numThreadsTune"}; // custom name
   /*
-   * Define a FrameSpecTuningModel - a template which lets you tune every
+   * Define a FrameSpecTuningModel - a template which lets you alpakaTune every
    * parameter that is part of the Frame specification. such as number of
    * frames, number of the frameExtent, number if blocks, number of threads.
    */
   auto specTuningModel =
-      tune::FrameSpecTuningModel{dataBlocking}
+      aTune::FrameSpecTuningModel{dataBlocking}
           .withNumBlocksTune() /* numBlocks should be tunable: let the tuner
                                   decide*/
           .withNumThreadsTune(myNumThreadsTune) /* insert the custom tunable*/;
   auto
-      session = tune::TuningBuilder{}
+      session = aTune::TuningBuilder{}
 
                     // set the tuning strategy
-                    .withStrategy(tune::strategy::RandomSample{})
+                    .withStrategy(aTune::strategy::RandomSample{})
                     // define a constraint between multiple tunables
-                    .template withConstraint<tune::frame::numThreads,
-                                             tune::frame::numBlocks>(
+                    .template withConstraint<aTune::frame::numThreads,
+                                             aTune::frame::numBlocks>(
                         [&](auto numThreads,
                             auto numBlocks) /*only matches if both IDs are
                                                present.*/
@@ -207,7 +207,7 @@ auto example(auto const deviceSpec, auto const exec, size_t numElements,
                     .buildSession();
   // set the number of runs per paramater configuration manually (can changed
   // during runtime using
-  tune::Vars::setRunsPerConfig(10);
+  aTune::Vars::setRunsPerConfig(10);
   // Instantiate the kernel function object
   VectorAddTunedKernel<std::integral_constant<uint32_t, 1u>> kernel;
   auto const taskKernel =

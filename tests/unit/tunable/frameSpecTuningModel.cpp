@@ -1,14 +1,13 @@
-
 /* Copyright 2025 Tim Hanel
  * SPDX-License-Identifier: MPL-2.0
  */
 #include <alpaka/alpaka.hpp>
-#include <tune/tunable/FrameSpecTuningModel.hpp>
-#include <tune/tunable/tunables.hpp>
+#include <alpakaTune/tunable/FrameSpecTuningModel.hpp>
+#include <alpakaTune/tunable/tunables.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 using namespace alpaka;
-using namespace tune;
+using namespace aTune;
 
 TEST_CASE(
     "[FrameSpecTuningModel] - default construction disables all tuneables",
@@ -29,13 +28,13 @@ TEST_CASE("[FrameSpecTuningModel] - builder enables tuneable and get*Tune "
           "") {
   using V2u = Vec<uint32_t, 2u>;
   auto spec = onHost::FrameSpec{V2u{1, 1}, V2u{8, 8}};
-  using namespace tune;
+  using namespace aTune;
   // prepare tuneables
-  TunableMD<tune::frame::numFrames, V2u> numFramesTune{{V2u{1, 1}, V2u{2, 2}}};
-  TunableMD<tune::frame::frameExtent, V2u> frameExtentTune{
+  TunableMD<aTune::frame::numFrames, V2u> numFramesTune{{V2u{1, 1}, V2u{2, 2}}};
+  TunableMD<aTune::frame::frameExtent, V2u> frameExtentTune{
       {V2u{4, 4}, V2u{8, 8}}};
-  TunableMD<tune::frame::numBlocks, V2u> numBlocksTune{{V2u{1, 1}, V2u{2, 2}}};
-  TunableMD<tune::frame::numThreads, V2u> numThreadsTune{
+  TunableMD<aTune::frame::numBlocks, V2u> numBlocksTune{{V2u{1, 1}, V2u{2, 2}}};
+  TunableMD<aTune::frame::numThreads, V2u> numThreadsTune{
       {V2u{32, 1}, V2u{64, 2}}};
 
   auto tuned = FrameSpecTuningModel{spec}
@@ -143,9 +142,9 @@ TEST_CASE("[FrameSpecTuningModel] - end-to-end: custom tuneables are preserved "
   using V2u = Vec<uint32_t, 2u>;
   auto spec = onHost::FrameSpec{V2u{1, 1}, V2u{16, 16}};
 
-  TunableMD<tune::frame::frameExtent, V2u> frameExtentTune{
+  TunableMD<aTune::frame::frameExtent, V2u> frameExtentTune{
       {V2u{8, 8}, V2u{16, 16}}};
-  TunableMD<tune::frame::numThreads, V2u> numThreadsTune{
+  TunableMD<aTune::frame::numThreads, V2u> numThreadsTune{
       {V2u{32, 1}, V2u{64, 2}}};
 
   auto tuned = FrameSpecTuningModel{spec}

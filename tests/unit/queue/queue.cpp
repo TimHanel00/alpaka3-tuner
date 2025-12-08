@@ -3,17 +3,17 @@
  * SPDX-License-Identifier: MPL-2.0
  */
 #include <alpaka/meta/meta.hpp>
-#include <tune/config/Config.hpp>
-#include <tune/core/peripherals/ConfigQueue.hpp>
-#include <tune/core/peripherals/EnvironmentState.hpp>
-#include <tune/store/RuntimeHistory.hpp>
+#include <alpakaTune/config/Config.hpp>
+#include <alpakaTune/core/peripherals/ConfigQueue.hpp>
+#include <alpakaTune/core/peripherals/EnvironmentState.hpp>
+#include <alpakaTune/store/RuntimeHistory.hpp>
 
+#include <alpakaTune/utils/tupleHelper.hpp>
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
-#include <tune/utils/tupleHelper.hpp>
 
-using namespace tune;
-using namespace tune::internal::core::peripherals;
+using namespace aTune;
+using namespace aTune::internal::core::peripherals;
 using Arr3u = std::array<uint32_t, 3>;
 using TestConfig = config::Config<Arr3u::value_type, 3>;
 using TestRecord = config::ConfigRecord<TestConfig>;
@@ -27,8 +27,8 @@ TEST_CASE("[TunerConfigQueue] basic behaviour with ConfigRecords", "") {
   TestRecord r1(c1);
   TestRecord r2(c2);
 
-  queue.try_insert(r1);
-  queue.try_insert(r2);
+  queue.insert(r1);
+  queue.insert(r2);
 
   REQUIRE(queue.size() == 2);
   REQUIRE_FALSE(queue.empty());
@@ -51,15 +51,15 @@ struct DummyRecord {
 TEST_CASE("[TunerConfigQueue] removes fullFlag records automatically", "")
 
 {
-  internal::core::peripherals::ConfigQueue<TestRecord> queue;
+  ConfigQueue<TestRecord> queue;
   TestConfig c1(Arr3u{1, 1, 1});
   TestConfig c2(Arr3u{2, 2, 2});
 
   TestRecord r1(c1);
   TestRecord r2(c2);
 
-  queue.try_insert(r1);
-  queue.try_insert(r2);
+  queue.insert(r1);
+  queue.insert(r2);
   r1.state = internal::config::ConfigState::Retired;
   r2.state = internal::config::ConfigState::Retired;
   REQUIRE(queue.size() == 2);
@@ -83,7 +83,7 @@ TEST_CASE("[TunerConfigQueue] random access and cleanup", "") {
   for (unsigned int i = 0; i < 10; ++i) {
     DummyRecord record{i, internal::config::ConfigState::Initialized};
     records.emplace_back(record);
-    queue.try_insert(records.back());
+    queue.insert(records.back());
   }
   REQUIRE(queue.size() == 10);
   // Mark some configs as full and ensure they're removed
@@ -110,7 +110,7 @@ TEST_CASE("[TunerConfigQueue] increase test coverage over additional helper "
                                      std::integral_constant<uint32_t, 5>>;
   using combinations =
       alpaka::meta::CartesianProduct<std::tuple, sizes, consecutiveRuns>;
-  meta::for_each_enumerate(combinations{}, [&]<std::size_t I, typename T0>(T0) {
+  meta::forEachEnumerate(combinations{}, [&]<std::size_t I, typename T0>(T0) {
     using SizeT = std::tuple_element_t<0, T0>;
     using RunsT = std::tuple_element_t<1, T0>;
     auto q = ConfigQueue<TestRecord, SizeT::value, RunsT::value>{};
@@ -120,7 +120,7 @@ TEST_CASE("[TunerConfigQueue] increase test coverage over additional helper "
     auto &headRec = freshConfigContainer[I];
 
     // Reinsert a fresh HEAD and ensure it’s picked first.
-    q.try_insertAdjustHead(headRec);
+    q.insertAdjustHead(headRec);
     CHECK(q.size() >= 1);
 
     // First get must pick HEAD; first reuse from lastIndex -> config still

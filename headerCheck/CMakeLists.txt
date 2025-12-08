@@ -4,7 +4,7 @@ project(TunerHeaderCheck)
 set(_TARGET_NAME tunerHeaderCheckTest)
 
 # Location of your headers
-set(TUNER_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../include/tune")
+set(TUNER_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../include/alpakaTune")
 
 # Collect all *.hpp recursively
 file(GLOB_RECURSE TUNER_HEADERS RELATIVE "${TUNER_INCLUDE_DIR}" "${TUNER_INCLUDE_DIR}/*.hpp")
@@ -24,7 +24,7 @@ foreach(_H ${TUNER_HEADERS})
     get_filename_component(_OUT_DIR "${_OUT}" DIRECTORY)
     file(MAKE_DIRECTORY "${_OUT_DIR}")
 
-    file(WRITE "${_OUT}" "#include <tune/${_H}>\n" "#include <tune/${_H}>\n")
+    file(WRITE "${_OUT}" "#include <alpakaTune/${_H}>\n" "#include <alpakaTune/${_H}>\n")
 
     list(APPEND _GENERATED_SOURCES "${_OUT}")
 endforeach()
@@ -36,8 +36,8 @@ list(APPEND _GENERATED_SOURCES "${_MAIN}")
 
 # Build the executable
 add_executable(${_TARGET_NAME} ${_GENERATED_SOURCES})
-target_link_libraries(tunerHeaderCheckTest PRIVATE alpaka::alpakaTune)
-alpaka_finalize(tunerHeaderCheckTest)
+target_link_libraries(tunerHeaderCheckTest PRIVATE alpakaTune::alpakaTune)
+alpakatune_finalize(tunerHeaderCheckTest)
 # Add include path
 target_include_directories(${_TARGET_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../include")
 

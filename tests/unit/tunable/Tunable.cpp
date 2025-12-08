@@ -2,14 +2,14 @@
  * SPDX-License-Identifier: MPL-2.0
  */
 #include <alpaka/UniqueId.hpp>
-#include <tune/tunable/tunables.hpp>
+#include <alpakaTune/tunable/tunables.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <string>
 #include <tuple>
 
-using namespace tune;
+using namespace aTune;
 
 ///
 ///
@@ -66,8 +66,8 @@ TEST_CASE("CTuneable supports user-defined types", "[CTuneable]") {
     constexpr bool operator==(Bar const &) const { return true; }
   };
 
-  using Tune = CTunable<alpaka::uniqueId(), Foo, Bar>;
-  static_assert(std::is_same_v<typename Tune::Values, std::tuple<Foo, Bar>>);
+  using cTune = CTunable<alpaka::uniqueId(), Foo, Bar>;
+  static_assert(std::is_same_v<typename cTune::Values, std::tuple<Foo, Bar>>);
 
   CTunable<alpaka::uniqueId(), Foo, Bar> tune("CustomTune");
   CHECK(tune.getName() == "CustomTune");

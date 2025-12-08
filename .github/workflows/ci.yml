@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  alpaka_cmake_flags: "-Dalpaka_DOCS=ON -Dtuner_TESTING=ON -Dtuner_EXAMPLES=ON -Dtuner_HEADERCHECKS=ON -Dalpaka_LOG=dynamic -Dalpaka_FAST_MATH=OFF"
+  alpaka_cmake_flags: "-Dalpaka_DOCS=ON -DalpakaTune_TESTING=ON -DalpakaTune_EXAMPLES=ON -DalpakaTune_HEADERCHECKS=ON -Dalpaka_LOG=dynamic -Dalpaka_FAST_MATH=OFF"
 
 jobs:
   pre-commit:

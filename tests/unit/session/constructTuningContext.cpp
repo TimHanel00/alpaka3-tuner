@@ -9,13 +9,13 @@
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <alpakaTune/core/SessionBuilder.hpp>
+#include <alpakaTune/core/TuningSession.hpp>
+#include <alpakaTune/tunable/FrameSpecTuningModel.hpp>
 #include <chrono>
 #include <functional>
 #include <iostream>
 #include <thread>
-#include <tune/core/SessionBuilder.hpp>
-#include <tune/core/TuningSession.hpp>
-#include <tune/tunable/FrameSpecTuningModel.hpp>
 
 /*
  * Test Cases for creating a tuning context from a tuning session ->
@@ -38,16 +38,16 @@ TEMPLATE_LIST_TEST_CASE("Session builder with shallow frameExtent+numBlocks",
   Queue queue = device.makeQueue();
   auto exec = cfg[object::exec];
   using V2u = alpaka::Vec<uint32_t, 2u>;
-  auto build = tune::TuningBuilder{};
+  auto build = aTune::TuningBuilder{};
   auto session =
-      tune::TuningBuilder{}.withContextSpecifier("ab").buildSession();
+      aTune::TuningBuilder{}.withContextSpecifier("ab").buildSession();
   auto spec = FrameSpec{V2u{1, 1}, V2u{8, 8}};
-  auto frameModel = tune::FrameSpecTuningModel{spec}
+  auto frameModel = aTune::FrameSpecTuningModel{spec}
                         .withFrameExtentTune()
                         .withNumBlocksTune();
 
   auto kernelBundle = KernelBundle{kernelDummy{}};
-  auto environmentPtr = tune::internal::core::setup_enqueue(
+  auto environmentPtr = aTune::internal::core::setupEnqueue(
       queue, exec, frameModel, kernelBundle, session);
   auto &environment_state = environmentPtr->env_environmentState;
   REQUIRE(environmentPtr != nullptr);
@@ -77,7 +77,7 @@ TEMPLATE_LIST_TEST_CASE(
     "enqueue with shallow frame placeholders + user int tunable",
     "[FrameSpecTuningModel][enqueue][shallow+user]", TestApis) {
   using namespace alpaka;
-  using namespace tune;
+  using namespace aTune;
   using V2u = Vec<uint32_t, 2u>;
   auto cfg = TestType::makeDict();
   auto deviceSpec = cfg[object::deviceSpec];
@@ -106,7 +106,7 @@ TEMPLATE_LIST_TEST_CASE(
 
   // Enqueue/setup path should succeed; tuner will replace shallow frame
   // tunables
-  auto envPtr = tune::internal::core::setup_enqueue(queue, exec, frameModel,
+  auto envPtr = aTune::internal::core::setupEnqueue(queue, exec, frameModel,
                                                     kernelBundle, session);
   REQUIRE(envPtr != nullptr);
 }
@@ -120,7 +120,7 @@ TEMPLATE_LIST_TEST_CASE("enqueue with user defined frame tunables",
                         "[FrameSpecTuningModel][enqueue][userFrame]",
                         TestApis) {
   using namespace alpaka;
-  using namespace tune;
+  using namespace aTune;
   using V2u = Vec<uint32_t, 2u>;
   auto cfg = TestType::makeDict();
   auto deviceSpec = cfg[object::deviceSpec];
@@ -137,9 +137,9 @@ TEMPLATE_LIST_TEST_CASE("enqueue with user defined frame tunables",
   auto spec = onHost::FrameSpec{V2u{1, 1}, V2u{32, 32}};
 
   // USER-DEFINED frame tunables (explicit spaces)
-  TunableMD<tune::frame::numFrames, V2u> numFramesTune{
+  TunableMD<aTune::frame::numFrames, V2u> numFramesTune{
       {V2u{1, 1}, V2u{2, 2}, V2u{4, 4}}};
-  TunableMD<tune::frame::frameExtent, V2u> frameExtentTune{
+  TunableMD<aTune::frame::frameExtent, V2u> frameExtentTune{
       {V2u{8, 8}, V2u{16, 16}, V2u{32, 32}}};
 
   // Build model with explicit (user) frame tunables
@@ -156,7 +156,7 @@ TEMPLATE_LIST_TEST_CASE("enqueue with user defined frame tunables",
 
   // Enqueue/setup path should succeed with user-defined spaces already in the
   // model
-  auto envPtr = tune::internal::core::setup_enqueue(queue, exec, frameModel,
+  auto envPtr = aTune::internal::core::setupEnqueue(queue, exec, frameModel,
                                                     kernelBundle, session);
   REQUIRE(envPtr != nullptr);
 }
@@ -165,7 +165,7 @@ TEMPLATE_LIST_TEST_CASE("ALL shallow combinations",
                         "[FrameSpecTuningModel][enqueue][Tuner Decide]",
                         TestApis) {
   using namespace alpaka;
-  using namespace tune;
+  using namespace aTune;
   using V2u = Vec<uint32_t, 2u>;
   using V2u = Vec<uint32_t, 2u>;
   auto cfg = TestType::makeDict();
@@ -193,7 +193,7 @@ TEMPLATE_LIST_TEST_CASE("ALL shallow combinations",
 
   // Enqueue/setup path should succeed with user-defined spaces already in the
   // model
-  auto envPtr = tune::internal::core::setup_enqueue(queue, exec, frameModel,
+  auto envPtr = aTune::internal::core::setupEnqueue(queue, exec, frameModel,
                                                     kernelBundle, session);
   REQUIRE(envPtr != nullptr);
 }

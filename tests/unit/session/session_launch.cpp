@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: MPL-2.0
  */
 #include <alpaka/onHost/example/executors.hpp>
-#include <tune/tunable/generators.hpp>
-#include <tune/tune.hpp>
+#include <alpakaTune/tunable/generators.hpp>
+#include <alpakaTune/tune.hpp>
 
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -17,12 +17,11 @@ using V2u = Vec<uint32_t, 2u>;
 
 struct ExampleKernelA {
   template <typename TAcc>
-  ALPAKA_FN_ACC void operator()(TAcc const &acc,
-                                alpaka::concepts::MdSpan auto outputVec,
-                                alpaka::concepts::Vector auto maxNumFrames,
-                                alpaka::concepts::Vector auto maxFrameExtent,
-                                tune::concepts::Integral auto maxUserVal,
-                                auto val /*userTunable*/) const {
+  ALPAKA_FN_ACC void
+  operator()(TAcc const &acc, alpaka::concepts::MdSpan auto outputVec,
+             alpaka::concepts::Vector auto maxNumFrames,
+             alpaka::concepts::Vector auto maxFrameExtent,
+             std::integral auto maxUserVal, auto val /*userTunable*/) const {
     auto frameExtent = acc[frame::extent];
     uint32_t frameExtentIdx =
         frameExtent.y() * maxFrameExtent.x() + frameExtent.x();
@@ -38,11 +37,11 @@ struct ExampleKernelA {
 
 template <class CTune> struct ExampleKernelWithCTune {
   template <typename TAcc>
-  ALPAKA_FN_ACC void
-  operator()(TAcc const &acc, alpaka::concepts::MdSpan auto outputVec,
-             alpaka::concepts::Vector auto maxNumFrames,
-             alpaka::concepts::Vector auto maxFrameExtent,
-             tune::concepts::Integral auto maxUserVal) const {
+  ALPAKA_FN_ACC void operator()(TAcc const &acc,
+                                alpaka::concepts::MdSpan auto outputVec,
+                                alpaka::concepts::Vector auto maxNumFrames,
+                                alpaka::concepts::Vector auto maxFrameExtent,
+                                std::integral auto maxUserVal) const {
     static constexpr auto cTuneValue = CTune::value;
     auto frameExtent = acc[frame::extent];
     uint32_t frameExtentIdx =
@@ -57,7 +56,7 @@ template <class CTune> struct ExampleKernelWithCTune {
   }
 };
 
-namespace tune::trait {
+namespace aTune::trait {
 template <typename CTune>
 struct CompileTimeTuneableTrait<ExampleKernelWithCTune<CTune>> {
   using type = uint32_t;
@@ -66,15 +65,15 @@ struct CompileTimeTuneableTrait<ExampleKernelWithCTune<CTune>> {
 
   static auto tuneAbleDefinitions() {
     // generate::c_LinSpace<type, 0, 3>::values
-    auto tune1 = tune::CTunable<alpaka::uniqueId(),
-                                generate::c_LinSpace<0, 3>::values>();
+    auto tune1 = aTune::CTunable<alpaka::uniqueId(),
+                                 generate::c_LinSpace<0, 3>::values>();
     // static_assert(tune1.tag != tune2.tag, "Compile-time tunables have
-    // duplicate tags!"); constexpr auto tune2 = tune::CTunable<CVec<int, 3, 3>,
-    // CVec<int, 6, 6>, CVec<int, 1, 1>>{};
+    // duplicate tags!"); constexpr auto tune2 = aTune::CTunable<CVec<int, 3,
+    // 3>, CVec<int, 6, 6>, CVec<int, 1, 1>>{};
     return std::tuple{tune1};
   }
 };
-} // namespace tune::trait
+} // namespace aTune::trait
 
 // checks that all valid parameter configurations have been checked at least
 // once
@@ -91,7 +90,7 @@ TEMPLATE_LIST_TEST_CASE(
     "enqueue with shallow frame placeholders + user int tunable",
     "[FrameSpecTuningModel + UserTune][enqueue][full run]", TestApis) {
   using namespace alpaka;
-  using namespace tune;
+  using namespace aTune;
 
   auto cfg = TestType::makeDict();
   auto deviceSpec = cfg[object::deviceSpec];
@@ -110,12 +109,12 @@ TEMPLATE_LIST_TEST_CASE(
 
   // Frame spec + SHALLOW placeholders for frame space (tuner decides)
   auto spec = FrameSpec{V2u{1, 1}, V2u{1, 1}};
-  std::vector<V2u> vec = tune::generate::linSpace( // 4 elem tuning space
+  std::vector<V2u> vec = aTune::generate::linSpace( // 4 elem tuning space
       V2u{0, 0}, spec.m_numFrames, V2u{1, 1});
   auto frameModel =
       FrameSpecTuningModel{spec}
           .withNumFramesTune(vec) // shallow placeholder -> let Tuner decide
-          .withFrameExtentTune(tune::generate::linSpace( // 4 elem tuning space
+          .withFrameExtentTune(aTune::generate::linSpace( // 4 elem tuning space
               V2u{0, 0}, spec.m_frameExtent,
               V2u{1, 1})); // shallow placeholder -> let Tuner decide
 
@@ -155,7 +154,7 @@ TEMPLATE_LIST_TEST_CASE(
 TEMPLATE_LIST_TEST_CASE("enqueue with CTunable", "[CTune][enqueue][full run]",
                         TestApis) {
   using namespace alpaka;
-  using namespace tune;
+  using namespace aTune;
 
   auto cfg = TestType::makeDict();
   auto deviceSpec = cfg[object::deviceSpec];

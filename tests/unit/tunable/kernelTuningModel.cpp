@@ -1,10 +1,10 @@
 /* Copyright 2025 Tim Hanel
  * SPDX-License-Identifier: MPL-2.0
  */
-#include <alpaka/onHost/FrameSpec.hpp>        // file you provided
-#include <tune/config/Config.hpp>             // file you providedF
-#include <tune/tunable/KernelTuningModel.hpp> // file you provided
-#include <tune/tunable/tunables.hpp>
+#include <alpaka/onHost/FrameSpec.hpp>              // file you provided
+#include <alpakaTune/config/Config.hpp>             // file you providedF
+#include <alpakaTune/tunable/KernelTuningModel.hpp> // file you provided
+#include <alpakaTune/tunable/tunables.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -15,12 +15,12 @@
 #include <type_traits>
 
 using namespace alpaka; // Vec, alpaka::CVec, IdxRange etc.
-using namespace tune;   // Tunable, TunableMD, CTunable, frame, TunableKind
+using namespace aTune;  // Tunable, TunableMD, CTunable, frame, TunableKind
 
 // ------------------------------------------------------------
 // Smoke: construct minimal models of different shapes
 // ------------------------------------------------------------
-TEST_CASE("tune::internal::KernelTuningModel - construct models of varying "
+TEST_CASE("aTune::internal::KernelTuningModel - construct models of varying "
           "dimensionality",
           "[KTM][construction]") {
   // 1D: only one user scalar tuneable
@@ -28,25 +28,25 @@ TEST_CASE("tune::internal::KernelTuningModel - construct models of varying "
   using C1 = std::tuple<>;
   auto u1 =
       std::tuple{Tunable<alpaka::uniqueId()>({16u, 32u, 64u}, 32u, "tileX")};
-  tune::internal::KernelTuningModel m1{F1{}, u1, C1{}};
+  aTune::internal::KernelTuningModel m1{F1{}, u1, C1{}};
 
   using C2 = std::tuple<>;
 
   auto u2 = std::tuple{
       Tunable<alpaka::uniqueId(), uint32_t>{{1u, 2u}, 2u, "algoVariant"}};
-  auto f2 = std::tuple{TunableMD<tune::frame::numBlocks>(
+  auto f2 = std::tuple{TunableMD<aTune::frame::numBlocks>(
       {{2u, 3u}, {4u, 5u}}, std::nullopt, "Blocks")};
-  tune::internal::KernelTuningModel m2{f2, u2, C2{}};
+  aTune::internal::KernelTuningModel m2{f2, u2, C2{}};
 
   // 4D: frame: NumFrames (Vec<2>) + FrameExtent (Vec<2>), user: scalar (1D),
   // compile-time: scalar (1D)
 
   auto u3 = std::tuple{Tunable<alpaka::uniqueId()>{{4u, 8u, 16u}, 8u, "tileY"}};
   auto f3 = std::tuple{
-      TunableMD<tune::frame::numFrames>{{{1u, 1u}, {2u, 1u}, {3u, 1u}}},
-      TunableMD<tune::frame::frameExtent>{{64u, 32u}, {128u, 64u}}};
+      TunableMD<aTune::frame::numFrames>{{{1u, 1u}, {2u, 1u}, {3u, 1u}}},
+      TunableMD<aTune::frame::frameExtent>{{64u, 32u}, {128u, 64u}}};
   using C3 = std::tuple<CTunable<3001, alpaka::CVec<uint32_t, 3u, 4u>>>;
-  tune::internal::KernelTuningModel m3{f3, u3, C3{}};
+  aTune::internal::KernelTuningModel m3{f3, u3, C3{}};
 
   // Sanity
   REQUIRE(m1.getNumValues()[0] == 3u);
@@ -57,30 +57,29 @@ TEST_CASE("tune::internal::KernelTuningModel - construct models of varying "
 // ------------------------------------------------------------
 // hasTuneable* utilities
 // ------------------------------------------------------------
-TEST_CASE("tune::internal::KernelTuningModel - hasTuneableTag utilities",
+TEST_CASE("aTune::internal::KernelTuningModel - hasTuneableTag utilities",
           "[KTM][introspection]") {
   using type = std::size_t;
-  using C = std::tuple<
-      CTunable<5002, alpaka::CVec<type, 100>, alpaka::CVec<type, 25>>>;
+  using C = std::tuple<CTunable<5002, CVec<type, 100>, CVec<type, 25>>>;
 
-  tune::internal::KernelTuningModel m{
-      std::tuple{Tunable<tune::frame::numBlocks>(
+  aTune::internal::KernelTuningModel m{
+      std::tuple{Tunable<aTune::frame::numBlocks>(
           {Vec<uint32_t, 1>{1u}, Vec<uint32_t, 1>{2u}}, std::nullopt, "nb")},
       std::tuple{Tunable<5001>{{10u, 20u}, 10u, "u"}}, C{}};
 
   STATIC_REQUIRE(decltype(m)::template hasUserTuneable<5001>());
   STATIC_REQUIRE(
-      decltype(m)::template hasFrameTuneable<tune::frame::numBlocks>());
+      decltype(m)::template hasFrameTuneable<aTune::frame::numBlocks>());
   STATIC_REQUIRE(decltype(m)::template hasTuneable<5001>());
   STATIC_REQUIRE_FALSE(decltype(m)::hasFrameExtentTune());
 }
 template <typename T> struct Dummy;
 
-TEST_CASE("tune::internal::KernelTuningModel - minimal valueRetrieval",
+TEST_CASE("aTune::internal::KernelTuningModel - minimal valueRetrieval",
           "[KTM][accessors]") {
-  auto f = std::tuple{Tunable<tune::frame::numBlocks, uint32_t>{
+  auto f = std::tuple{Tunable<aTune::frame::numBlocks, uint32_t>{
       {1u, 2u, 4u}, std::nullopt, "Blocks"}};
-  tune::internal::KernelTuningModel m{f, std::tuple{}, std::tuple{}};
+  aTune::internal::KernelTuningModel m{f, std::tuple{}, std::tuple{}};
   constexpr std::size_t dims = decltype(m)::numDims;
   config::Config<uint32_t, dims> cfg{{
       1u, // numBlocks -> value index 1 -> {2}
@@ -88,8 +87,8 @@ TEST_CASE("tune::internal::KernelTuningModel - minimal valueRetrieval",
   REQUIRE(dims == 1 /*numBlocks uint32_t*/);
   auto accessors = m.getValuesFromConfig(cfg);
   auto &a0 = std::get<0>(accessors); // numBlocks
-  CHECK(a0.ID == tune::frame::numBlocks);
-  CHECK(a0.kind == tune::internal::TunableKind::Tunable);
+  CHECK(a0.ID == aTune::frame::numBlocks);
+  CHECK(a0.kind == aTune::internal::TunableKind::Tunable);
   CHECK(a0.m_name == "Blocks");
   static_assert(
       std::is_same_v<std::remove_cvref_t<decltype(a0.m_value)>, uint32_t>);
@@ -100,13 +99,13 @@ TEST_CASE("tune::internal::KernelTuningModel - minimal valueRetrieval",
 // // ------------------------------------------------------------
 // // ParameterAccessor from full Config (user + frame + compile-time)
 // // ------------------------------------------------------------
-TEST_CASE("tune::internal::KernelTuningModel - getValuesFromConfig builds "
+TEST_CASE("aTune::internal::KernelTuningModel - getValuesFromConfig builds "
           "ParameterAccessors with correct IDs/kinds",
           "[KTM][accessors]") {
   // frame tuneables (1D + 2D)
-  auto f = std::tuple{Tunable<tune::frame::numBlocks, uint32_t>{
+  auto f = std::tuple{Tunable<aTune::frame::numBlocks, uint32_t>{
                           {1u, 2u, 4u}, std::nullopt, "Blocks"},
-                      TunableMD<tune::frame::numThreads>{
+                      TunableMD<aTune::frame::numThreads>{
                           {{8u, 4u}, {16u, 8u}}, std::nullopt, "Threads"}};
 
   // user tuneables
@@ -114,11 +113,10 @@ TEST_CASE("tune::internal::KernelTuningModel - getValuesFromConfig builds "
 
   // compile-time tuneables (2D)
   using type = std::size_t;
-  auto c = std::tuple{
-      CTunable<6003, alpaka::CVec<type, 10>, alpaka::CVec<type, 25>>{}};
+  auto c = std::tuple{CTunable<6003, CVec<type, 10>, CVec<type, 25>>{}};
 
   // combine all three into the tuning model
-  tune::internal::KernelTuningModel m{f, u, c};
+  aTune::internal::KernelTuningModel m{f, u, c};
 
   // ------------------------------------------------------------------------
   // Dimension count sanity: concatenation of (frame, user, compile-time)
@@ -160,14 +158,14 @@ TEST_CASE("tune::internal::KernelTuningModel - getValuesFromConfig builds "
   STATIC_REQUIRE(std::tuple_size_v<decltype(accessors)> == 4);
   // Check IDs & kinds
   auto &a0 = std::get<0>(accessors); // numBlocks
-  CHECK(a0.ID == tune::frame::numBlocks);
-  CHECK(a0.kind == tune::internal::TunableKind::Tunable);
+  CHECK(a0.ID == aTune::frame::numBlocks);
+  CHECK(a0.kind == aTune::internal::TunableKind::Tunable);
   CHECK(a0.m_name == "Blocks");
   static_assert(
       std::is_same_v<std::remove_cvref_t<decltype(a0.m_value)>, uint32_t>);
   CHECK(a0.m_value == 4u);
   auto &a1 = std::get<1>(accessors); // threadBlock
-  CHECK(a1.kind == tune::internal::TunableKind::TunableMD);
+  CHECK(a1.kind == aTune::internal::TunableKind::TunableMD);
   CHECK(a1.m_name == std::string{"Threads"});
   static_assert(std::is_same_v<std::remove_cvref_t<decltype(a1.m_value)>,
                                Vec<uint32_t, 2u>>);
@@ -176,7 +174,7 @@ TEST_CASE("tune::internal::KernelTuningModel - getValuesFromConfig builds "
 
   auto &a2 = std::get<2>(accessors); // user
   CHECK(a2.ID == 6001u);
-  CHECK(a2.kind == tune::internal::TunableKind::Tunable);
+  CHECK(a2.kind == aTune::internal::TunableKind::Tunable);
   CHECK(a2.m_name == std::string{"factor"});
   static_assert(
       std::is_same_v<std::remove_cvref_t<decltype(a2.m_value)>, uint32_t>);
@@ -184,7 +182,7 @@ TEST_CASE("tune::internal::KernelTuningModel - getValuesFromConfig builds "
 
   auto &a3 = std::get<3>(accessors); // CTunable
   CHECK(a3.ID == 6003u);
-  CHECK(a3.kind == tune::internal::TunableKind::CTunable);
+  CHECK(a3.kind == aTune::internal::TunableKind::CTunable);
   // this is how we access compile time tuneable types -- this is more for
   // debugging
   std::visit([](auto &&v) { CHECK(v[0u] == 10); }, a3.m_value);
@@ -194,16 +192,15 @@ TEST_CASE("tune::internal::KernelTuningModel - getValuesFromConfig builds "
 // // ------------------------------------------------------------
 // // Subset accessors: runtime vs compile-time vs frame-only
 // // ------------------------------------------------------------
-TEST_CASE("tune::internal::KernelTuningModel - getValuesFor* subsets return "
+TEST_CASE("aTune::internal::KernelTuningModel - getValuesFor* subsets return "
           "the right slice",
           "[KTM][slices]") {
   using type = std::size_t;
-  auto m = tune::internal::KernelTuningModel{
-      std::tuple{TunableMD<tune::frame::numFrames>{
+  auto m = aTune::internal::KernelTuningModel{
+      std::tuple{TunableMD<aTune::frame::numFrames>{
           {{1u, 1u}, {2u, 3u}}, std::nullopt, "NF"}},
-      std::tuple{Tunable<alpaka::uniqueId(), uint32_t>{{5u, 10u}, 10u, "u"}},
-      std::tuple{
-          CTunable<1000u, alpaka::CVec<type, 10>, alpaka::CVec<type, 25>>{}}};
+      std::tuple{Tunable<uniqueId(), uint32_t>{{5u, 10u}, 10u, "u"}},
+      std::tuple{CTunable<1000u, CVec<type, 10>, CVec<type, 25>>{}}};
   static_assert(decltype(m)::numDims == 4);
 
   config::Config<uint32_t, decltype(m)::numDims> cfg{{
@@ -232,21 +229,18 @@ TEST_CASE("tune::internal::KernelTuningModel - getValuesFor* subsets return "
 // // applyToFrameSpec — frame tuneables are all Vec, including numBlocks as
 // Vec<1>
 // // ------------------------------------------------------------
-TEST_CASE("tune::internal::KernelTuningModel - applyToFrameSpec writes fields "
+TEST_CASE("aTune::internal::KernelTuningModel - applyToFrameSpec writes fields "
           "correctly",
           "[KTM][FrameSpec]") {
-  tune::internal::KernelTuningModel m{
-      std::tuple{
-          tune::Tunable<tune::frame::numBlocks, Vec<uint32_t, 2>>(
-              {{2u, 5u}, {4u, 8u}, {8u, 2u}}, std::nullopt, "nb"),
-          TunableMD<tune::frame::numFrames>({{1u, 1u}, {2u, 1u}}, std::nullopt,
-                                            "nf"),
-          TunableMD<tune::frame::numThreads>(
-              {Vec<uint32_t, 2>{8u, 4u}, Vec<uint32_t, 2>{16u, 8u}},
-              std::nullopt, "tb"),
-          TunableMD<tune::frame::frameExtent>(
-              {Vec<uint32_t, 2>{128u, 64u}, Vec<uint32_t, 2>{256u, 128u}},
-              std::nullopt, "fe")},
+  aTune::internal::KernelTuningModel m{
+      std::tuple{aTune::Tunable<aTune::frame::numBlocks, Vec<uint32_t, 2>>(
+                     {{2u, 5u}, {4u, 8u}, {8u, 2u}}, std::nullopt, "nb"),
+                 TunableMD<aTune::frame::numFrames>({{1u, 1u}, {2u, 1u}},
+                                                    std::nullopt, "nf"),
+                 TunableMD<aTune::frame::numThreads>(
+                     {Vec{8u, 4u}, Vec{16u, 8u}}, std::nullopt, "tb"),
+                 TunableMD<aTune::frame::frameExtent>(
+                     {Vec{128u, 64u}, Vec{256u, 128u}}, std::nullopt, "fe")},
       std::tuple<>{},
 
       std::tuple<>{}};
@@ -259,8 +253,8 @@ TEST_CASE("tune::internal::KernelTuningModel - applyToFrameSpec writes fields "
   // Build a dummy FrameSpec (types deduced via CTAD). Start with arbitrary
   // values.
 
-  Vec<uint32_t, 2> nf{4u, 4u};
-  Vec<uint32_t, 2> fe{64u, 32u};
+  Vec nf{4u, 4u};
+  Vec fe{64u, 32u};
 
   onHost::FrameSpec fs{nf, fe};
 
@@ -283,7 +277,7 @@ TEST_CASE("tune::internal::KernelTuningModel - applyToFrameSpec writes fields "
 TEST_CASE(
     "ConfigDescriptor - create/get empty configs and normalized conversion",
     "[ConfigDescriptor]") {
-  tune::internal::KernelTuningModel m{
+  aTune::internal::KernelTuningModel m{
       {},
       std::tuple{
           Tunable<alpaka::uniqueId(), uint32_t>{{11u, 22u, 33u}, 22u, "U"}},
@@ -304,15 +298,15 @@ TEST_CASE(
   CHECK(icfg.m_values[0] <= m.getNumValues()[0] - 1u);
 }
 
-TEST_CASE("tune::internal::KernelTuningModel - edge cases: single-value dims",
+TEST_CASE("aTune::internal::KernelTuningModel - edge cases: single-value dims",
           "[KTM][edges]") {
   auto u = std::tuple{Tunable<10001, uint32_t>{{7u}, 7u, "single"},
                       Tunable<10002, uint32_t>{{0u, 1u}, 1u, "boolAsIdx"}};
   auto f = std::tuple{
-      TunableMD<tune::frame::numFrames>({{1u, 1u}}, std::nullopt, "one"),
-      TunableMD<tune::frame::numThreads>({{32u, 1u}}, std::nullopt, "tb1")};
+      TunableMD<aTune::frame::numFrames>({{1u, 1u}}, std::nullopt, "one"),
+      TunableMD<aTune::frame::numThreads>({{32u, 1u}}, std::nullopt, "tb1")};
 
-  tune::internal::KernelTuningModel m{f, u, {}};
+  aTune::internal::KernelTuningModel m{f, u, {}};
 
   // numDims = 2 (NF) + 2 (TB) + 1 + 1 = 6
   REQUIRE(decltype(m)::numDims == 6u);
@@ -321,25 +315,22 @@ TEST_CASE("tune::internal::KernelTuningModel - edge cases: single-value dims",
   CHECK(nv[1] == 1u); // NF.y options
 }
 
-TEST_CASE("tune::internal::KernelTuningModel - "
+TEST_CASE("aTune::internal::KernelTuningModel - "
           "getConfigSubset_CompileTuneables returns correct slice",
           "[KTM][subset]") {
   // ------------------------------------------------------------------------
   // Model composition: 1 frame + 1 user + 2 compile-time tuneables
   // ------------------------------------------------------------------------
-  auto frame = std::tuple{tune::Tunable<tune::frame::numBlocks, uint32_t>{
+  auto frame = std::tuple{aTune::Tunable<aTune::frame::numBlocks, uint32_t>{
       {1u, 2u, 24u}, std::nullopt, "numBlocks"}};
 
-  auto user = std::tuple{tune::Tunable<alpaka::uniqueId(), uint32_t>{
-      {10u, 20u, 30u}, 20u, "userParam"}};
+  auto user = std::tuple{
+      aTune::Tunable<uniqueId(), uint32_t>{{10u, 20u, 30u}, 20u, "userParam"}};
   using type = uint64_t;
-  using CT =
-      std::tuple<tune::CTunable<alpaka::uniqueId(), alpaka::CVec<type, 10>,
-                                alpaka::CVec<type, 20>>,
-                 tune::CTunable<alpaka::uniqueId(), alpaka::CVec<type, 30>,
-                                alpaka::CVec<type, 40>>>;
+  using CT = std::tuple<CTunable<uniqueId(), CVec<type, 10>, CVec<type, 20>>,
+                        CTunable<uniqueId(), CVec<type, 30>, CVec<type, 40>>>;
 
-  tune::internal::KernelTuningModel model{frame, user, CT{}};
+  aTune::internal::KernelTuningModel model{frame, user, CT{}};
 
   // ------------------------------------------------------------------------
   // Expected layout:
@@ -358,7 +349,7 @@ TEST_CASE("tune::internal::KernelTuningModel - "
   // ------------------------------------------------------------------------
   // Extract the compile-time subset only
   // ------------------------------------------------------------------------
-  auto ctSubset = model.getConfigSubset_CompileTuneables(cfg);
+  auto ctSubset = model.getConfigSubsetForCompileTuneables(cfg);
 
   // Return type should be Config<uint32_t, std::tuple_size_v<CT>>
   STATIC_REQUIRE(std::is_same_v<decltype(ctSubset),

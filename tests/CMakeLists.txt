@@ -1,5 +1,5 @@
 #
-# Copyright 2025 René Widera, Simeon Ehrig
+# Copyright 2025 René Widera, Simeon Ehrig, Tim Hanel
 # SPDX-License-Identifier: ISC
 #
 
@@ -22,7 +22,7 @@ alpaka_install_catch2()
 #    extension.
 #  - folder: Takes all .cpp files in the specified folder and creates an test
 #    executable for each.
-function(tuner_add_test_target target_prefix folder)
+function(alpakaTune_add_test_target target_prefix folder)
     message(DEBUG "test target prefix: ${target_prefix}")
 
     file(GLOB test_folders ${folder})
@@ -58,8 +58,8 @@ function(tuner_add_test_target target_prefix folder)
                         target_include_directories(${_test_target_name} PRIVATE ${test_folder}/include)
                     endif()
 
-                    target_link_libraries(${_test_target_name} PRIVATE Catch2::Catch2WithMain alpaka::alpakaTune)
-                    alpaka_finalize(${_test_target_name})
+                    target_link_libraries(${_test_target_name} PRIVATE Catch2::Catch2WithMain alpakaTune::alpakaTune)
+                    alpakatune_finalize(${_test_target_name})
                     catch_discover_tests(${_test_target_name})
                 endif()
             endforeach()
@@ -67,4 +67,4 @@ function(tuner_add_test_target target_prefix folder)
     endforeach()
 endfunction()
 
-tuner_add_test_target(unit_test_ ${CMAKE_CURRENT_SOURCE_DIR}/unit/**)
+alpakatune_add_test_target(unit_test_ ${CMAKE_CURRENT_SOURCE_DIR}/unit/**)

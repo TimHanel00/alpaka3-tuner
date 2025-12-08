@@ -1,12 +1,11 @@
-
 /* Copyright 2025 Tim Hanel
  * SPDX-License-Identifier: MPL-2.0
  */
-#include <tune/tune.hpp>
+#include <alpakaTune/tune.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 using namespace alpaka::onHost;
-using namespace tune;
+using namespace aTune;
 TEST_CASE("Runtime LinSpace generates correct sequence", "[LinSpace]") {
   auto lin = generate::linSpace(1, 5, 1);
   std::vector expected{1, 2, 3, 4, 5};
@@ -56,7 +55,7 @@ TEST_CASE("Tuneable compatible", "[c_LogSpace]") {
                                    std::integral_constant<type, 3>,
                                    std::integral_constant<type, 9>>;
   constexpr auto testTuple = TuneTuple{};
-  meta::for_each_enumerate(
+  meta::forEachEnumerate(
       testTuple, [&]<std::size_t I>([[maybe_unused]] auto &&elem) {
         using SeqType = std::remove_cvref_t<decltype(elem)>;
         using ExpectedType = std::tuple_element_t<I, ExpectedTuple>;

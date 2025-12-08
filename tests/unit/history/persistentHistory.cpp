@@ -1,4 +1,3 @@
-
 /* Copyright 2025 Tim Hanel
  * SPDX-License-Identifier: MPL-2.0
  */
@@ -18,8 +17,8 @@
 // ----------------------------------------------
 
 // ActiveHistory / ConfigRecord / Config are real ones from your code:
-#include <tune/store/PersistentHistory.hpp>
-#include <tune/store/RuntimeHistory.hpp>
+#include <alpakaTune/store/PersistentHistory.hpp>
+#include <alpakaTune/store/RuntimeHistory.hpp>
 
 #include <catch2/catch_approx.hpp>
 
@@ -45,12 +44,12 @@ static std::filesystem::path make_temp_file(std::string const &stem) {
 
 template <typename TConfig>
 static void
-set_record_state_to_ready(tune::store::RuntimeHistory<TConfig> &hist,
+set_record_state_to_ready(aTune::store::RuntimeHistory<TConfig> &hist,
                           TConfig const &cfg, std::vector<double> samples) {
-  using Entry = typename tune::store::RuntimeHistory<TConfig>::Entry;
+  using Entry = typename aTune::store::RuntimeHistory<TConfig>::Entry;
   auto &e = hist.getOrCreate(cfg);
   e.state =
-      tune::internal::config::ConfigState::InProcess; // required pre-state
+      aTune::internal::config::ConfigState::InProcess; // required pre-state
   for (double s : samples) {
     e.pushMetric(s);
   }
@@ -65,8 +64,8 @@ struct DummyKernel {};
 TEST_CASE(
     "PersistentHistory::write creates JSON with expected number of configs",
     "[PersistentHistory][write]") {
-  using ConfigT = tune::config::Config<std::uint32_t, 3>;
-  tune::store::RuntimeHistory<ConfigT> history;
+  using ConfigT = aTune::config::Config<std::uint32_t, 3>;
+  aTune::store::RuntimeHistory<ConfigT> history;
 
   // three entries: two valid, one invalid (stamp = -1) — should all be written
   // (invalid included)
@@ -77,25 +76,26 @@ TEST_CASE(
   {
     auto &e = history.getOrCreate(ConfigT{{7, 7}});
     e.state =
-        tune::internal::config::ConfigState::Invalid; // this triggers stamp =
-                                                      // -1 in JSON
+        aTune::internal::config::ConfigState::Invalid; // this triggers stamp =
+                                                       // -1 in JSON
   }
 
   // Dummy model/metadata (2 dims; one tunable)
-  auto userTuple = std::tuple{tune::Tunable{0, 1}, tune::Tunable{2, 3}};
-  auto compileTuple = std::tuple{
-      tune::CTunable<alpaka::uniqueId(), std::integral_constant<std::size_t, 1>,
-                     std::integral_constant<size_t, 2>>{}};
+  auto userTuple = std::tuple{aTune::Tunable{0, 1}, aTune::Tunable{2, 3}};
+  auto compileTuple =
+      std::tuple{aTune::CTunable<alpaka::uniqueId(),
+                                 std::integral_constant<std::size_t, 1>,
+                                 std::integral_constant<size_t, 2>>{}};
   auto model =
-      tune::internal::KernelTuningModel{std::tuple{}, userTuple, compileTuple};
-  auto metaData = tune::internal::store::createTuningMetaData(
+      aTune::internal::KernelTuningModel{std::tuple{}, userTuple, compileTuple};
+  auto metaData = aTune::internal::store::createTuningMetaData(
       "CPU-0",
       /*executor*/ "serial", alpaka::KernelBundle{DummyKernel{}, 2, 3, 5},
       /*specifiers*/ std::vector<std::string>{"gpu0", "256", "variantA"},
       "time");
 
   auto tmp = make_temp_file("alpaka_persist_write");
-  tune::internal::store::PersistentHistory ph(tmp.string());
+  aTune::internal::store::PersistentHistory ph(tmp.string());
 
   auto written = ph.write(model, history, metaData);
   REQUIRE(written == 3); // 2 measured + 1 invalid; (Empty/Uninitialized/WarmUp
@@ -106,41 +106,42 @@ TEST_CASE(
 TEST_CASE("PersistentHistory round-trip write->read restores configs, samples "
           "and counters",
           "[PersistentHistory][read][write]") {
-  using ConfigT = tune::config::Config<std::uint32_t, 3>;
+  using ConfigT = aTune::config::Config<std::uint32_t, 3>;
 
   // Build history with 2 measured + 1 invalid
-  tune::store::RuntimeHistory<ConfigT> histW;
+  aTune::store::RuntimeHistory<ConfigT> histW;
   set_record_state_to_ready(histW, ConfigT{{0, 0, 1}}, {10.0, 11.0, 9.5});
   set_record_state_to_ready(histW, ConfigT{{1, 0, 1}}, {20.0, 19.0, 21.0});
   {
     auto &e = histW.getOrCreate(ConfigT{{7, 7, 7}});
     e.state =
-        tune::internal::config::ConfigState::Invalid; // stamp = -1 in JSON
+        aTune::internal::config::ConfigState::Invalid; // stamp = -1 in JSON
   }
 
   // Real model & metadata (same pattern as your first test)
-  auto userTuple = std::tuple{tune::Tunable{0, 1}, tune::Tunable{2, 3}};
-  auto compileTuple = std::tuple{
-      tune::CTunable<alpaka::uniqueId(), std::integral_constant<std::size_t, 1>,
-                     std::integral_constant<std::size_t, 2>>{}};
+  auto userTuple = std::tuple{aTune::Tunable{0, 1}, aTune::Tunable{2, 3}};
+  auto compileTuple =
+      std::tuple{aTune::CTunable<alpaka::uniqueId(),
+                                 std::integral_constant<std::size_t, 1>,
+                                 std::integral_constant<std::size_t, 2>>{}};
   auto model =
-      tune::internal::KernelTuningModel{std::tuple{}, userTuple, compileTuple};
-  auto meta = tune::internal::store::createTuningMetaData(
+      aTune::internal::KernelTuningModel{std::tuple{}, userTuple, compileTuple};
+  auto meta = aTune::internal::store::createTuningMetaData(
       "CPU-1", "serial", alpaka::KernelBundle{DummyKernel{}, 2, 3, 5},
       std::vector<std::string>{"tagA", "tagB"}, "time");
 
   auto tmp = make_temp_file("alpaka_persist_roundtrip");
-  tune::internal::store::PersistentHistory ph(tmp.string());
+  aTune::internal::store::PersistentHistory ph(tmp.string());
 
   // Write
   REQUIRE(ph.write(model, histW, meta) == 3);
   REQUIRE(std::filesystem::exists(tmp));
 
   // Read into fresh history
-  tune::store::RuntimeHistory<ConfigT> histR;
-  tune::core::peripherals::EnvironmentState<ConfigT> env{};
+  aTune::store::RuntimeHistory<ConfigT> histR;
+  aTune::core::peripherals::EnvironmentState<ConfigT> env{};
 
-  using T_MetricInterface = tune::metricInterface::Timing;
+  using T_MetricInterface = aTune::metricInterface::Timing;
 
   auto validLoaded = ph.read<T_MetricInterface>(model, histR, meta, env);
 
@@ -165,7 +166,7 @@ TEST_CASE("PersistentHistory round-trip write->read restores configs, samples "
   {
     auto r = histR.getRecord(ConfigT{{7, 7, 7}});
     REQUIRE(r.has_value());
-    CHECK(r->get().state == tune::internal::config::ConfigState::Invalid);
+    CHECK(r->get().state == aTune::internal::config::ConfigState::Invalid);
     CHECK(r->get().getMeasurements().getAll().empty());
   }
 
@@ -182,16 +183,16 @@ static constexpr auto IDc = alpaka::uniqueId();
 TEST_CASE("PersistentHistory with pure CTunable model (multi-dim) round-trip + "
           "specifier isolation",
           "[PersistentHistory][CTunable][read][write]") {
-  using ConfigT = tune::config::Config<std::uint32_t, 3>;
+  using ConfigT = aTune::config::Config<std::uint32_t, 3>;
   // Build write-history: 2 measured + 1 invalid
-  tune::store::RuntimeHistory<ConfigT> histW;
+  aTune::store::RuntimeHistory<ConfigT> histW;
   set_record_state_to_ready(histW, ConfigT{{0u, 0u, 0u}},
                             {5.0, 6.0, 4.0}); // median 5.0
   set_record_state_to_ready(histW, ConfigT{{1u, 0u, 2u}},
                             {10.0, 9.0, 11.0}); // median 10.0
   {
     auto &e = histW.getOrCreate(ConfigT{{2u, 1u, 1u}});
-    e.state = tune::internal::config::ConfigState::Invalid; // stamp=-1 in JSON
+    e.state = aTune::internal::config::ConfigState::Invalid; // stamp=-1 in JSON
   }
 
   // --- Pure CTunable model with 3 independent CTunables (=> 3 dims total)
@@ -199,24 +200,24 @@ TEST_CASE("PersistentHistory with pure CTunable model (multi-dim) round-trip + "
   using U32 = std::uint32_t;
 
   auto compileTuple =
-      std::tuple{tune::CTunable<IDa, alpaka::CVec<U32, 1>,
-                                alpaka::CVec<U32, 2>>{}, // dim #0: 2 values
-                 tune::CTunable<IDb, alpaka::CVec<U32, 4>,
-                                alpaka::CVec<U32, 8>>{}, // dim #1: 2 values
-                 tune::CTunable<IDc, alpaka::CVec<U32, 16>,
-                                alpaka::CVec<U32, 32>, // dim #2: 3 values
-                                alpaka::CVec<U32, 64>>{}};
+      std::tuple{aTune::CTunable<IDa, alpaka::CVec<U32, 1>,
+                                 alpaka::CVec<U32, 2>>{}, // dim #0: 2 values
+                 aTune::CTunable<IDb, alpaka::CVec<U32, 4>,
+                                 alpaka::CVec<U32, 8>>{}, // dim #1: 2 values
+                 aTune::CTunable<IDc, alpaka::CVec<U32, 16>,
+                                 alpaka::CVec<U32, 32>, // dim #2: 3 values
+                                 alpaka::CVec<U32, 64>>{}};
 
-  auto model = tune::internal::KernelTuningModel{
+  auto model = aTune::internal::KernelTuningModel{
       std::tuple{}, /*user*/ std::tuple{}, compileTuple};
 
   // Metadata (+ specifiers set A)
-  auto metaA = tune::internal::store::createTuningMetaData(
+  auto metaA = aTune::internal::store::createTuningMetaData(
       "CPU-CT-only", "serial", alpaka::KernelBundle{DummyKernel{}, 2, 3, 5},
       std::vector<std::string>{"specA", "run1"}, "time");
 
   auto tmp = make_temp_file("alpaka_persist_ctunable_roundtrip");
-  tune::internal::store::PersistentHistory ph(tmp.string());
+  aTune::internal::store::PersistentHistory ph(tmp.string());
 
   // --- Write
   REQUIRE(ph.write(model, histW, metaA) == 3);
@@ -224,9 +225,9 @@ TEST_CASE("PersistentHistory with pure CTunable model (multi-dim) round-trip + "
 
   // --- Read back with SAME specifiers (should load all 3, invalid included in
   // checked but not in valid count)
-  tune::store::RuntimeHistory<ConfigT> histR_same;
-  tune::core::peripherals::EnvironmentState<ConfigT> env_same{};
-  using T_Metric = tune::metricInterface::Timing;
+  aTune::store::RuntimeHistory<ConfigT> histR_same;
+  aTune::core::peripherals::EnvironmentState<ConfigT> env_same{};
+  using T_Metric = aTune::metricInterface::Timing;
 
   auto loaded_same = ph.read<T_Metric>(model, histR_same, metaA, env_same);
   CHECK(loaded_same == 3); // we wrote 3 -> load 3 records (invalid gets
@@ -251,20 +252,20 @@ TEST_CASE("PersistentHistory with pure CTunable model (multi-dim) round-trip + "
   {
     auto r = histR_same.getRecord(ConfigT{{2u, 1u, 1u}});
     REQUIRE(r.has_value());
-    CHECK(r->get().state == tune::internal::config::ConfigState::Invalid);
+    CHECK(r->get().state == aTune::internal::config::ConfigState::Invalid);
     CHECK(r->get().getMeasurements().getAll().empty());
   }
 
   // --- Read with DIFFERENT specifiers (same hard metadata but different
   // soft-descriptor → 0 loads)
-  auto metaB = tune::internal::store::createTuningMetaData(
+  auto metaB = aTune::internal::store::createTuningMetaData(
       "CPU-CT-only", "serial", alpaka::KernelBundle{DummyKernel{}, 2, 3, 5},
       std::vector<std::string>{"specB",
                                "runX"}, // different => different descriptorID
       "time");
 
-  tune::store::RuntimeHistory<ConfigT> histR_diff;
-  tune::core::peripherals::EnvironmentState<ConfigT> env_diff{};
+  aTune::store::RuntimeHistory<ConfigT> histR_diff;
+  aTune::core::peripherals::EnvironmentState<ConfigT> env_diff{};
 
   auto loaded_diff = ph.read<T_Metric>(model, histR_diff, metaB, env_diff);
   CHECK(loaded_diff == 0); // no soft-node for this specifier set

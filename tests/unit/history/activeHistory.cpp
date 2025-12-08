@@ -1,16 +1,12 @@
-
 /* Copyright 2025 Tim Hanel
  * SPDX-License-Identifier: MPL-2.0
  */
-// test_active_history.cpp
-#include <catch2/catch_test_macros.hpp>
 
+#include <alpakaTune/tune.hpp>
+#include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 
-// Adjust these include paths to your tree:
-#include <tune/tune.hpp>
-
-using namespace tune;
+using namespace aTune;
 
 TEST_CASE("[TunerActiveHistory] starts empty", "") {
   store::RuntimeHistory<config::Config<std::uint32_t, 3>> hist;
