@@ -59,7 +59,7 @@ function(alpakaTune_add_test_target target_prefix folder)
                     endif()
 
                     target_link_libraries(${_test_target_name} PRIVATE Catch2::Catch2WithMain alpakaTune::alpakaTune)
-                    alpakatune_finalize(${_test_target_name})
+                    alpaka_finalize(${_test_target_name})
                     catch_discover_tests(${_test_target_name})
                 endif()
             endforeach()

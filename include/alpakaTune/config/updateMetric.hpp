@@ -95,10 +95,10 @@ void prematureConfigSkip(
  * @see ConfigRecord
  */
 template <bool kruskalWallisSkip, typename T_MetricInterface, typename T_Config>
-inline void updateMetrics(aTune::config::ConfigRecord<T_Config> &stored,
-                          core::peripherals::EnvironmentState<T_Config> &state,
-                          double_t const &metric) {
-  bool retired = (stored.state == config::ConfigState::Retired);
+void updateMetrics(aTune::config::ConfigRecord<T_Config> &stored,
+                   core::peripherals::EnvironmentState<T_Config> &state,
+                   double_t const &metric) {
+  bool retired = (stored.state == ConfigState::Retired);
 
   stored.pushMetric(metric);
   if (retired)
@@ -106,7 +106,7 @@ inline void updateMetrics(aTune::config::ConfigRecord<T_Config> &stored,
   /// update best config.
   state.template updateBestConfig<T_MetricInterface>(stored);
   // highest precedence: maxRunsPerConfig (default max=100)
-  if ((stored.nr_runs >= Vars::getRunsPerConfig())) {
+  if ((stored.nr_runs >= state.maxRunsPerConfig)) {
     stored.state = ConfigState::Retired;
     return;
   }

@@ -3,9 +3,9 @@
  */
 
 #pragma once
+#include "alpakaTune/interfaces/environmentVars.hpp"
 #include "alpakaTune/interfaces/metricInterface.hpp"
 #include "alpakaTune/store/RuntimeHistory.hpp"
-
 #include <cstdint>
 #include <optional>
 
@@ -32,10 +32,12 @@ namespace aTune::core::peripherals {
 template <typename T_Config> struct EnvironmentState {
   bool sessionFinished{false};
   mutable bool strategyFinished{false};
+  uint32_t maxRunsPerConfig{upperBoundForRunsPerConfig};
   uint32_t numberOfCheckedConfigs{0};
   uint32_t numValidConfigs{0};
-  uint32_t maxValidEvaluations{UINT32_MAX};
   uint32_t maxConfigsTotal{0};
+  uint32_t maxNumKernelInvocations{0};
+  uint32_t numKernelInvocations{0};
   uint32_t strategyLimit = Tuner_MaxConsecutiveStrategyFailures;
   std::optional<std::reference_wrapper<config::ConfigRecord<T_Config> const>>
       bestConfig;
@@ -100,12 +102,8 @@ template <typename T_Config> struct EnvironmentState {
 
   auto const &getBestConfig() { return bestConfig; }
 
-  [[nodiscard]] uint32_t getMaxEvals() const {
-    return std::min(maxValidEvaluations, maxConfigsTotal);
-  }
-
-  bool globalBreakCriteriaFinished() {
-    return numValidConfigs >= maxValidEvaluations ||
+  bool globalBreakCriteriaFinished() const {
+    return numKernelInvocations >= maxNumKernelInvocations ||
            numberOfCheckedConfigs >= maxConfigsTotal;
   }
 };

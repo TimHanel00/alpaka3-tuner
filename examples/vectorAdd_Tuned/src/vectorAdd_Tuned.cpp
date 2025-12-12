@@ -118,7 +118,7 @@ auto example(auto const deviceSpec, auto const exec, size_t numElements,
   auto devSelector = onHost::makeDeviceSelector(deviceSpec);
   onHost::Device devAcc = devSelector.makeDevice(0);
 
-  // Create a queue on the device
+  // Create a tunerQueue on the device
   onHost::Queue queue = devAcc.makeQueue();
 
   // Allocate 3 host memory buffers
@@ -200,7 +200,9 @@ auto example(auto const deviceSpec, auto const exec, size_t numElements,
                     // set context specifier - can be used to further restrict
                     // the current tuning context (interesting use for example
                     // bufferSize)
-                    .withContextSpecifier("VectorAddTuning")
+                    .withSessionSpecs(
+                        aTune::SessionSpecs{}.withContextSpecifier(
+                            "vectorAdd_Tuned"))
                     // a tuning session can incooperate a json based checkpoint
                     // and restart logic.
                     .withPersistentHistory("vectorAddKernel_History.json")
@@ -229,8 +231,8 @@ auto example(auto const deviceSpec, auto const exec, size_t numElements,
     // Enqueue the kernel into the previously defined tuningSession with the
     // defined frameSpecTuningModel -- works like a alpaka::enqueue
     session.enqueue(queue, exec, specTuningModel, taskKernel);
-    // wait in case we are using an asynchronous queue to time actual kernel
-    // runtime
+    // wait in case we are using an asynchronous tunerQueue to time actual
+    // kernel runtime
     onHost::wait(queue);
     auto const endT = std::chrono::high_resolution_clock::now();
     double kernelRuntime = std::chrono::duration<double>(endT - beginT).count();

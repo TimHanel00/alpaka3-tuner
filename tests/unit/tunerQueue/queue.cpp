@@ -73,12 +73,12 @@ TEST_CASE("[TunerConfigQueue] removes fullFlag records automatically", "")
 }
 
 TEST_CASE("[TunerConfigQueue] random access and cleanup", "") {
-  internal::core::peripherals::ConfigQueue<DummyRecord> queue;
+  ConfigQueue<DummyRecord> queue;
 
   std::vector<DummyRecord> records;
-  // queue takes std::ref so you must ensure no reallocation of entries takes
-  // place in the tuner this is done by taking only entries that are part active
-  // History which are guarenteed to stay at the same address
+  // tunerQueue takes std::ref so you must ensure no reallocation of entries
+  // takes place in the tuner this is done by taking only entries that are part
+  // active History which are guarenteed to stay at the same address
   records.reserve(10);
   for (unsigned int i = 0; i < 10; ++i) {
     DummyRecord record{i, internal::config::ConfigState::Initialized};
@@ -133,7 +133,7 @@ TEST_CASE("[TunerConfigQueue] increase test coverage over additional helper "
     CHECK(first.state == internal::config::ConfigState::Uninitialized);
     CHECK(first.warm_up_runs == 0u);
 
-    // Now check reuse window equals maxConsecutiveRuns for this queue
+    // Now check reuse window equals maxConsecutiveRuns for this tunerQueue
     uint32_t observedReuses = 1u;
 
     for (;;) {

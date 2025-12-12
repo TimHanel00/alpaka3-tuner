@@ -19,8 +19,6 @@ if(NOT TARGET alpakaTune::alpakaTune)
     foreach(_cmake_file ${_cmake_files})
         include(${_cmake_file})
     endforeach()
-    #for language specifications (CUDA/HIP) -- resets some variables for internal alpaka_finalize compatability
-    alpaka_fetchcontent_finalize()
 endif()
 option(alpakaTune_HEADERCHECKS "Enable header checks (for files specific to this project)" OFF)
 if(alpakaTune_HEADERCHECKS)

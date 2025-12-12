@@ -13,44 +13,38 @@
 #define upperBoundForRunsPerConfig 100
 #endif
 
-/**
- * @namespace aTune::Vars
- * @brief Holds runtime-accessible limits/break criteria for various
- * TuningSessions and setters honoring env precedence. currently supported
- * environmentVariables: TunerMaxTotalConfigs = maximum number of distinct
- * paramater configurations to be checked (valid + non-valid)
- *  TunerMaxValidConfigs = maximum number of distinct parameter configurations
- * to be executed (only valid) TunerRunsPerConfig = maximum amount of times a
- * single paramater configuration is executed AND !measured! (NOTE: this does
- * not include warm-up runs -- the first run for any config is usually
- * discarded)
- *
- */
 namespace aTune::Vars {
 using integerType = std::uint32_t;
 
 /**
- * @brief Singleton owning effective values and "locked by env" flags.
- *
- * Values are read once from environment variables:
- * - `TunerMaxTotalConfigs`
- * - `TunerMaxValidConfigs`
- * - `TunerRunsPerConfig`
- *
- * If an env var is present, the corresponding field is locked and setters will
- * return `false`.
- * --> env vars overwrite existing set methods
+ * @namespace aTune::Vars
+ * @brief Holds runtime-accessible limits/break criteria
+ * Supported environment variables:
+ * - `TunerMaxExecutions` -- the maximum number of times the kernel is invoked
+ * before running with the best configuration
+ * - `TunerRunsPerConfig` -- the maximum number of times the performence of a
+ * single parameter configuration is measured (excluding warm-up runs). If an
+ * env var is present, it overrides existing SessionSpecifiers
  */
 struct EnvVarsManager {
+
+  // -------------------------------------------------------------------------
   // Effective values
-  integerType maxTotalConfigs = std::numeric_limits<integerType>::max();
-  integerType maxValidConfigs = std::numeric_limits<integerType>::max();
+  // -------------------------------------------------------------------------
+
+  /// Maximum total executions before switching to “best” mode.
+  integerType maxExecutions = std::numeric_limits<integerType>::max();
+
+  /// Maximum number of times a single parameter configuration is executed
+  /// (warmup excluded — those are not counted).
   integerType runsPerConfig =
       static_cast<integerType>(upperBoundForRunsPerConfig);
 
-  // Env guards (true => env provided value => lock the field against setters)
-  bool has_MaxTotalConfigs = false;
-  bool has_MaxValidConfigs = false;
+  // -------------------------------------------------------------------------
+  // Env guards: true → env provided value → setters are locked
+  // -------------------------------------------------------------------------
+
+  bool has_MaxExecutions = false;
   bool has_RunsPerConfig = false;
 
   bool inited = false;
@@ -63,9 +57,7 @@ struct EnvVarsManager {
   }
 
   /**
-   * @brief Parse an unsigned 32-bit integer from an environment variable.
-   * @param name Env var name.
-   * @return Parsed value or `std::nullopt` if missing/invalid.
+   * @brief Parse an unsigned 32-bit integer from environment variable.
    */
   static std::optional<integerType> parseEnvU32(char const *name) {
     if (char const *var = std::getenv(name)) {
@@ -78,20 +70,19 @@ struct EnvVarsManager {
     return std::nullopt;
   }
 
-  /// @brief Initialize from env exactly once (idempotent).
+  /// @brief Initialize env vars exactly once.
   void initFromEnvOnce() {
     if (inited)
       return;
     inited = true;
 
-    if (auto v = parseEnvU32("TunerMaxTotalConfigs")) {
-      maxTotalConfigs = v.value_or(maxTotalConfigs);
-      has_MaxTotalConfigs = true;
+    // ------------------- NEW VARIABLE -------------------
+    if (auto v = parseEnvU32("TunerMaxExecutions")) {
+      maxExecutions = v.value_or(maxExecutions);
+      has_MaxExecutions = true;
     }
-    if (auto v = parseEnvU32("TunerMaxValidConfigs")) {
-      maxValidConfigs = v.value_or(maxValidConfigs);
-      has_MaxValidConfigs = true;
-    }
+
+    // ------------------- EXISTING VARIABLE --------------
     if (auto v = parseEnvU32("TunerRunsPerConfig")) {
       runsPerConfig = v.value_or(runsPerConfig);
       has_RunsPerConfig = true;
@@ -99,50 +90,36 @@ struct EnvVarsManager {
   }
 };
 
-// ---------------- Flags (read-only views of env presence) ----------------
+// ---------------- Flags ----------------
+inline bool hasMaxExecutions_Env() {
+  return EnvVarsManager::get().has_MaxExecutions;
+}
+
 inline bool hasRunsPerConfig_Env() {
   return EnvVarsManager::get().has_RunsPerConfig;
 }
-
-inline bool hasMaxTotalConfigs_Env() {
-  return EnvVarsManager::get().has_MaxTotalConfigs;
+/// get `TunerMaxExecutions` -- the maximum number of times the kernel is
+/// invoked before running with the best configuration
+inline integerType getMaxExecutions() {
+  return EnvVarsManager::get().maxExecutions;
 }
-
-inline bool hasMaxValidConfigs_Env() {
-  return EnvVarsManager::get().has_MaxValidConfigs;
-}
-
-// ---------------- Getters ----------------
-inline integerType getMaxTotalConfigs() {
-  return EnvVarsManager::get().maxTotalConfigs;
-}
-
-inline integerType getMaxValidConfigs() {
-  return EnvVarsManager::get().maxValidConfigs;
-}
-
+/// get `TunerRunsPerConfig` -- the maximum number of times the performence of a
+/// single parameter configuration is measured (excluding warm-up runs).
 inline integerType getRunsPerConfig() {
   return EnvVarsManager::get().runsPerConfig;
 }
 
-// ---------------- Setters (env wins; return false if locked by env)
-// ----------------
-inline bool setMaxTotalConfigs(integerType v) {
+/// set `TunerMaxExecutions` -- the maximum number of times the kernel is
+/// invoked before running with the best configuration
+inline bool setMaxExecutions(integerType v) {
   auto &s = EnvVarsManager::get();
-  if (s.has_MaxTotalConfigs)
+  if (s.has_MaxExecutions)
     return false;
-  s.maxTotalConfigs = v;
+  s.maxExecutions = v;
   return true;
 }
-
-inline bool setMaxValidConfigs(integerType v) {
-  auto &s = EnvVarsManager::get();
-  if (s.has_MaxValidConfigs)
-    return false;
-  s.maxValidConfigs = v;
-  return true;
-}
-
+/// set `TunerRunsPerConfig` -- the maximum number of times the performence of a
+/// single parameter configuration is measured (excluding warm-up runs).
 inline bool setRunsPerConfig(integerType v) {
   auto &s = EnvVarsManager::get();
   if (s.has_RunsPerConfig)

@@ -84,7 +84,8 @@ makeDescriptorJson(KernelTuningMetadata const &metaData,
 
   // soft constraints
   desc["kernelArgs"] = metaData.kernelArgs; // for now equals metadata.kernel
-  desc["specifiers"] = metaData.specifiers; // moved to soft
+  desc["specifiers"] =
+      metaData.m_sessionSpecs.m_conxtextSpecifiers; // moved to soft
 
   return desc;
 }
@@ -198,6 +199,8 @@ config_to_json(aTune::config::ConfigRecord<T_Config> const &cfg, auto index) {
   j["measurements"] =
       std::vector(cfg.getMeasurements().history.begin(),
                   cfg.getMeasurements().history.end()); // doubles
+  std::cout << " measurements size on write: " << j["measurements"].size()
+            << std::endl;
   return j;
 }
 
@@ -371,9 +374,10 @@ public:
             jcfg["measurements"].size() > 0) {
           entry.state = config::ConfigState::InProcess;
         }
-
+        uint32_t index = 0;
         for (auto const &m : jcfg["measurements"]) {
           auto val = m.template get<double_t>();
+          std::cout << " reading: " << index++ << std::endl;
           config::updateMetrics<false, T_MetricInterface>(entry, state, val);
         }
       }

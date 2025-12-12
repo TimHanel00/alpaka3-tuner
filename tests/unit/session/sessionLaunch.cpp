@@ -2,10 +2,10 @@
 /* Copyright 2025 Tim Hanel
  * SPDX-License-Identifier: MPL-2.0
  */
+#include <alpaka/alpaka.hpp>
 #include <alpaka/onHost/example/executors.hpp>
 #include <alpakaTune/tunable/generators.hpp>
 #include <alpakaTune/tune.hpp>
-
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
 using namespace alpaka;
@@ -18,7 +18,7 @@ using V2u = Vec<uint32_t, 2u>;
 struct ExampleKernelA {
   template <typename TAcc>
   ALPAKA_FN_ACC void
-  operator()(TAcc const &acc, alpaka::concepts::MdSpan auto outputVec,
+  operator()(TAcc const &acc, alpaka::concepts::IMdSpan auto outputVec,
              alpaka::concepts::Vector auto maxNumFrames,
              alpaka::concepts::Vector auto maxFrameExtent,
              std::integral auto maxUserVal, auto val /*userTunable*/) const {
@@ -38,7 +38,7 @@ struct ExampleKernelA {
 template <class CTune> struct ExampleKernelWithCTune {
   template <typename TAcc>
   ALPAKA_FN_ACC void operator()(TAcc const &acc,
-                                alpaka::concepts::MdSpan auto outputVec,
+                                alpaka::concepts::IMdSpan auto outputVec,
                                 alpaka::concepts::Vector auto maxNumFrames,
                                 alpaka::concepts::Vector auto maxFrameExtent,
                                 std::integral auto maxUserVal) const {
@@ -86,9 +86,9 @@ bool validateBuffer(alpaka::concepts::IBuffer auto const &buffer) {
   return valid;
 }
 
-TEMPLATE_LIST_TEST_CASE(
-    "enqueue with shallow frame placeholders + user int tunable",
-    "[FrameSpecTuningModel + UserTune][enqueue][full run]", TestApis) {
+TEMPLATE_LIST_TEST_CASE("[sessionLaunch] enqueue with shallow frame "
+                        "placeholders + user int tunable",
+                        "", TestApis) {
   using namespace alpaka;
   using namespace aTune;
 
@@ -99,12 +99,14 @@ TEMPLATE_LIST_TEST_CASE(
   Queue queue = device.makeQueue();
   Queue hostQueue = makeHostDevice().makeQueue();
   auto exec = cfg[object::exec];
-  Vars::setRunsPerConfig(10);
+  // set fixed number of runs per config
+  auto sessionSpec =
+      SessionSpecs{}.withRunsPerConfig(10).withContextSpecifier("A");
   // INIT TUNING
   // Tuning session
   auto session = TuningBuilder{}
                      .withStrategy(strategy::ExhaustiveSearch{})
-                     .withContextSpecifier("sess-shallow-user")
+                     .withSessionSpecs(sessionSpec)
                      .buildSession();
 
   // Frame spec + SHALLOW placeholders for frame space (tuner decides)
@@ -141,7 +143,7 @@ TEMPLATE_LIST_TEST_CASE(
   for (auto i = 0; i < (64 * (10 + 5));
        i++) // sufficient number of tuning times
   {
-    // queue.enqueue(exec, spec, kernelBundle);
+    // tunerQueue.enqueue(exec, spec, kernelBundle);
     session.enqueue(queue, exec, frameModel, kernelBundle);
   }
   onHost::memcpy(queue, uBufHost, uCurrBufAcc);
@@ -151,8 +153,8 @@ TEMPLATE_LIST_TEST_CASE(
                                      // device
 }
 
-TEMPLATE_LIST_TEST_CASE("enqueue with CTunable", "[CTune][enqueue][full run]",
-                        TestApis) {
+TEMPLATE_LIST_TEST_CASE("[sessionLaunch] enqueue with CTunable",
+                        "[CTune][enqueue][full run]", TestApis) {
   using namespace alpaka;
   using namespace aTune;
 
@@ -164,12 +166,13 @@ TEMPLATE_LIST_TEST_CASE("enqueue with CTunable", "[CTune][enqueue][full run]",
   Queue hostQueue = onHost::makeHostDevice().makeQueue();
   auto exec = cfg[object::exec];
   // set a fixed requirement on the number of runs per config
-  Vars::setRunsPerConfig(10);
+  auto sessionSpec =
+      SessionSpecs{}.withRunsPerConfig(10).withContextSpecifier("sess-Tune");
   // INIT TUNING
   // Tuning session
   auto session = TuningBuilder{}
                      .withStrategy(strategy::ExhaustiveSearch{})
-                     .withContextSpecifier("sess-CTune")
+                     .withSessionSpecs(sessionSpec)
                      .buildSession();
 
   // Frame spec + SHALLOW placeholders for frame space (tuner decides)
@@ -202,7 +205,7 @@ TEMPLATE_LIST_TEST_CASE("enqueue with CTunable", "[CTune][enqueue][full run]",
        i++) // sufficient number of tuning runs -- 3 consecutive runs, 1 run is
             // warmUp,
   {
-    // queue.enqueue(exec, spec, kernelBundle);
+    // tunerQueue.enqueue(exec, spec, kernelBundle);
     session.enqueue(queue, exec, frameModel, kernelBundle);
   }
   onHost::memcpy(queue, uBufHost, uCurrBufAcc);

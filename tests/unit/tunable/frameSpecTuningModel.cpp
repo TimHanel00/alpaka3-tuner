@@ -156,8 +156,8 @@ TEST_CASE("[FrameSpecTuningModel] - end-to-end: custom tuneables are preserved "
   REQUIRE_FALSE(tuned.hasNumFramesTune());
   REQUIRE_FALSE(tuned.hasNumBlocksTune());
 
-  [[maybe_unused]] auto fe = tuned.getFrameExtentTune();
-  [[maybe_unused]] auto nt = tuned.getNumThreadsTune();
+  [[maybe_unused]] const auto &fe = tuned.getFrameExtentTune();
+  [[maybe_unused]] const auto &nt = tuned.getNumThreadsTune();
 
   REQUIRE(fe.getName() == frameExtentTune.getName());
   REQUIRE(nt.getName() == numThreadsTune.getName());

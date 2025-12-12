@@ -24,7 +24,7 @@ struct DummyMetricInterface {
 
   double_t end() { return 1.0; } // must return double_t
 
-  std::string getName() const { return "DummyMetric"; }
+  static std::string getName() { return "DummyMetric"; }
 };
 
 struct DummyStrategy {
@@ -51,7 +51,7 @@ TEST_CASE("construct simple session from builder", "[TuningBuilder][create]") {
 TEST_CASE("builder default state is empty", "[TuningBuilder][defaults]") {
   TuningBuilder builder{};
   REQUIRE(builder.m_outputFile.empty());
-  REQUIRE(builder.m_sessionSpecifiers.empty());
+  REQUIRE(builder.m_sessionSpecs.m_conxtextSpecifiers.empty());
 }
 
 TEST_CASE("withOutputFile sets and persists file name",
@@ -113,35 +113,38 @@ TEST_CASE("multiple constraints can be added via chaining",
 
 TEST_CASE("run specifiers are stored correctly",
           "[TuningBuilder][specifiers]") {
-  auto builder = TuningBuilder{}.withContextSpecifier(
-      "gpu0", std::to_string(256), "variantA");
+  auto builder =
+      TuningBuilder{}.withSessionSpecs(SessionSpecs{}.withContextSpecifier(
+          "gpu0", std::to_string(256), "variantA"));
 
-  REQUIRE(builder.m_sessionSpecifiers.size() == 3);
-  REQUIRE(builder.m_sessionSpecifiers[0] == "gpu0");
-  REQUIRE(builder.m_sessionSpecifiers[2] == "variantA");
+  REQUIRE(builder.m_sessionSpecs.m_conxtextSpecifiers.size() == 3);
+  REQUIRE(builder.m_sessionSpecs.m_conxtextSpecifiers[0] == "gpu0");
+  REQUIRE(builder.m_sessionSpecs.m_conxtextSpecifiers[2] == "variantA");
 }
 
 TEST_CASE("output file and specifiers persist through transformations",
           "[TuningBuilder][persistence]") {
-  auto builder = TuningBuilder{}
-                     .withContextSpecifier("spec1")
-                     .withPersistentHistory("persist.txt")
-                     .withMetricInterface(DummyMetricInterface{});
+  auto builder =
+      TuningBuilder{}
+          .withSessionSpecs(SessionSpecs{}.withContextSpecifier("spec1"))
+          .withPersistentHistory("persist.txt")
+          .withMetricInterface(DummyMetricInterface{});
 
   REQUIRE(builder.m_outputFile == "persist.txt");
-  REQUIRE(builder.m_sessionSpecifiers.size() == 1);
+  REQUIRE(builder.m_sessionSpecs.m_conxtextSpecifiers.size() == 1);
 }
 
 TEST_CASE("buildSession preserves builder configuration",
           "[TuningBuilder][session]") {
   auto builder = TuningBuilder{}
                      .withPersistentHistory("session_out.toml")
-                     .withContextSpecifier("device0", "case42");
+                     .withSessionSpecs(SessionSpecs{}.withContextSpecifier(
+                         "device0", "case42"));
 
   auto session = builder.buildSession();
 
   REQUIRE(builder.m_outputFile == "session_out.toml");
-  REQUIRE(builder.m_sessionSpecifiers.size() == 2);
+  REQUIRE(builder.m_sessionSpecs.m_conxtextSpecifiers.size() == 2);
 }
 
 TEST_CASE("complex chained builder integration",
@@ -156,25 +159,23 @@ TEST_CASE("complex chained builder integration",
           .withMetricInterface(metric)
           .withConstraint<aTune::frame::numThreads, aTune::frame::frameExtent>(
               [](auto a, auto b) { return a <= b; })
-          .withContextSpecifier("gpu1", std::to_string(512), "problemX");
+          .withSessionSpecs(
+              SessionSpecs{}.withContextSpecifier("gpu1", 512, "problemX"));
 
   auto session = builder.buildSession();
 
   REQUIRE(builder.m_outputFile == "integration.toml");
-  REQUIRE(builder.m_sessionSpecifiers.size() == 3);
+  REQUIRE(builder.m_sessionSpecs.m_conxtextSpecifiers.size() == 3);
 
   using BType = decltype(builder);
   STATIC_REQUIRE(std::tuple_size_v<typename BType::T_ConstraintTuple_Type> ==
                  1);
 
-  auto session1 = aTune::TuningBuilder{}
-                      .withStrategy(strategy::ExhaustiveSearch{})
-                      .withContextSpecifier("sess-CTune");
-  std::cout << "size: " << session1.m_sessionSpecifiers.size() << std::endl;
+  auto session1 =
+      aTune::TuningBuilder{}
+          .withStrategy(strategy::ExhaustiveSearch{})
+          .withSessionSpecs(SessionSpecs{}.withContextSpecifier("sess-CTune"));
   auto session2 = session1.withPersistentHistory("out.json");
-  std::cout << "size: " << session2.m_sessionSpecifiers.size() << std::endl;
 
   auto actualSession = session2.buildSession();
-  std::cout << "size: " << actualSession.m_sessionSpecifiers.size()
-            << std::endl;
 }

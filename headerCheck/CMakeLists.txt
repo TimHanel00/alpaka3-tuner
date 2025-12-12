@@ -37,7 +37,7 @@ list(APPEND _GENERATED_SOURCES "${_MAIN}")
 # Build the executable
 add_executable(${_TARGET_NAME} ${_GENERATED_SOURCES})
 target_link_libraries(tunerHeaderCheckTest PRIVATE alpakaTune::alpakaTune)
-alpakatune_finalize(tunerHeaderCheckTest)
+alpaka_finalize(tunerHeaderCheckTest)
 # Add include path
 target_include_directories(${_TARGET_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../include")
 

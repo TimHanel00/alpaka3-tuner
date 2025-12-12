@@ -20,8 +20,9 @@ auto *setupEnqueue(T_Queue const &queue, T_Exec const &exec,
   static auto *kernelptr =
       getTuningEnvironment(queue, exec, frameSpecTune, kernelBundle, session)
           .get();
-  auto &data = kernelptr->env_metaData;
-  if (session.m_sessionSpecifiers != data.specifiers) {
+  store::KernelTuningMetadata const &data = kernelptr->env_metaData;
+  if (session.m_sessionSpecs.m_conxtextSpecifiers !=
+      data.m_sessionSpecs.m_conxtextSpecifiers) {
     kernelptr =
         getTuningEnvironment(queue, exec, frameSpecTune, kernelBundle, session)
             .get();
@@ -48,16 +49,16 @@ struct TuningSession {
   T_MetricInterface m_metricInterface;
   T_Constraints m_constraintTuple;
   std::string m_outputFile;
-  std::vector<std::string> m_sessionSpecifiers;
+  SessionSpecs m_sessionSpecs;
   TuningSession() = default;
 
   explicit TuningSession(T_Strategy const &strategy,
                          T_MetricInterface const &interface,
                          T_Constraints const &constraints, std::string config,
-                         std::vector<std::string> const &sessionSpecifiers)
+                         SessionSpecs const &sessionSpecifiers)
       : m_strategy(strategy), m_metricInterface(interface),
         m_constraintTuple(constraints), m_outputFile(std::move(config)),
-        m_sessionSpecifiers(sessionSpecifiers) {}
+        m_sessionSpecs(sessionSpecifiers) {}
 
   /** @brief Enqueue and Execute a kernel, while performing exactly one step of
    * the tuning process. Mirrors the existing alpaka::enqueue both in terms of

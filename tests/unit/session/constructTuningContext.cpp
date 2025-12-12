@@ -29,7 +29,8 @@ using namespace alpaka::onHost;
 using TestApis = std::decay_t<decltype(allBackends(
     enabledApis, onHost::example::enabledExecutors))>;
 
-TEMPLATE_LIST_TEST_CASE("Session builder with shallow frameExtent+numBlocks",
+TEMPLATE_LIST_TEST_CASE("[constructTuningContext] Session builder with shallow "
+                        "frameExtent+numBlocks",
                         "", TestApis) {
   auto cfg = TestType::makeDict();
   auto deviceSpec = cfg[object::deviceSpec];
@@ -40,7 +41,9 @@ TEMPLATE_LIST_TEST_CASE("Session builder with shallow frameExtent+numBlocks",
   using V2u = alpaka::Vec<uint32_t, 2u>;
   auto build = aTune::TuningBuilder{};
   auto session =
-      aTune::TuningBuilder{}.withContextSpecifier("ab").buildSession();
+      aTune::TuningBuilder{}
+          .withSessionSpecs(aTune::SessionSpecs{}.withContextSpecifier("ab"))
+          .buildSession();
   auto spec = FrameSpec{V2u{1, 1}, V2u{8, 8}};
   auto frameModel = aTune::FrameSpecTuningModel{spec}
                         .withFrameExtentTune()
@@ -87,8 +90,10 @@ TEMPLATE_LIST_TEST_CASE(
   auto exec = cfg[object::exec];
 
   // Tuning session
-  auto session =
-      TuningBuilder{}.withContextSpecifier("sess-shallow-user").buildSession();
+  auto session = TuningBuilder{}
+                     .withSessionSpecs(SessionSpecs{}.withContextSpecifier(
+                         "sess-shallow-user"))
+                     .buildSession();
 
   // Frame spec + SHALLOW placeholders for frame space (tuner decides)
   auto spec = onHost::FrameSpec{V2u{1, 1}, V2u{16, 16}};
@@ -116,9 +121,9 @@ TEMPLATE_LIST_TEST_CASE(
 //  - We explicitly define the spaces for numFrames and frameExtent
 //  - We also pass a multi-dim user tunable to the kernel
 // -----------------------------------------------------------------------------
-TEMPLATE_LIST_TEST_CASE("enqueue with user defined frame tunables",
-                        "[FrameSpecTuningModel][enqueue][userFrame]",
-                        TestApis) {
+TEMPLATE_LIST_TEST_CASE(
+    "[constructTuningContext] enqueue with user defined frame tunables", "",
+    TestApis) {
   using namespace alpaka;
   using namespace aTune;
   using V2u = Vec<uint32_t, 2u>;
@@ -130,8 +135,10 @@ TEMPLATE_LIST_TEST_CASE("enqueue with user defined frame tunables",
   auto exec = cfg[object::exec];
 
   // Tuning session
-  auto session =
-      TuningBuilder{}.withContextSpecifier("sess-user-user").buildSession();
+  auto session = TuningBuilder{}
+                     .withSessionSpecs(
+                         SessionSpecs{}.withContextSpecifier("sess-user-user"))
+                     .buildSession();
 
   // Frame spec
   auto spec = onHost::FrameSpec{V2u{1, 1}, V2u{32, 32}};
@@ -161,8 +168,7 @@ TEMPLATE_LIST_TEST_CASE("enqueue with user defined frame tunables",
   REQUIRE(envPtr != nullptr);
 }
 
-TEMPLATE_LIST_TEST_CASE("ALL shallow combinations",
-                        "[FrameSpecTuningModel][enqueue][Tuner Decide]",
+TEMPLATE_LIST_TEST_CASE("[constructTuningContext] ALL shallow combinations", "",
                         TestApis) {
   using namespace alpaka;
   using namespace aTune;
@@ -176,8 +182,10 @@ TEMPLATE_LIST_TEST_CASE("ALL shallow combinations",
   auto exec = cfg[object::exec];
 
   // Tuning session
-  auto session =
-      TuningBuilder{}.withContextSpecifier("sess-user-user").buildSession();
+  auto session = TuningBuilder{}
+                     .withSessionSpecs(
+                         SessionSpecs{}.withContextSpecifier("sess-user-user"))
+                     .buildSession();
 
   // Frame spec
   auto spec = onHost::FrameSpec{V2u{1, 1}, V2u{32, 32}};

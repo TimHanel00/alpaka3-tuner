@@ -17,9 +17,9 @@
 // ----------------------------------------------
 
 // ActiveHistory / ConfigRecord / Config are real ones from your code:
+#include <alpakaTune/core/peripherals/SessionSpecs.hpp>
 #include <alpakaTune/store/PersistentHistory.hpp>
 #include <alpakaTune/store/RuntimeHistory.hpp>
-
 #include <catch2/catch_approx.hpp>
 
 // Convenience: probe ALPAKA_TUNE_HAS_JSON from the header we’re testing.
@@ -91,7 +91,8 @@ TEST_CASE(
   auto metaData = aTune::internal::store::createTuningMetaData(
       "CPU-0",
       /*executor*/ "serial", alpaka::KernelBundle{DummyKernel{}, 2, 3, 5},
-      /*specifiers*/ std::vector<std::string>{"gpu0", "256", "variantA"},
+      /*m_sessionSpecs*/
+      aTune::SessionSpecs{}.withContextSpecifier("gpu0", "256", "variantA"),
       "time");
 
   auto tmp = make_temp_file("alpaka_persist_write");
@@ -128,7 +129,7 @@ TEST_CASE("PersistentHistory round-trip write->read restores configs, samples "
       aTune::internal::KernelTuningModel{std::tuple{}, userTuple, compileTuple};
   auto meta = aTune::internal::store::createTuningMetaData(
       "CPU-1", "serial", alpaka::KernelBundle{DummyKernel{}, 2, 3, 5},
-      std::vector<std::string>{"tagA", "tagB"}, "time");
+      aTune::SessionSpecs{}.withContextSpecifier("tagA", "tagB", "time"));
 
   auto tmp = make_temp_file("alpaka_persist_roundtrip");
   aTune::internal::store::PersistentHistory ph(tmp.string());
@@ -211,10 +212,10 @@ TEST_CASE("PersistentHistory with pure CTunable model (multi-dim) round-trip + "
   auto model = aTune::internal::KernelTuningModel{
       std::tuple{}, /*user*/ std::tuple{}, compileTuple};
 
-  // Metadata (+ specifiers set A)
+  // Metadata (+ m_sessionSpecs set A)
   auto metaA = aTune::internal::store::createTuningMetaData(
       "CPU-CT-only", "serial", alpaka::KernelBundle{DummyKernel{}, 2, 3, 5},
-      std::vector<std::string>{"specA", "run1"}, "time");
+      aTune::SessionSpecs{}.withContextSpecifier("specA", "run1", "time"));
 
   auto tmp = make_temp_file("alpaka_persist_ctunable_roundtrip");
   aTune::internal::store::PersistentHistory ph(tmp.string());
@@ -223,8 +224,8 @@ TEST_CASE("PersistentHistory with pure CTunable model (multi-dim) round-trip + "
   REQUIRE(ph.write(model, histW, metaA) == 3);
   REQUIRE(std::filesystem::exists(tmp));
 
-  // --- Read back with SAME specifiers (should load all 3, invalid included in
-  // checked but not in valid count)
+  // --- Read back with SAME m_sessionSpecs (should load all 3, invalid included
+  // in checked but not in valid count)
   aTune::store::RuntimeHistory<ConfigT> histR_same;
   aTune::core::peripherals::EnvironmentState<ConfigT> env_same{};
   using T_Metric = aTune::metricInterface::Timing;
@@ -256,12 +257,13 @@ TEST_CASE("PersistentHistory with pure CTunable model (multi-dim) round-trip + "
     CHECK(r->get().getMeasurements().getAll().empty());
   }
 
-  // --- Read with DIFFERENT specifiers (same hard metadata but different
+  // --- Read with DIFFERENT m_sessionSpecs (same hard metadata but different
   // soft-descriptor → 0 loads)
   auto metaB = aTune::internal::store::createTuningMetaData(
       "CPU-CT-only", "serial", alpaka::KernelBundle{DummyKernel{}, 2, 3, 5},
-      std::vector<std::string>{"specB",
-                               "runX"}, // different => different descriptorID
+      aTune::SessionSpecs{}.withContextSpecifier(
+          "specB",
+          "runX"), // different => different descriptorID
       "time");
 
   aTune::store::RuntimeHistory<ConfigT> histR_diff;

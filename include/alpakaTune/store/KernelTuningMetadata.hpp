@@ -5,6 +5,7 @@
 #include <alpaka/KernelBundle.hpp>
 #include <alpaka/onHost/demangledName.hpp>
 
+#include <alpakaTune/core/peripherals/SessionSpecs.hpp>
 #include <string>
 #include <vector>
 
@@ -25,7 +26,8 @@ struct KernelTuningMetadata {
   std::string kernel;   ///< "demangled kernel name".
   std::string targetMetric; ///< primary optimization target, e.g. "time".
   std::string kernelArgs;   ///< argument Types of the kernelBundle (demangled)
-  std::vector<std::string> specifiers; ///< Session/context specifiers/tags.
+  SessionSpecs m_sessionSpecs; ///< Session/context specifiers/tags and
+                               ///< potentially break criteria
 };
 
 /**
@@ -47,7 +49,7 @@ template <template <class...> class Bundle, typename T_Kernel,
           typename... T_Args>
 auto createTuningMetaData(std::string const &device, std::string const &exec,
                           Bundle<T_Kernel, T_Args...> const &bundle,
-                          std::vector<std::string> const &sessionSpecs,
+                          SessionSpecs const &sessionSpecs,
                           std::string const &targetMetric = "time") {
   std::string argTuple = alpaka::onHost::demangledName<
       typename alpaka::KernelBundle<T_Kernel, T_Args...>::ArgTuple>();

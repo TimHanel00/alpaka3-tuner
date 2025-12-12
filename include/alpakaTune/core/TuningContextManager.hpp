@@ -98,6 +98,7 @@ private:
     auto configWrapper = this->env_config_queue.getConfigFromQueue();
     if (configWrapper.has_value()) {
       auto &config = configWrapper.value().get();
+      ++this->env_environmentState.numKernelInvocations;
       double_t metric =
           applyAndExecute(std::forward<T_Args>(launchArgs)..., config);
       update(config, metric); // update Metric
@@ -131,7 +132,9 @@ private:
             this->env_environmentState.maxConfigsTotal) {
       auto configWrapper = this->env_config_queue.getConfigFromQueue();
       auto &config = configWrapper.value().get();
-      double_t metric =
+
+      ++this->env_environmentState.numKernelInvocations;
+      auto metric =
           applyAndExecute(std::forward<T_Args>(launchArgs)..., config);
       update(config, metric); // Update Metric
       return true;

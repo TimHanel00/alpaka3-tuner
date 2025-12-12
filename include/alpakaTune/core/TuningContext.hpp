@@ -17,6 +17,8 @@
 
 #include <utility>
 
+#include "peripherals/SessionSpecs.hpp"
+
 namespace aTune {
 // forward declare session
 template <typename T_Strategy, concepts::MetricInterface T_MetricInterface,
@@ -163,17 +165,25 @@ public:
           this->env_tuningModel, this->env_activeHistory, this->env_metaData,
           this->env_environmentState);
     auto runs = Vars::getRunsPerConfig(); //<--call this once for init
+    auto execNums = Vars::getMaxExecutions();
     // Clamp budgets by environment and max possible size.
-    env_environmentState.maxConfigsTotal = std::min(
-        Vars::getMaxTotalConfigs(), env_tuningModel.getMaxPossibleRuns());
-    env_environmentState.maxValidEvaluations = std::min(
-        env_environmentState.maxConfigsTotal, Vars::getMaxValidConfigs());
+    env_environmentState.maxConfigsTotal = env_tuningModel.getMaxPossibleRuns();
+    env_environmentState.maxNumKernelInvocations =
+        Vars::hasMaxExecutions_Env()
+            ? execNums
+            : env_metadata.m_sessionSpecs.m_maxExecutions.value_or(
+                  std::numeric_limits<uint32_t>::max());
+    env_environmentState.maxRunsPerConfig =
+        Vars::hasMaxExecutions_Env()
+            ? runs
+            : env_metadata.m_sessionSpecs.m_runsPerConfig.value_or(
+                  upperBoundForRunsPerConfig);
+
     // ---
     // SETUP initial Config
     // ---
     // Use the best config directly from persistent storage directly
     if (env_environmentState.getBestConfig().has_value()) {
-      std::cout << " best config has value" << std::endl;
       // the best config is already in the history at this point -- use
       // getOrCreate as additional failsafe
       auto mutableBestConfig = getHistory().getOrCreate(
@@ -239,7 +249,7 @@ auto createTuningContext(T_Device device, T_Exec exec,
   // Build metadata
   auto env_kernelData = store::createTuningMetaData(
       alpaka::onHost::demangledName(device),
-      alpaka::onHost::demangledName(exec), bundle, session.m_sessionSpecifiers,
+      alpaka::onHost::demangledName(exec), bundle, session.m_sessionSpecs,
       alpaka::onHost::demangledName<T_MetricType>());
   using T_Config =
       aTune::config::Config<uint32_t, T_completeTuningModel::numDims>;
@@ -296,8 +306,8 @@ auto &getTuningEnvironment(T_Queue const &queue, T_Exec const &exec,
   using EnvPtr = decltype(createTuningContext(queue.getDevice(), exec,
                                               frameSpecTune, bundle, session));
   static std::unordered_map<std::string, EnvPtr> singletonMap;
-
-  std::string const key = flattenSessionSpecifier(session.m_sessionSpecifiers);
+  std::string const key =
+      flattenSessionSpecifier(session.m_sessionSpecs.m_conxtextSpecifiers);
   auto [it, inserted] = singletonMap.try_emplace(
       key, createTuningContext(queue.getDevice(), exec, frameSpecTune, bundle,
                                session));

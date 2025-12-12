@@ -3,12 +3,11 @@
  */
 #pragma once
 #include "alpakaTune/core/peripherals/Constraint.hpp"
+#include "alpakaTune/core/peripherals/SessionSpecs.hpp"
 #include "alpakaTune/interfaces/metricInterface.hpp"
 #include "alpakaTune/interfaces/strategy.hpp"
-#include "alpakaTune/utils/processVariadicArgs.hpp"
 #include <string>
 #include <tuple>
-
 namespace aTune {
 // Forward declarations
 template <typename T_Strategy, concepts::MetricInterface T_MetricInterface,
@@ -163,10 +162,11 @@ public:
    */
   template <auto... TuneableIDs, typename T_Predicate>
   auto withConstraint(T_Predicate &&pred) {
-    using CleanPredicate = std::remove_cvref_t<T_Predicate>; // dont bind lvalue
-    auto constraint =
-        aTune::internal::constraint::Constraint<CleanPredicate, TuneableIDs...>{
-            std::forward<CleanPredicate>(pred)};
+    using T_cleanPredicate =
+        std::remove_cvref_t<T_Predicate>; // dont bind lvalue
+    auto constraint = aTune::internal::constraint::Constraint<T_cleanPredicate,
+                                                              TuneableIDs...>{
+        std::forward<T_cleanPredicate>(pred)};
     auto newConstraintTuple = std::tuple_cat(
         m_constraintTuple, std::make_tuple(std::move(constraint)));
     auto ret = TuningBuilder<T_Strategy, T_MetricInterface,
@@ -202,11 +202,11 @@ public:
    * @return A new @ref TuningBuilder with the specified strategy.
    */
   template <typename NewStrategy> auto withStrategy(NewStrategy &&strategy) {
-    using CleanNewStrategy =
+    using T_CleanNewStrategy =
         std::remove_cvref_t<NewStrategy>; // dont bind lvalue
     auto ret =
-        TuningBuilder<CleanNewStrategy, T_MetricInterface, T_ConstraintTuple>{
-            std::forward<CleanNewStrategy>(strategy),
+        TuningBuilder<T_CleanNewStrategy, T_MetricInterface, T_ConstraintTuple>{
+            std::forward<T_CleanNewStrategy>(strategy),
             std::move(m_metricInterface), std::move(m_constraintTuple)};
     copyNonTyped(ret);
     return ret;
@@ -243,28 +243,22 @@ public:
   }
 
   /**
-   * @brief Add session specifiers for contextual tuning.
+   * @brief Add a session specification
    *
-   * Session specifiers allow creating separate tuning contexts
-   * (e.g., per device, problem size, or algorithmic configuration).
+   * A session specification allows targeting runtime constraints
+   * (break-criteria).
    *
-   * Each specifier should be convertible to `std::string` (for example via
-   * `std::to_string()`).
+   * Additionally a session specification can also improve the performance gain
+   * by restricting the tuning context
+   * -- this allows to perform targeted tuning for specific external constraints
+   * such as the number of elements in a buffer.
    *
    * @param specifiers Arbitrary list of specifier values.
    * @return Reference to the current builder.
    */
   template <typename... T_Specifiers>
-  TuningBuilder &withContextSpecifier(T_Specifiers... specifiers) {
-    static_assert(
-        ((std::is_arithmetic_v<std::remove_cvref_t<T_Specifiers>> ||
-          std::is_same_v<std::remove_cvref_t<T_Specifiers>, std::string> ||
-          std::is_same_v<std::remove_cvref_t<T_Specifiers>, char const *>) &&
-         ...),
-        "All specifiers passed to withRunSpecifiers() must be of type "
-        "std::string, const char*, or arithmetic "
-        "type.");
-    internal::processArgs(m_sessionSpecifiers, specifiers...);
+  TuningBuilder &withSessionSpecs(SessionSpecs const &spec) {
+    m_sessionSpecs = spec;
     return *this;
   }
 
@@ -281,7 +275,7 @@ public:
   auto buildSession() {
     return TuningSession<T_Strategy, T_MetricInterface, T_ConstraintTuple>(
         m_strategy, m_metricInterface, m_constraintTuple, m_outputFile,
-        m_sessionSpecifiers);
+        m_sessionSpecs);
   }
 
   // ---------------------------------------------------------------------
@@ -292,7 +286,7 @@ public:
   std::string m_outputFile{};
 
   /** @brief List of context specifiers describing the tuning scope. */
-  std::vector<std::string> m_sessionSpecifiers{};
+  SessionSpecs m_sessionSpecs{};
 
 private:
   // ---------------------------------------------------------------------
@@ -309,7 +303,7 @@ private:
   void
   copyNonTyped(TuningBuilder<T_Stategy, T_Interface, T_Constraints> &other) {
     other.m_outputFile = this->m_outputFile;
-    other.m_sessionSpecifiers = this->m_sessionSpecifiers;
+    other.m_sessionSpecs = this->m_sessionSpecs;
   }
 
   /**

@@ -26,8 +26,8 @@ set(_TARGET_NAME vectorAdd_Tuned)
 add_executable(${_TARGET_NAME} src/vectorAdd_Tuned.cpp)
 target_link_libraries(${_TARGET_NAME} PUBLIC alpakaTune::alpakaTune)
 # make sure this is called (wraps alpaka_finalize())
-alpakatune_finalize(${_TARGET_NAME})
-
+#alpakatune_finalize(${_TARGET_NAME})
+alpaka_finalize(${_TARGET_NAME})
 set_target_properties(${_TARGET_NAME} PROPERTIES FOLDER example)
 
 add_test(NAME ${_TARGET_NAME} COMMAND ${_TARGET_NAME})
