@@ -110,13 +110,14 @@ TEST_CASE("[TunerConfigQueue] increase test coverage over additional helper "
                                      std::integral_constant<uint32_t, 5>>;
   using combinations =
       alpaka::meta::CartesianProduct<std::tuple, sizes, consecutiveRuns>;
+  std::size_t numCombinations = std::tuple_size_v<combinations>;
   meta::forEachEnumerate(combinations{}, [&]<std::size_t I, typename T0>(T0) {
     using SizeT = std::tuple_element_t<0, T0>;
     using RunsT = std::tuple_element_t<1, T0>;
     auto q = ConfigQueue<TestRecord, SizeT::value, RunsT::value>{};
     TestConfig headCfg(Arr3u{111, 111, 111});
     std::vector freshConfigContainer(
-        3, TestRecord{TestConfig{Arr3u{111, 111, 111}}});
+        numCombinations, TestRecord{TestConfig{Arr3u{111, 111, 111}}});
     auto &headRec = freshConfigContainer[I];
 
     // Reinsert a fresh HEAD and ensure it’s picked first.

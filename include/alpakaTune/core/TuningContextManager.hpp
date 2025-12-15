@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: MPL-2.0
  */
 #pragma once
+#include "alpakaTune/config/ConfigRecord.hpp"
 #include "alpakaTune/config/updateMetric.hpp"
 #include "alpakaTune/core/StrategyContext.hpp"
 #include "alpakaTune/traits/traits.hpp"

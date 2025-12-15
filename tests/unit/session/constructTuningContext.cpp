@@ -26,8 +26,8 @@ struct kernelDummy {};
 using namespace alpaka;
 using namespace alpaka::onHost;
 
-using TestApis = std::decay_t<decltype(allBackends(
-    enabledApis, onHost::example::enabledExecutors))>;
+using TestApis =
+    std::decay_t<decltype(allBackends(enabledApis, exec::enabledExecutors))>;
 
 TEMPLATE_LIST_TEST_CASE("[constructTuningContext] Session builder with shallow "
                         "frameExtent+numBlocks",
@@ -35,10 +35,10 @@ TEMPLATE_LIST_TEST_CASE("[constructTuningContext] Session builder with shallow "
   auto cfg = TestType::makeDict();
   auto deviceSpec = cfg[object::deviceSpec];
   auto devSelector = onHost::makeDeviceSelector(deviceSpec);
-  onHost::Device device = devSelector.makeDevice(0);
+  Device device = devSelector.makeDevice(0);
   Queue queue = device.makeQueue();
   auto exec = cfg[object::exec];
-  using V2u = alpaka::Vec<uint32_t, 2u>;
+  using V2u = Vec<uint32_t, 2u>;
   auto build = aTune::TuningBuilder{};
   auto session =
       aTune::TuningBuilder{}

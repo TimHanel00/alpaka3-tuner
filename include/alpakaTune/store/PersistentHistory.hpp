@@ -9,6 +9,7 @@
 #if !defined(ALPAKA_TUNE_DISABLE_JSON)
 
 #if __has_include(<nlohmann/json.hpp>)
+#include "alpakaTune/config/Config.hpp"
 #include <nlohmann/json.hpp>
 #define ALPAKA_TUNE_HAS_JSON 1
 #else
@@ -289,11 +290,9 @@ public:
   // READ: returns number of configs loaded (after filtering)
   template <typename T_MetricInterface, typename... ModelArgs,
             typename T_Config>
-  std::size_t
-  read(KernelTuningModel<ModelArgs...> const &model,
-       aTune::store::RuntimeHistory<T_Config> &history,
-       KernelTuningMetadata const &metadata,
-       aTune::core::peripherals::EnvironmentState<T_Config> &state) noexcept {
+  std::size_t read(KernelTuningModel<ModelArgs...> const &model,
+                   aTune::store::RuntimeHistory<T_Config> &history,
+                   KernelTuningMetadata const &metadata, auto &state) noexcept {
     if (m_filename.empty()) {
       std::cerr << "[DEBUG] Filename is empty. Returning 0." << std::endl;
       return 0;
@@ -377,7 +376,6 @@ public:
         uint32_t index = 0;
         for (auto const &m : jcfg["measurements"]) {
           auto val = m.template get<double_t>();
-          std::cout << " reading: " << index++ << std::endl;
           config::updateMetrics<false, T_MetricInterface>(entry, state, val);
         }
       }

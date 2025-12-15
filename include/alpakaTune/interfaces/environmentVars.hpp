@@ -14,7 +14,7 @@
 #endif
 
 namespace aTune::Vars {
-using integerType = std::uint32_t;
+using T_IntegerType = std::uint64_t;
 
 /**
  * @namespace aTune::Vars
@@ -33,19 +33,23 @@ struct EnvVarsManager {
   // -------------------------------------------------------------------------
 
   /// Maximum total executions before switching to “best” mode.
-  integerType maxExecutions = std::numeric_limits<integerType>::max();
+  T_IntegerType maxExecutions = std::numeric_limits<T_IntegerType>::max();
 
   /// Maximum number of times a single parameter configuration is executed
   /// (warmup excluded — those are not counted).
-  integerType runsPerConfig =
-      static_cast<integerType>(upperBoundForRunsPerConfig);
+  T_IntegerType maxRunsPerConfig =
+      static_cast<T_IntegerType>(upperBoundForRunsPerConfig);
+  /// Minimum number of times a single parameter configuration is executed
+  /// (warmup excluded — those are not counted).
+  T_IntegerType minRunsPerConfig = static_cast<T_IntegerType>(1);
 
   // -------------------------------------------------------------------------
   // Env guards: true → env provided value → setters are locked
   // -------------------------------------------------------------------------
 
-  bool has_MaxExecutions = false;
-  bool has_RunsPerConfig = false;
+  bool hasMaxExecutions = false;
+  bool hasMaxRunsPerConfig = false;
+  bool hasMinRunsPerConfig = false;
 
   bool inited = false;
 
@@ -57,12 +61,12 @@ struct EnvVarsManager {
   }
 
   /**
-   * @brief Parse an unsigned 32-bit integer from environment variable.
+   * @brief Parse an unsigned integer from environment variable.
    */
-  static std::optional<integerType> parseEnvU32(char const *name) {
+  static std::optional<T_IntegerType> parseEnvU(char const *name) {
     if (char const *var = std::getenv(name)) {
       try {
-        return static_cast<integerType>(std::stoul(var));
+        return static_cast<T_IntegerType>(std::stoul(var));
       } catch (std::exception const &e) {
         std::cerr << "Invalid value for " << name << ": " << e.what() << '\n';
       }
@@ -76,55 +80,45 @@ struct EnvVarsManager {
       return;
     inited = true;
 
-    // ------------------- NEW VARIABLE -------------------
-    if (auto v = parseEnvU32("TunerMaxExecutions")) {
+    if (auto v = parseEnvU("ATuneMaxExecutions")) {
       maxExecutions = v.value_or(maxExecutions);
-      has_MaxExecutions = true;
+      hasMaxExecutions = true;
     }
 
-    // ------------------- EXISTING VARIABLE --------------
-    if (auto v = parseEnvU32("TunerRunsPerConfig")) {
-      runsPerConfig = v.value_or(runsPerConfig);
-      has_RunsPerConfig = true;
+    if (auto v = parseEnvU("ATuneMaxRunsPerConfig")) {
+      maxRunsPerConfig = v.value_or(maxRunsPerConfig);
+      hasMaxRunsPerConfig = true;
+    }
+    if (auto v = parseEnvU("ATuneMinRunsPerConfig")) {
+      minRunsPerConfig = v.value_or(minRunsPerConfig);
+      hasMinRunsPerConfig = true;
     }
   }
 };
 
 // ---------------- Flags ----------------
 inline bool hasMaxExecutions_Env() {
-  return EnvVarsManager::get().has_MaxExecutions;
+  return EnvVarsManager::get().hasMaxExecutions;
 }
-
-inline bool hasRunsPerConfig_Env() {
-  return EnvVarsManager::get().has_RunsPerConfig;
+inline bool hasMinRunsPerConfig_Env() {
+  return EnvVarsManager::get().hasMinRunsPerConfig;
+}
+inline bool hasMaxRunsPerConfig_Env() {
+  return EnvVarsManager::get().hasMaxRunsPerConfig;
 }
 /// get `TunerMaxExecutions` -- the maximum number of times the kernel is
 /// invoked before running with the best configuration
-inline integerType getMaxExecutions() {
+inline T_IntegerType getMaxExecutions() {
   return EnvVarsManager::get().maxExecutions;
 }
-/// get `TunerRunsPerConfig` -- the maximum number of times the performence of a
-/// single parameter configuration is measured (excluding warm-up runs).
-inline integerType getRunsPerConfig() {
-  return EnvVarsManager::get().runsPerConfig;
+/// get `TunerMinRunsPerConfig` -- the maximum number of times the performence
+/// of a single parameter configuration is measured (excluding warm-up runs).
+inline T_IntegerType getMinRunsPerConfig() {
+  return EnvVarsManager::get().minRunsPerConfig;
 }
-
-/// set `TunerMaxExecutions` -- the maximum number of times the kernel is
-/// invoked before running with the best configuration
-inline bool setMaxExecutions(integerType v) {
-  auto &s = EnvVarsManager::get();
-  if (s.has_MaxExecutions)
-    return false;
-  s.maxExecutions = v;
-  return true;
-}
-/// set `TunerRunsPerConfig` -- the maximum number of times the performence of a
-/// single parameter configuration is measured (excluding warm-up runs).
-inline bool setRunsPerConfig(integerType v) {
-  auto &s = EnvVarsManager::get();
-  if (s.has_RunsPerConfig)
-    return false;
-  s.runsPerConfig = v;
-  return true;
+/// get `TunerMaxRunsPerConfig` -- the maximum number of times the performence
+/// of a single parameter configuration is measured (excluding warm-up runs).
+inline T_IntegerType getMaxRunsPerConfig() {
+  return EnvVarsManager::get().maxRunsPerConfig;
 }
 } // namespace aTune::Vars

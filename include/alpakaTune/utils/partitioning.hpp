@@ -139,7 +139,7 @@ T_vec primeFactorPartitioning(std::size_t max, T_vec const &) {
   std::sort(
       distribute.begin(),
       distribute.end()); // sort ascending (since vec[0] is the slowest index)
-  auto resultVec = alpaka::Vec<ValType, T_vec::dim()>::all(1);
+  auto resultVec = alpaka::Vec<ValType, T_vec::dim()>::fill(1);
   for (std::size_t i = 0; i < T_vec::dim(); ++i) {
     resultVec[i] = distribute[i];
   }
@@ -181,8 +181,8 @@ T_Vec multipleOfPartitioning(std::size_t max, T_Vec vec) {
   auto resultVec = vec.toRT();
   using value_type = typename T_Vec::type;
   // prevent idle looping
-  if (resultVec == T_Vec::all(0))
-    resultVec == T_Vec::all(1);
+  if (resultVec == T_Vec::fill(0))
+    resultVec == T_Vec::fill(1);
   auto initVec = resultVec;
   while (resultVec.product() <= max - initVec.product()) {
     // round robin approach of incrementing dims since all of those combinations

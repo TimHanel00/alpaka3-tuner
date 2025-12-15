@@ -54,6 +54,25 @@ struct ParameterAccessor {
   static constexpr internal::TunableKind kind = TuneableKind;
   T_Value m_value;
   std::string m_name; // owning the name
+  std::string toString() const {
+    std::stringstream ss;
+    ss << "Tunable (name: " << m_name << ",";
+    if constexpr (kind == internal::TunableKind::CTunable) {
+      ss << " value: "
+         << std::visit(
+                [](auto &&arg) { return internal::toStringGeneric(arg); },
+                m_value);
+      ss << " )" << std::endl;
+    } else {
+      ss << " value: " << internal::toStringGeneric(m_value) << " )"
+         << std::endl;
+    }
+    return ss.str();
+  }
+  friend std::ostream &operator<<(std::ostream &os,
+                                  const ParameterAccessor &accessor) {
+    return os << accessor.toString();
+  };
 };
 
 template <typename T_KernelTuningModel> struct ConfigDescriptor {
@@ -73,8 +92,8 @@ template <typename T_KernelTuningModel> struct ConfigDescriptor {
    * (should be automatically deducible).
    */
   template <typename idx_type, auto NumTuneables>
-  constexpr auto
-  getValuesFromConfig(config::Config<idx_type, NumTuneables> const &config) {
+  constexpr auto getValuesFromConfig(
+      ::aTune::config::Config<idx_type, NumTuneables> const &config) {
     m_kernelTuningModel.getValuesFromConfig(config);
   }
 
@@ -83,8 +102,8 @@ template <typename T_KernelTuningModel> struct ConfigDescriptor {
    * based configuration*/
   template <std::floating_point floating_type, auto NumTuneables>
   constexpr auto createConfigFromNormalized(
-      config::NormalizedConfig<floating_type, NumTuneables> const &config)
-      const {
+      ::aTune::config::NormalizedConfig<floating_type, NumTuneables> const
+          &config) const {
     return m_kernelTuningModel.createConfigFromNormalized(config);
   }
 
@@ -93,7 +112,7 @@ template <typename T_KernelTuningModel> struct ConfigDescriptor {
    * configuration all vals between [0,1]*/
   template <std::integral IntType, auto NumTuneables>
   constexpr auto createNormalizedFromConfig(
-      config::Config<IntType, NumTuneables> const &config) const {
+      ::aTune::config::Config<IntType, NumTuneables> const &config) const {
     return m_kernelTuningModel.createNormalizedFromConfig(config);
   }
 
@@ -102,7 +121,7 @@ template <typename T_KernelTuningModel> struct ConfigDescriptor {
    * @returns a default initialized configuration
    */
   static constexpr auto getEmptyConfig() {
-    return config::Config<uint32_t, T_KernelTuningModel::numDims>{};
+    return ::aTune::config::Config<uint32_t, T_KernelTuningModel::numDims>{};
   }
 
   /**
@@ -110,7 +129,8 @@ template <typename T_KernelTuningModel> struct ConfigDescriptor {
    * @returns a default initialized normalized configuration
    */
   static constexpr auto getEmptyNormalizedConfig() {
-    return config::NormalizedConfig<double_t, T_KernelTuningModel::numDims>{};
+    return ::aTune::config::NormalizedConfig<double_t,
+                                             T_KernelTuningModel::numDims>{};
   }
 
   /**
@@ -194,7 +214,7 @@ struct KernelTuningModel {
    * based configuration*/
   template <std::floating_point floating_type, auto NumTuneables>
   constexpr auto createConfigFromNormalized(
-      aTune::config::NormalizedConfig<floating_type, NumTuneables> const
+      ::aTune::config::NormalizedConfig<floating_type, NumTuneables> const
           &config) const {
     static_assert(
         NumTuneables == numDims,
@@ -211,7 +231,7 @@ struct KernelTuningModel {
         return_config_ar[val] = m_numValues[val] - 1;
     }
 
-    return aTune::config::Config{return_config_ar};
+    return ::aTune::config::Config{return_config_ar};
   }
 
   /**
@@ -255,7 +275,7 @@ struct KernelTuningModel {
   [[nodiscard]] constexpr std::array<idx_type,
                                      std::tuple_size_v<T_CompileTimeTuple>>
   getConfigSubsetForCompileTuneables(
-      aTune::config::Config<idx_type, NumTuneables> const &config) const {
+      ::aTune::config::Config<idx_type, NumTuneables> const &config) const {
     constexpr std::size_t startingIdx =
         std::tuple_size_v<T_UserTuple> + std::tuple_size_v<T_FrameTunables>;
     constexpr auto offsets = internal::makeOffsets<T_allTunablesBare>();

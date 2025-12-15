@@ -52,10 +52,9 @@ public:
   //! \param B The second source vector.
   //! \param C The destination vector.
   //! \param numElements The number of elements.
-  ALPAKA_FN_ACC auto operator()(auto const &acc,
-                                alpaka::concepts::IMdSpan auto const A,
-                                alpaka::concepts::IMdSpan auto const B,
-                                alpaka::concepts::IMdSpan auto C,
+  ALPAKA_FN_ACC auto operator()(auto const &acc, concepts::IMdSpan auto const A,
+                                concepts::IMdSpan auto const B,
+                                concepts::IMdSpan auto C,
                                 auto const &numElements) const -> void {
     using namespace alpaka;
     static_assert(ALPAKA_TYPEOF(numElements)::dim() == 1,
@@ -71,7 +70,7 @@ public:
   }
 };
 
-static constexpr auto compileTimeTunableID = alpaka::uniqueId();
+static constexpr auto compileTimeTunableID = uniqueId();
 
 // trait to define a compile time tunable for the kernel
 template <typename T>
@@ -123,8 +122,8 @@ auto example(auto const deviceSpec, auto const exec, size_t numElements,
 
   // Allocate 3 host memory buffers
   auto bufHostA = onHost::allocHost<Data>(extent);
-  auto bufHostB = onHost::allocHostLike(bufHostA);
-  auto bufHostC = onHost::allocHostLike(bufHostA);
+  auto bufHostB = allocHostLike(bufHostA);
+  auto bufHostC = allocHostLike(bufHostA);
 
   // C++14 random generator for uniformly distributed numbers in {1,..,42}
   std::random_device rd{};
@@ -171,8 +170,8 @@ auto example(auto const deviceSpec, auto const exec, size_t numElements,
                     // set the tuning strategy
                     .withStrategy(aTune::strategy::RandomSample{})
                     // define a constraint between multiple tunables
-                    .template withConstraint<aTune::frame::numThreads,
-                                             aTune::frame::numBlocks>(
+                    .withConstraint<aTune::frame::numThreads,
+                                    aTune::frame::numBlocks>(
                         [&](auto numThreads,
                             auto numBlocks) /*only matches if both IDs are
                                                present.*/
@@ -201,15 +200,14 @@ auto example(auto const deviceSpec, auto const exec, size_t numElements,
                     // the current tuning context (interesting use for example
                     // bufferSize)
                     .withSessionSpecs(
-                        aTune::SessionSpecs{}.withContextSpecifier(
-                            "vectorAdd_Tuned"))
+                        aTune::SessionSpecs{}
+                            .withMaxRunsPerConfig(10)
+                            .withMinRunsPerConfig(10)
+                            .withContextSpecifier("vectorAdd_Tuned"))
                     // a tuning session can incooperate a json based checkpoint
                     // and restart logic.
                     .withPersistentHistory("vectorAddKernel_History.json")
                     .buildSession();
-  // set the number of runs per paramater configuration manually (can changed
-  // during runtime using
-  aTune::Vars::setRunsPerConfig(10);
   // Instantiate the kernel function object
   VectorAddTunedKernel<std::integral_constant<uint32_t, 1u>> kernel;
   auto const taskKernel =
@@ -268,6 +266,9 @@ auto example(auto const deviceSpec, auto const exec, size_t numElements,
 
   std::cout << "Execution results correct!" << std::endl;
   std::cout << std::endl;
+  std::cout << session.getContextInformation(queue, exec, specTuningModel,
+                                             taskKernel)
+            << std::endl;
   return EXIT_SUCCESS;
 }
 
@@ -350,6 +351,5 @@ auto main(int argc, char *argv[]) -> int {
                        backend[alpaka::object::exec], numElements,
                        numberOfRuns);
       },
-      onHost::allBackends(onHost::enabledApis,
-                          onHost::example::enabledExecutors));
+      onHost::allBackends(onHost::enabledApis, exec::enabledExecutors));
 }

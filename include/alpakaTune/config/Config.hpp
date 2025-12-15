@@ -3,10 +3,13 @@
  */
 
 #pragma once
-#include "alpakaTune/concepts.hpp"
-
+// #include "alpakaTune/concepts.hpp"
+#include <array>
 #include <cassert>
 #include <cmath>
+#include <cstdint>
+#include <functional>
+
 namespace aTune::config {
 /**
  * @brief Discrete parameter configuration (single point in parameter space).

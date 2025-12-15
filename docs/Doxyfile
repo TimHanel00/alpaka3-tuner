@@ -1,0 +1,24 @@
+PROJECT_NAME           = "alpaka3-tuner"
+OUTPUT_DIRECTORY       = docs/_doxygen
+
+GENERATE_HTML          = NO
+GENERATE_XML           = YES
+XML_OUTPUT             = xml
+
+RECURSIVE              = YES
+EXTRACT_ALL            = NO
+EXTRACT_PUBLIC         = YES
+
+# Document Alpaka + your extension
+INPUT                  = \
+  alpaka/include \
+  include \
+  src
+
+# Avoid documenting Alpaka docs/tests/examples (optional but recommended)
+EXCLUDE                = \
+  alpaka/docs \
+  alpaka/test \
+  alpaka/examples
+
+QUIET                  = YES

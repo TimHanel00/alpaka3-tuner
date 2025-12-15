@@ -47,7 +47,7 @@ auto adjustNumFrames(T_DeviceHandle device, T_Exec exec, T_FrameSpecTune &&fs) {
                                              fs.getNumBlocksTune(),
                                              fs.getNumThreadsTune()});
   } else {
-    auto base = Spec::NumFramesVecType::all(1);
+    auto base = Spec::NumFramesVecType::fill(1);
     auto factors =
         partitioning::primeFactorPartitioning(NrOfNumFrameConfigs, base);
     auto stride = alpaka::divExZero(fs.m_spec.m_numFrames, factors);
@@ -79,7 +79,7 @@ auto adjustFrameExtent(T_DeviceHandle device, T_Exec exec,
                                              fs.getNumBlocksTune(),
                                              fs.getNumThreadsTune()});
   } else {
-    auto base = Spec::FrameExtentsVecType::all(1);
+    auto base = Spec::FrameExtentsVecType::fill(1);
     auto factors =
         partitioning::primeFactorPartitioning(NrOfFrameExtentConfigs, base);
     auto stride = alpaka::divExZero(fs.m_spec.m_frameExtent, factors);

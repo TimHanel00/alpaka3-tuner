@@ -57,11 +57,13 @@ template <typename T> constexpr auto specToFrameTupleHelper(T const &t) {
 /// \brief Core types that coordinate strategy, metrics, constraints and model
 /// during tuning.
 
-template <typename T_Config, typename T_FrameSpec, typename T_Strategy,
-          typename T_MetricInterface, typename T_Constraints,
-          typename T_KernelTuningModel>
+template <typename T_Device, typename T_Exec, typename T_Config,
+          typename T_FrameSpec, typename T_Strategy, typename T_MetricInterface,
+          typename T_Constraints, typename T_KernelTuningModel>
 class TuningContext {
 public:
+  using device_type = T_Device;
+  using exec_type = T_Exec;
   using TConfig = T_Config;
   using T_FrameSpecType = T_FrameSpec;
   using T_MetricInterfaceType = T_MetricInterface;
@@ -164,20 +166,24 @@ public:
       env_persistentHistory.read<T_MetricInterface>(
           this->env_tuningModel, this->env_activeHistory, this->env_metaData,
           this->env_environmentState);
-    auto runs = Vars::getRunsPerConfig(); //<--call this once for init
+    Vars::EnvVarsManager::get().initFromEnvOnce(); //<--call this once for init
+    auto maxRuns = Vars::getMaxRunsPerConfig();
+    auto minRuns = Vars::getMinRunsPerConfig();
     auto execNums = Vars::getMaxExecutions();
     // Clamp budgets by environment and max possible size.
     env_environmentState.maxConfigsTotal = env_tuningModel.getMaxPossibleRuns();
     env_environmentState.maxNumKernelInvocations =
         Vars::hasMaxExecutions_Env()
             ? execNums
-            : env_metadata.m_sessionSpecs.m_maxExecutions.value_or(
-                  std::numeric_limits<uint32_t>::max());
+            : env_metadata.m_sessionSpecs.m_maxExecutions;
     env_environmentState.maxRunsPerConfig =
         Vars::hasMaxExecutions_Env()
-            ? runs
-            : env_metadata.m_sessionSpecs.m_runsPerConfig.value_or(
-                  upperBoundForRunsPerConfig);
+            ? maxRuns
+            : env_metadata.m_sessionSpecs.m_maxRunsPerConfig;
+    env_environmentState.minRunsPerConfig =
+        Vars::hasMinRunsPerConfig_Env()
+            ? minRuns
+            : env_metadata.m_sessionSpecs.m_minRunsPerConfig;
 
     // ---
     // SETUP initial Config
@@ -255,7 +261,7 @@ auto createTuningContext(T_Device device, T_Exec exec,
       aTune::config::Config<uint32_t, T_completeTuningModel::numDims>;
   // define type for tuning Context
   using tuningEnvironmentType =
-      TuningContext<T_Config, decltype(spec.m_spec),
+      TuningContext<T_Device, T_Exec, T_Config, decltype(spec.m_spec),
                     decltype(session.m_strategy),
                     decltype(session.m_metricInterface),
                     decltype(session.m_constraintTuple), T_completeTuningModel>;

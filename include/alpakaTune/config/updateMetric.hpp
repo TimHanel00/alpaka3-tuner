@@ -105,13 +105,17 @@ void updateMetrics(aTune::config::ConfigRecord<T_Config> &stored,
     return;
   /// update best config.
   state.template updateBestConfig<T_MetricInterface>(stored);
-  // highest precedence: maxRunsPerConfig (default max=100)
-  if ((stored.nr_runs >= state.maxRunsPerConfig)) {
+  if (state.maxRunsPerConfig &&
+      (stored.nr_runs >= state.maxRunsPerConfig.value())) {
     stored.state = ConfigState::Retired;
     return;
   }
-  // lower precedence -> CI criteria
-  if (stored.state == ConfigState::CICriteriaReached) {
+  // std::cout<<" has min Runs: "<<state.minRunsPerConfig.value()<<std::endl;
+  //  lower precedence -> CI criteria (+ additional requirement if minRuns is
+  //  set)
+  if (stored.state == ConfigState::CICriteriaReached &&
+      (!state.minRunsPerConfig ||
+       stored.nr_runs >= state.minRunsPerConfig.value())) {
     stored.state = ConfigState::Retired;
     return;
   }

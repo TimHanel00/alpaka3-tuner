@@ -11,8 +11,8 @@
 using namespace alpaka;
 using namespace alpaka::onHost;
 
-using TestApis = std::decay_t<decltype(allBackends(
-    enabledApis, onHost::example::enabledExecutors))>;
+using TestApis =
+    std::decay_t<decltype(allBackends(enabledApis, exec::enabledExecutors))>;
 using V2u = Vec<uint32_t, 2u>;
 
 struct ExampleKernelA {
@@ -100,8 +100,10 @@ TEMPLATE_LIST_TEST_CASE("[sessionLaunch] enqueue with shallow frame "
   Queue hostQueue = makeHostDevice().makeQueue();
   auto exec = cfg[object::exec];
   // set fixed number of runs per config
-  auto sessionSpec =
-      SessionSpecs{}.withRunsPerConfig(10).withContextSpecifier("A");
+  auto sessionSpec = SessionSpecs{}
+                         .withMaxRunsPerConfig(10)
+                         .withMinRunsPerConfig(10)
+                         .withContextSpecifier("A");
   // INIT TUNING
   // Tuning session
   auto session = TuningBuilder{}
@@ -111,12 +113,12 @@ TEMPLATE_LIST_TEST_CASE("[sessionLaunch] enqueue with shallow frame "
 
   // Frame spec + SHALLOW placeholders for frame space (tuner decides)
   auto spec = FrameSpec{V2u{1, 1}, V2u{1, 1}};
-  std::vector<V2u> vec = aTune::generate::linSpace( // 4 elem tuning space
+  std::vector<V2u> vec = generate::linSpace( // 4 elem tuning space
       V2u{0, 0}, spec.m_numFrames, V2u{1, 1});
   auto frameModel =
       FrameSpecTuningModel{spec}
           .withNumFramesTune(vec) // shallow placeholder -> let Tuner decide
-          .withFrameExtentTune(aTune::generate::linSpace( // 4 elem tuning space
+          .withFrameExtentTune(generate::linSpace( // 4 elem tuning space
               V2u{0, 0}, spec.m_frameExtent,
               V2u{1, 1})); // shallow placeholder -> let Tuner decide
 
@@ -126,12 +128,12 @@ TEMPLATE_LIST_TEST_CASE("[sessionLaunch] enqueue with shallow frame "
                                "UserIntTune"); // 4 elem tuning space
 
   // linearized tuning space extent
-  auto bufferExtent = alpaka::Vec{4 * 4 * 4};
+  auto bufferExtent = Vec{4 * 4 * 4};
   auto uBufHost = alpaka::onHost::allocHost<bool>(bufferExtent);
   onHost::fill(hostQueue, uBufHost, false);
-  onHost::wait(hostQueue);
+  wait(hostQueue);
   // Accelerator buffer
-  auto uCurrBufAcc = alpaka::onHost::allocLike(queue.getDevice(), uBufHost);
+  auto uCurrBufAcc = onHost::allocLike(queue.getDevice(), uBufHost);
   onHost::memcpy(queue, uCurrBufAcc, uBufHost);
   onHost::wait(queue);
 
@@ -163,11 +165,13 @@ TEMPLATE_LIST_TEST_CASE("[sessionLaunch] enqueue with CTunable",
   auto devSelector = onHost::makeDeviceSelector(deviceSpec);
   Device device = devSelector.makeDevice(0);
   Queue queue = device.makeQueue();
-  Queue hostQueue = onHost::makeHostDevice().makeQueue();
+  Queue hostQueue = makeHostDevice().makeQueue();
   auto exec = cfg[object::exec];
   // set a fixed requirement on the number of runs per config
-  auto sessionSpec =
-      SessionSpecs{}.withRunsPerConfig(10).withContextSpecifier("sess-Tune");
+  auto sessionSpec = SessionSpecs{}
+                         .withMaxRunsPerConfig(10)
+                         .withMinRunsPerConfig(10)
+                         .withContextSpecifier("sess-Tune");
   // INIT TUNING
   // Tuning session
   auto session = TuningBuilder{}
@@ -176,7 +180,7 @@ TEMPLATE_LIST_TEST_CASE("[sessionLaunch] enqueue with CTunable",
                      .buildSession();
 
   // Frame spec + SHALLOW placeholders for frame space (tuner decides)
-  auto spec = onHost::FrameSpec{V2u{1, 1}, V2u{1, 1}};
+  auto spec = FrameSpec{V2u{1, 1}, V2u{1, 1}};
   std::vector<V2u> vec = generate::linSpace( // 4 elem tuning space
       V2u{0, 0}, spec.m_numFrames, V2u{1, 1});
   auto frameModel =
@@ -190,7 +194,7 @@ TEMPLATE_LIST_TEST_CASE("[sessionLaunch] enqueue with CTunable",
   auto bufferExtent = Vec{4 * 4 * 4}; //
   auto uBufHost = alpaka::onHost::allocHost<bool>(bufferExtent);
   onHost::fill(hostQueue, uBufHost, false);
-  onHost::wait(hostQueue);
+  wait(hostQueue);
   // Accelerator buffer
   auto uCurrBufAcc = onHost::allocLike(queue.getDevice(), uBufHost);
   onHost::memcpy(queue, uCurrBufAcc, uBufHost);

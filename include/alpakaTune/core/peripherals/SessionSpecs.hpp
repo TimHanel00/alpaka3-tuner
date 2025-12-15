@@ -24,17 +24,31 @@ namespace aTune {
 struct SessionSpecs {
 
   /**
-   * Sets the number of *measured* runs per parameter configuration.
+   * Sets the maximum number of *measured* runs per parameter configuration.
    *
    * Warm-up runs are excluded from this count.
    * This value may be overridden if the build is configured with
    * `fastConfigEval` enabled.
    *
-   * @param runsPerConfig Maximum number of measured executions per config.
+   * @param maxRunsPerConfig Maximum number of measured executions per config.
    * @return Reference to `*this` for chaining.
    */
-  SessionSpecs &withRunsPerConfig(std::uint32_t runsPerConfig) {
-    this->m_runsPerConfig = runsPerConfig;
+  SessionSpecs &withMaxRunsPerConfig(std::uint64_t maxRunsPerConfig) {
+    this->m_maxRunsPerConfig = maxRunsPerConfig;
+    return *this;
+  }
+  /**
+   * Sets the minimum number of *measured* runs per parameter configuration.
+   *
+   * Warm-up runs are excluded from this count.
+   * This value may be overridden if the build is configured with
+   * `fastConfigEval` enabled.
+   *
+   * @param minRunsPerConfig Minimum number of measured executions per config.
+   * @return Reference to `*this` for chaining.
+   */
+  SessionSpecs &withMinRunsPerConfig(std::uint64_t minRunsPerConfig) {
+    this->m_minRunsPerConfig = minRunsPerConfig;
     return *this;
   }
 
@@ -47,7 +61,7 @@ struct SessionSpecs {
    * @param maxExecutions Maximum total executions.
    * @return Reference to `*this` for chaining.
    */
-  SessionSpecs &withMaxExecutions(std::uint32_t maxExecutions) {
+  SessionSpecs &withMaxExecutions(std::uint64_t maxExecutions) {
     this->m_maxExecutions = maxExecutions;
     return *this;
   }
@@ -69,8 +83,9 @@ struct SessionSpecs {
     return *this;
   }
 
-  std::optional<std::uint32_t> m_runsPerConfig;
-  std::optional<std::uint32_t> m_maxExecutions;
+  std::optional<std::uint64_t> m_maxRunsPerConfig;
+  std::optional<std::uint64_t> m_minRunsPerConfig;
+  std::optional<std::uint64_t> m_maxExecutions;
   std::vector<std::string> m_conxtextSpecifiers;
 };
 } // namespace aTune

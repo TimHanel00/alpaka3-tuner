@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MPL-2.0
+version: 2
+
+formats:
+  - htmlzip
+  - pdf
+  - epub
+submodules:
+  include: all
+  recursive: true
+build:
+  os: ubuntu-24.04
+  tools:
+    python: "3.13"
+  apt_packages:
+    - wget
+    - rsync
+  jobs:
+    pre_build:
+      # 1) Make Alpaka's docs available inside your docs tree (overlay)
+      - rsync -a --delete alpaka/docs/source/ docs/source/_alpaka/
+
+      # 2) Upgrade to doxygen 1.14 (same trick as Alpaka)
+      - wget https://www.doxygen.nl/files/doxygen-1.14.0.linux.bin.tar.gz
+      - tar -xf doxygen-1.14.0.linux.bin.tar.gz
+      - cp $PWD/doxygen-1.14.0/bin/doxygen $READTHEDOCS_VIRTUALENV_PATH/bin
+      - doxygen --version
+
+      # 3) Generate Doxygen XML for Breathe (your Doxyfile should include alpaka/include + your code)
+      - doxygen docs/Doxyfile
+
+sphinx:
+  builder: html
+  configuration: docs/source/conf.py
+  fail_on_warning: false
+
+python:
+  install:
+    - requirements: docs/requirements.txt

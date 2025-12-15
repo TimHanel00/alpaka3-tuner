@@ -19,8 +19,8 @@ struct tunerAdjust::Op<alpaka::onHost::Device<T_Platform, T_Kind>,
     using numBlocks_type = typename spec_type::ThreadSpecType::NumBlocksVecType;
     using numThreads_type =
         typename spec_type::ThreadSpecType::NumThreadsVecType;
-    auto numThreads = numThreads_type::all(1);
-    auto numBlocks = numBlocks_type::all(1);
+    auto numThreads = numThreads_type::fill(1);
+    auto numBlocks = numBlocks_type::fill(1);
 
     auto v = FrameSpecTuningModel{
         alpaka::onHost::FrameSpec{frameTuningModel.m_spec.m_numFrames,
@@ -42,13 +42,13 @@ auto adjustBlocksCommon(alpaka::onHost::Device<T_Platform, T_Kind> &device,
   using numBlocks_type = typename spec_type::ThreadSpecType::NumBlocksVecType;
   using numThreads_type = typename spec_type::ThreadSpecType::NumThreadsVecType;
 
-  auto numThreads = numThreads_type::all(1);
+  auto numThreads = numThreads_type::fill(1);
 
   if constexpr (T_FrameSpecTuningModel::hasNumBlocksTune() &&
                 aTune::concepts::shallowTunable<std::remove_cvref_t<
                     decltype(frameTuningModel.getNumBlocksTune())>>) {
     auto partitionedCores = partitioning::primeFactorPartitioning(
-        device.getDeviceProperties().m_multiProcessorCount, numBlocks_type{});
+        device.getDeviceProperties().multiProcessorCount, numBlocks_type{});
     // startVec kept for parity with your original code (if you use it later)
     auto startVec = partitionedCores;
 

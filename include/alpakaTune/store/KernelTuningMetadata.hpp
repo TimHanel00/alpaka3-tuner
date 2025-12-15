@@ -28,6 +28,27 @@ struct KernelTuningMetadata {
   std::string kernelArgs;   ///< argument Types of the kernelBundle (demangled)
   SessionSpecs m_sessionSpecs; ///< Session/context specifiers/tags and
                                ///< potentially break criteria
+  std::string printWithIntendation(uint32_t intendation) const {
+    std::stringstream os;
+    auto concatVec = [](auto const &vec) {
+      std::string ret;
+      for (auto &elem : vec) {
+        ret = ret + elem + ", ";
+      };
+      if (ret.size() > 2) {
+        ret = ret.substr(0, ret.size() - 2);
+      }
+      return ret;
+    };
+    std::string intend = std::string(intendation, ' ');
+    os << intend << "device: " << this->device << '\n'
+       << intend << "executor: " << this->executor << '\n'
+       << intend << "kernel: " << this->kernel << '\n'
+       << intend << "targetMetric: " << this->targetMetric << '\n'
+       << intend << "contextSpecifiers: "
+       << concatVec(this->m_sessionSpecs.m_conxtextSpecifiers) << '\n';
+    return os.str();
+  }
 };
 
 /**

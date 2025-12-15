@@ -3,10 +3,10 @@
  */
 #pragma once
 
+#include "alpakaTune/core/Info.hpp"
 #include "alpakaTune/core/SessionBuilder.hpp"
 #include "alpakaTune/core/TuningContext.hpp"
 #include "alpakaTune/tunable/FrameSpecTuningModel.hpp"
-
 #include <utility>
 
 namespace aTune {
@@ -39,9 +39,8 @@ auto *setupEnqueue(T_Queue const &queue, T_Exec const &exec,
 
 #define WarmUpRuns 1
 
-template <typename T_Strategy = aTune::strategy::RandomSearch,
-          concepts::MetricInterface T_MetricInterface =
-              aTune::metricInterface::Timing,
+template <typename T_Strategy = strategy::RandomSearch,
+          concepts::MetricInterface T_MetricInterface = metricInterface::Timing,
           typename T_Constraints = std::tuple<>>
 struct TuningSession {
   using MetricType = T_MetricInterface;
@@ -73,14 +72,14 @@ struct TuningSession {
   template <typename T_Queue, typename T_FrameSpec, typename T_FramesTune,
             typename T_FrameExtentTune, typename T_ThreadTune,
             typename T_BlockTune>
-  auto
+  void
   enqueue(T_Queue const &queue, alpaka::concepts::Executor auto const &exec,
           FrameSpecTuningModel<T_FrameSpec, T_FramesTune, T_FrameExtentTune,
                                T_ThreadTune, T_BlockTune> const &frameSpecTune,
           alpaka::concepts::KernelBundle auto const &kernelBundle) {
-    return enqueueImpl(queue, exec,
-                       std::forward<decltype(frameSpecTune)>(frameSpecTune),
-                       kernelBundle);
+    getContextAndLaunch(queue, exec,
+                        std::forward<decltype(frameSpecTune)>(frameSpecTune),
+                        kernelBundle);
   }
 
   /** @brief Enqueue and Execute a kernel, while performing exactly one step of
@@ -95,32 +94,51 @@ struct TuningSession {
    */
   template <typename T_Queue, typename T_NumFrames, typename T_FrameExtent,
             typename T_ThreadSpec>
-  auto enqueue(T_Queue const &queue,
+  void enqueue(T_Queue const &queue,
                alpaka::concepts::Executor auto const &exec,
                alpaka::onHost::FrameSpec<T_NumFrames, T_FrameExtent,
                                          T_ThreadSpec> const &frameSpec,
                alpaka::concepts::KernelBundle auto const &kernelBundle) {
-    return enqueueImpl(
+    getContextAndLaunch(
         queue, exec,
         FrameSpecTuningModel{std::forward<decltype(frameSpec)>(frameSpec)},
         kernelBundle);
   }
+  /** @brief View into the current informations/state for this tuning context
+   * (for this specific kernel/queue/executor/frameSpec configuration)
+   * @param queue
+   * @param exec
+   * @param frameSpec
+   * @param kernelBundle the compute kernel and there arguments
+   */
+  template <typename T_Queue, typename T_FrameSpec>
+  auto getContextInformation(
+      T_Queue const &queue, alpaka::concepts::Executor auto const &exec,
+      T_FrameSpec &&frameSpec,
+      alpaka::concepts::KernelBundle auto const &kernelBundle) {
+    auto &context =
+        getContext(queue, exec, ALPAKA_FORWARD(frameSpec), kernelBundle);
+    return internal::createInfoStruct(context);
+  };
 
-  //@TODO implement a getBestValues method, implement a function based version
-  //(no queue, no exec, no
-  // frameSpec,...).
   ~TuningSession() {}
 
 private:
   template <typename T_Queue, typename T_FrameSpec>
-  auto enqueueImpl(T_Queue &queue, alpaka::concepts::Executor auto const &exec,
+  auto &getContext(T_Queue &queue, alpaka::concepts::Executor auto const &exec,
                    T_FrameSpec &&spec,
                    alpaka::concepts::KernelBundle auto const &kernelBundle) {
-    auto *environmentPtr = aTune::internal::core::setupEnqueue(
+    return *internal::core::setupEnqueue(
         queue, exec, std::forward<T_FrameSpec>(spec), kernelBundle, *this);
-
-    environmentPtr->launch(queue, exec, std::forward<T_FrameSpec>(spec),
-                           kernelBundle);
+  };
+  template <typename T_Queue, typename T_FrameSpec>
+  void
+  getContextAndLaunch(T_Queue &queue,
+                      alpaka::concepts::Executor auto const &exec,
+                      T_FrameSpec &&spec,
+                      alpaka::concepts::KernelBundle auto const &kernelBundle) {
+    auto &context = getContext(queue, exec, ALPAKA_FORWARD(spec), kernelBundle);
+    context.launch(queue, exec, std::forward<T_FrameSpec>(spec), kernelBundle);
   }
 };
 

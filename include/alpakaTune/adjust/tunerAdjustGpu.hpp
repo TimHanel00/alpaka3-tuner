@@ -32,9 +32,9 @@ struct tunerAdjust::Op<alpaka::onHost::Device<T_Platform, T_Kind>, T_Mapping,
                   aTune::concepts::shallowTunable<std::remove_cvref_t<
                       decltype(frameTuningModel.getNumThreadsTune())>>) {
       auto begin = partitioning::primeFactorPartitioning(
-          device.getDeviceProperties().m_warpSize, NumThreads{});
+          device.getDeviceProperties().warpSize, NumThreads{});
       auto end = partitioning::multipleOfPartitioning(
-          device.getDeviceProperties().m_maxThreadsPerBlock, begin);
+          device.getDeviceProperties().maxThreadsPerBlock, begin);
       auto stride = begin;
 
       auto numThreadsTune =
@@ -59,7 +59,7 @@ struct tunerAdjust::Op<alpaka::onHost::Device<T_Platform, T_Kind>, T_Mapping,
                        aTune::concepts::shallowTunable<std::remove_cvref_t<
                            decltype(frameTuningModel.getNumBlocksTune())>>) {
       auto partitionedMP = partitioning::primeFactorPartitioning(
-          device.getDeviceProperties().m_multiProcessorCount, NumBlocks{});
+          device.getDeviceProperties().multiProcessorCount, NumBlocks{});
 
       auto values = partitioning::boundedPartitionExpansion<NumBlocks>(
           frameTuningModel.m_spec.m_numFrames, // max

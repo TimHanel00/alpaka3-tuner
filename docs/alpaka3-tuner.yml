@@ -1,0 +1,29 @@
+name: alpaka3-tuner
+channels:
+  - conda-forge
+dependencies:
+  - python >=3.9,<3.13
+
+  # Sphinx + core
+  - sphinx
+  - sphinx_rtd_theme
+  - breathe
+  - myst-parser
+
+  # Sphinx contribs
+  - sphinxcontrib-programoutput
+  - sphinxcontrib-napoleon
+  - sphinxcontrib-doxylink
+
+  # Optional: AutoAPI/type checking
+  - sphinx-autoapi
+  - typeguard
+
+  # Optional: plotting
+  - matplotlib
+  - scipy
+  - numpy
+
+  # Doxygen step for C++ API XML
+  - doxygen
+  - graphviz  # optional but useful

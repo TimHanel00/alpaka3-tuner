@@ -32,20 +32,21 @@ namespace aTune::core::peripherals {
 template <typename T_Config> struct EnvironmentState {
   bool sessionFinished{false};
   mutable bool strategyFinished{false};
-  uint32_t maxRunsPerConfig{upperBoundForRunsPerConfig};
-  uint32_t numberOfCheckedConfigs{0};
-  uint32_t numValidConfigs{0};
-  uint32_t maxConfigsTotal{0};
-  uint32_t maxNumKernelInvocations{0};
-  uint32_t numKernelInvocations{0};
-  uint32_t strategyLimit = Tuner_MaxConsecutiveStrategyFailures;
+  std::optional<uint64_t> maxRunsPerConfig;
+  std::optional<uint64_t> minRunsPerConfig;
+  uint64_t numberOfCheckedConfigs{0};
+  uint64_t numValidConfigs{0};
+  uint64_t maxConfigsTotal{0};
+  std::optional<uint64_t> maxNumKernelInvocations;
+  uint64_t numKernelInvocations{0};
+  uint64_t strategyLimit = Tuner_MaxConsecutiveStrategyFailures;
   std::optional<std::reference_wrapper<config::ConfigRecord<T_Config> const>>
       bestConfig;
 
   auto setStrategyFinished() const -> void { strategyFinished = true; }
 
   bool
-  strategyCriteriaReached(std::optional<uint32_t> currentIndex = std::nullopt) {
+  strategyCriteriaReached(std::optional<uint64_t> currentIndex = std::nullopt) {
     if (currentIndex.has_value()) {
       if (currentIndex >= strategyLimit) {
         strategyFinished = true;
@@ -103,8 +104,11 @@ template <typename T_Config> struct EnvironmentState {
   auto const &getBestConfig() { return bestConfig; }
 
   bool globalBreakCriteriaFinished() const {
-    return numKernelInvocations >= maxNumKernelInvocations ||
-           numberOfCheckedConfigs >= maxConfigsTotal;
+    if (maxNumKernelInvocations) {
+      return numKernelInvocations >= maxNumKernelInvocations ||
+             numberOfCheckedConfigs >= maxConfigsTotal;
+    }
+    return numberOfCheckedConfigs >= maxConfigsTotal;
   }
 };
 } // namespace aTune::core::peripherals
