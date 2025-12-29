@@ -22,7 +22,7 @@ alpaka_install_catch2()
 #    extension.
 #  - folder: Takes all .cpp files in the specified folder and creates an test
 #    executable for each.
-function(alpakaTune_add_test_target target_prefix folder)
+function(alpakaTune_add_test_target out_targets target_prefix folder)
     message(DEBUG "test target prefix: ${target_prefix}")
 
     file(GLOB test_folders ${folder})
@@ -58,13 +58,18 @@ function(alpakaTune_add_test_target target_prefix folder)
                         target_include_directories(${_test_target_name} PRIVATE ${test_folder}/include)
                     endif()
 
-                    target_link_libraries(${_test_target_name} PRIVATE Catch2::Catch2WithMain alpakaTune::alpakaTune)
-                    alpaka_finalize(${_test_target_name})
-                    catch_discover_tests(${_test_target_name})
+                    target_link_libraries(${_test_target_name} PRIVATE alpakaTune::alpakaTune Catch2::Catch2WithMain)
+
+                    list(APPEND _targets "${_test_target_name}")
                 endif()
             endforeach()
         endif()
     endforeach()
+    set(${out_targets} "${_targets}" PARENT_SCOPE)
 endfunction()
 
-alpakatune_add_test_target(unit_test_ ${CMAKE_CURRENT_SOURCE_DIR}/unit/**)
+alpakatune_add_test_target(_all_tests unit_test_ ${CMAKE_CURRENT_SOURCE_DIR}/unit/**)
+foreach(t IN LISTS _all_tests)
+    alpaka_finalize(${t})
+    catch_discover_tests(${t})
+endforeach()

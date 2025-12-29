@@ -200,8 +200,6 @@ config_to_json(aTune::config::ConfigRecord<T_Config> const &cfg, auto index) {
   j["measurements"] =
       std::vector(cfg.getMeasurements().history.begin(),
                   cfg.getMeasurements().history.end()); // doubles
-  std::cout << " measurements size on write: " << j["measurements"].size()
-            << std::endl;
   return j;
 }
 

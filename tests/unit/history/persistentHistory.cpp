@@ -270,12 +270,12 @@ TEST_CASE("PersistentHistory with pure CTunable model (multi-dim) round-trip + "
   aTune::core::peripherals::EnvironmentState<ConfigT> env_diff{};
 
   auto loaded_diff = ph.read<T_Metric>(model, histR_diff, metaB, env_diff);
-  CHECK(loaded_diff == 0); // no soft-node for this specifier set
+  CHECK(loaded_diff == 0); // no soft-descriptor matching since different specifiers
   CHECK(histR_diff.size() == 0);
-  // We still parse the hard node; the loop over "configs" isn't reached ->
-  // checked stays 0
-  CHECK(env_diff.numberOfCheckedConfigs == 0);
-  CHECK(env_diff.numValidConfigs == 0);
+
+    loaded_diff = ph.read<T_Metric>(model, histR_diff, metaA, env_diff);
+    CHECK(loaded_diff != 0); // now everything matches and fills the history
+    CHECK(histR_diff.size() == histW.size());
 }
 
 #else
