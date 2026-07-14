@@ -1,75 +1,19 @@
-#
-# Copyright 2025 René Widera, Simeon Ehrig, Tim Hanel
-# SPDX-License-Identifier: ISC
-#
+add_executable(alpakaTune_session_tests tuning_session.cpp)
+target_link_libraries(alpakaTune_session_tests PRIVATE alpakaTune::alpakaTune)
+alpaka_finalize(alpakaTune_session_tests)
+add_test(NAME alpakaTune_session_tests COMMAND alpakaTune_session_tests)
 
-################################################################################
-# Required CMake version.
-################################################################################
-cmake_minimum_required(VERSION 3.25)
-alpaka_install_catch2()
-################################################################################
-# Add subdirectories.
-################################################################################
-#------------------------------------------------------------------------------
-# Search for sub folders in the given folder.
-# Creates a Catch2 test executable for each .cpp file in each sub folder.
-# If a include folder is located in a sub folder, add it as include path to the
-# target.
-# Args:
-#  - target_prefix: Prefix for the target name. The name of the executable test
-#    file is formed with target_prefix followed by the source file name without
-#    extension.
-#  - folder: Takes all .cpp files in the specified folder and creates an test
-#    executable for each.
-function(alpakaTune_add_test_target out_targets target_prefix folder)
-    message(DEBUG "test target prefix: ${target_prefix}")
+add_executable(alpakaTune_candidate_queue_tests candidate_queue.cpp)
+target_link_libraries(alpakaTune_candidate_queue_tests PRIVATE alpakaTune::alpakaTune)
+alpaka_finalize(alpakaTune_candidate_queue_tests)
+add_test(NAME alpakaTune_candidate_queue_tests COMMAND alpakaTune_candidate_queue_tests)
 
-    file(GLOB test_folders ${folder})
-    foreach(test_folder ${test_folders})
-        if(IS_DIRECTORY ${test_folder})
-            message(DEBUG "test folder: ${test_folder}")
-            get_filename_component(test_folder_name ${test_folder} NAME)
-            file(GLOB test_sources "${test_folder}/**")
+add_executable(alpakaTune_strategy_tests strategy.cpp)
+target_link_libraries(alpakaTune_strategy_tests PRIVATE alpakaTune::alpakaTune)
+alpaka_finalize(alpakaTune_strategy_tests)
+add_test(NAME alpakaTune_strategy_tests COMMAND alpakaTune_strategy_tests)
 
-            # iterate over all sub folders
-            foreach(source_file ${test_sources})
-                # the include folder is a special case, therefore ignore it
-                if(source_file STREQUAL "${test_folder}/include")
-                    continue()
-                endif()
-
-                get_filename_component(source_file_extension ${source_file} EXT)
-                get_filename_component(source_file_name ${source_file} NAME_WE)
-                # get absolute path of the folder of the source file
-                get_filename_component(test_folder_name ${source_file} DIRECTORY)
-                # get name of the folder
-                get_filename_component(test_folder_name ${test_folder_name} NAME)
-
-                if("${source_file_extension}" STREQUAL ".cpp")
-                    set(_test_target_name "${target_prefix}${test_folder_name}_${source_file_name}")
-                    message(DEBUG "  add test target ${_test_target_name}: ${source_file}")
-
-                    add_executable(${_test_target_name} ${source_file})
-                    get_filename_component(src_dir ${source_file} DIRECTORY)
-                    target_include_directories(${_test_target_name} PRIVATE ${src_dir})
-                    if(EXISTS "${test_folder}/include")
-                        message(STATUS "  add include folder: ${test_folder}/include")
-                        target_include_directories(${_test_target_name} PRIVATE ${test_folder}/include)
-                    endif()
-
-                    target_link_libraries(${_test_target_name} PRIVATE alpakaTune::alpakaTune Catch2::Catch2WithMain)
-
-                    list(APPEND _targets "${_test_target_name}")
-                endif()
-            endforeach()
-        endif()
-    endforeach()
-    set(${out_targets} "${_targets}" PARENT_SCOPE)
-endfunction()
-
-alpakatune_add_test_target(_all_tests unit_test_ ${CMAKE_CURRENT_SOURCE_DIR}/unit/**)
-foreach(t IN LISTS _all_tests)
-    alpaka_finalize(${t})
-    catch_discover_tests(${t})
-endforeach()
+add_executable(alpakaTune_runtime_history_tests runtime_history.cpp)
+target_link_libraries(alpakaTune_runtime_history_tests PRIVATE alpakaTune::alpakaTune)
+alpaka_finalize(alpakaTune_runtime_history_tests)
+add_test(NAME alpakaTune_runtime_history_tests COMMAND alpakaTune_runtime_history_tests)

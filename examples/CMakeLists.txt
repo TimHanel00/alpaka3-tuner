@@ -1,1 +1,2 @@
-add_subdirectory("vectorAdd_Tuned/")
+add_subdirectory(compile_time_tuning)
+add_subdirectory(instrumented_vector_add)

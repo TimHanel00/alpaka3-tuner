@@ -1,16 +1,3 @@
-docutils
-markupsafe
-myst-parser
-pygments
-sphinx_rtd_theme
-breathe
-sphinx
-sphinxcontrib.programoutput
-sphinxcontrib-napoleon
-sphinxcontrib-doxylink
-sphinx-autoapi
-typeguard
-# generate plots
-matplotlib
-scipy
-numpy
+sphinx>=7
+sphinx-rtd-theme>=2
+breathe>=4

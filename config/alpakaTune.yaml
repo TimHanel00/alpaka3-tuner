@@ -1,0 +1,25 @@
+# Default alpakaTune session configuration.
+schema_version: 1
+tuning:
+  # exhaustive, random, simulated_annealing, or bayesian_optimization
+  strategy: exhaustive
+  random_seed: 0
+  warmup_runs: 1
+  # Hard cap; a record may retire earlier when its CI criterion is met.
+  runs_per_candidate: 1
+  # Defaults to runs_per_candidate, preserving fixed-budget measurements.
+  minimum_runs_per_candidate: 1
+  # Legacy-compatible 99 % non-parametric median CI controls.
+  ci_check_interval: 10
+  ci_z_score: 2.576
+  ci_relative_width: 0.05
+  # Reject transient timing spikes from decision statistics, not raw history.
+  outlier_mad_scale: 3.5
+  # Retire a statistically slower record with a directional rank comparison.
+  mann_whitney_early_stop: true
+  mann_whitney_min_samples: 8
+  mann_whitney_alpha: 0.05
+  noise_cancellation_window: 50
+  max_consecutive_runs: 3
+persistence:
+  directory: .alpakaTune

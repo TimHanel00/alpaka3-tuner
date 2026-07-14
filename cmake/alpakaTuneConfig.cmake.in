@@ -1,0 +1,46 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+set(_alpakaTune_package_prefix "${PACKAGE_PREFIX_DIR}")
+find_dependency(alpaka CONFIG REQUIRED)
+find_dependency(yaml-cpp CONFIG REQUIRED)
+
+# Alpaka3's development package currently exports its include path as a
+# relative INSTALL_INTERFACE expression. Imported targets evaluate that path
+# relative to the consuming project, so normalise it to Alpaka's own prefix.
+get_target_property(_alpakaTune_alpaka_includes alpaka::alpaka INTERFACE_INCLUDE_DIRECTORIES)
+if(_alpakaTune_alpaka_includes MATCHES "\\$<INSTALL_INTERFACE:")
+    get_filename_component(_alpakaTune_alpaka_prefix "${alpaka_DIR}/../../.." ABSOLUTE)
+    get_target_property(_alpakaTune_alpaka_target alpaka::alpaka ALIASED_TARGET)
+    set_property(
+        TARGET ${_alpakaTune_alpaka_target}
+        PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${_alpakaTune_alpaka_prefix}/@CMAKE_INSTALL_INCLUDEDIR@"
+    )
+    set_property(
+        TARGET alpaka_target_host
+        PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${_alpakaTune_alpaka_prefix}/@CMAKE_INSTALL_INCLUDEDIR@"
+    )
+endif()
+
+if(@alpakaTune_ENABLE_PERSISTENCE@)
+    find_dependency(nlohmann_json CONFIG REQUIRED)
+endif()
+
+if(NOT TARGET alpakaTune::alpakaTune)
+    add_library(alpakaTune::alpakaTune INTERFACE IMPORTED)
+    set(_alpakaTune_dependencies alpaka::alpaka yaml-cpp::yaml-cpp)
+    if(@alpakaTune_ENABLE_PERSISTENCE@)
+        list(APPEND _alpakaTune_dependencies nlohmann_json::nlohmann_json)
+        set(_alpakaTune_has_json 1)
+    else()
+        set(_alpakaTune_has_json 0)
+    endif()
+    set_target_properties(
+        alpakaTune::alpakaTune
+        PROPERTIES
+            INTERFACE_COMPILE_FEATURES cxx_std_20
+            INTERFACE_INCLUDE_DIRECTORIES "${_alpakaTune_package_prefix}/@CMAKE_INSTALL_INCLUDEDIR@"
+            INTERFACE_LINK_LIBRARIES "${_alpakaTune_dependencies}"
+            INTERFACE_COMPILE_DEFINITIONS "ALPAKA_TUNE_HAS_JSON=${_alpakaTune_has_json};ALPAKA_TUNE_DEFAULT_CONFIG=\"${_alpakaTune_package_prefix}/@CMAKE_INSTALL_DATADIR@/alpakaTune/alpakaTune.yaml\""
+    )
+endif()
