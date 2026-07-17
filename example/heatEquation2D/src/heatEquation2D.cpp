@@ -32,6 +32,13 @@ using Data = double;
 inline constexpr auto stencilTileExtent =
     ALPAKA_TUNE_TUNABLE("stencilTileExtent");
 
+enum class TuningRunMode { fixedSteps, untilTerminal, untilComplete };
+
+[[nodiscard]] constexpr auto extendsUntilTuningTerminates(TuningRunMode mode)
+    -> bool {
+  return mode != TuningRunMode::fixedSteps;
+}
+
 void printExampleHeader(IdxType const sideLength, IdxType const numTimeSteps,
                         bool const autoCheck, double const tMax) {
   std::cout << "================================" << std::endl;
@@ -65,7 +72,7 @@ void printExampleHeader(IdxType const sideLength, IdxType const numTimeSteps,
 int example(auto const deviceSpec, auto const computeExec,
             uint32_t const sideLength, uint32_t const numTimeSteps,
             double const tMax, bool const enableCheck,
-            bool const tuneUntilComplete) {
+            TuningRunMode const tuningRunMode) {
   using namespace alpaka;
   using namespace alpaka::onHost;
 
@@ -189,14 +196,15 @@ int example(auto const deviceSpec, auto const computeExec,
   auto const startTime = std::chrono::high_resolution_clock::now();
 
   // Tune and execute the two kernels as part of each simulation step. The
-  // normal example performs exactly numTimeSteps. Data-collection mode
-  // continues the same safe pair of launches until both tuning spaces are
-  // complete, without changing the example's default scientific behavior.
+  // normal example performs exactly numTimeSteps. Data-collection modes
+  // continue the same safe pair of launches until both tuners reach a terminal
+  // state, without changing the example's default scientific behavior.
   std::size_t completedSteps = 0u;
   for (uint32_t step = 1;
        step <= numTimeSteps ||
-       (tuneUntilComplete && (!stencilTuning.isTuningComplete() ||
-                              !boundaryTuning.isTuningComplete()));
+       (extendsUntilTuningTerminates(tuningRunMode) &&
+        (!stencilTuning.isTuningComplete() ||
+         !boundaryTuning.isTuningComplete()));
        ++step) {
     ++completedSteps;
     // Compute next values
@@ -231,20 +239,42 @@ int example(auto const deviceSpec, auto const computeExec,
   std::cout << "Time per time step: "
             << elapsedTime.count() / completedSteps * 1000 << " ms."
             << std::endl;
-  if (tuneUntilComplete) {
+  if (extendsUntilTuningTerminates(tuningRunMode)) {
+    auto const stencilInfo = stencilTuning.info();
+    auto const boundaryInfo = boundaryTuning.info();
+    if (!stencilInfo.tuningComplete || !boundaryInfo.tuningComplete) {
+      std::cerr << "Tuning collection stopped before every context reached a "
+                   "terminal state."
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+
     auto const fullCoverageComplete =
-        stencilTuning.info().completionReason ==
+        stencilInfo.completionReason ==
             alpakaTune::TunerCompletionReason::allConfigurations &&
-        boundaryTuning.info().completionReason ==
+        boundaryInfo.completionReason ==
             alpakaTune::TunerCompletionReason::allConfigurations;
-    if (!fullCoverageComplete) {
+    if (tuningRunMode == TuningRunMode::untilComplete &&
+        !fullCoverageComplete) {
       std::cerr
           << "Full-coverage tuning stopped at a configured completion limit."
           << std::endl;
       return EXIT_FAILURE;
     }
-    std::cout << "Full-coverage tuning mode executed " << completedSteps
-              << " time steps and completed every tuning context." << std::endl;
+
+    if (tuningRunMode == TuningRunMode::untilComplete) {
+      std::cout << "Full-coverage tuning mode executed " << completedSteps
+                << " time steps and completed every tuning context."
+                << std::endl;
+    } else {
+      std::cout << "Terminal-state tuning mode executed " << completedSteps
+                << " time steps and reached a terminal state for every tuning "
+                   "context (stencil: "
+                << alpakaTune::completionReasonName(stencilInfo.completionReason)
+                << ", boundary: "
+                << alpakaTune::completionReasonName(boundaryInfo.completionReason)
+                << ")." << std::endl;
+    }
     return EXIT_SUCCESS;
   }
 
@@ -284,7 +314,12 @@ void help(char *argv[]) {
   std::cerr << "  -c: disable checking for correct results" << std::endl;
   std::cerr << "  --tune-until-complete: benchmark-only mode; continue safe "
                "kernel launches until every "
-               "tuning context completes"
+               "tuning context exhausts all configurations; fail if a "
+               "configured budget stops tuning first"
+            << std::endl;
+  std::cerr << "  --tune-until-terminal: benchmark-only mode; continue safe "
+               "kernel launches until every tuning context either exhausts "
+               "all configurations or reaches a configured budget"
             << std::endl;
   std::cerr << "  -h: Print this help message" << std::endl;
   std::cerr << std::endl;
@@ -304,11 +339,15 @@ auto main(int argc, char *argv[]) -> int {
 
   int opt;
   bool enableCheck = true;
-  bool tuneUntilComplete = false;
+  auto tuningRunMode = TuningRunMode::fixedSteps;
   double tMax = 0.1;
+
+  constexpr int tuneUntilTerminalOption = 256;
 
   static option const longOptions[] = {
       {"tune-until-complete", no_argument, nullptr, 'T'},
+      {"tune-until-terminal", no_argument, nullptr,
+       tuneUntilTerminalOption},
       {nullptr, 0, nullptr, 0}};
   while ((opt = getopt_long(argc, argv, "hn:t:d:cT", longOptions, nullptr)) !=
          -1) {
@@ -356,7 +395,20 @@ auto main(int argc, char *argv[]) -> int {
       enableCheck = false;
       break;
     case 'T':
-      tuneUntilComplete = true;
+      if (tuningRunMode == TuningRunMode::untilTerminal) {
+        std::cerr << "Error: --tune-until-complete and "
+                     "--tune-until-terminal are mutually exclusive.\n";
+        return EXIT_FAILURE;
+      }
+      tuningRunMode = TuningRunMode::untilComplete;
+      break;
+    case tuneUntilTerminalOption:
+      if (tuningRunMode == TuningRunMode::untilComplete) {
+        std::cerr << "Error: --tune-until-complete and "
+                     "--tune-until-terminal are mutually exclusive.\n";
+        return EXIT_FAILURE;
+      }
+      tuningRunMode = TuningRunMode::untilTerminal;
       break;
     default:
       help(argv);
@@ -399,7 +451,7 @@ auto main(int argc, char *argv[]) -> int {
           return EXIT_SUCCESS;
         return alpaka::example::heatEquation::example(
             alpaka::onHost::DeviceSpec{backend}, alpaka::getExecutor(backend),
-            sideLength, numTimeSteps, tMax, enableCheck, tuneUntilComplete);
+            sideLength, numTimeSteps, tMax, enableCheck, tuningRunMode);
       },
       onHost::allBackends(onHost::enabledDeviceSpecs, exec::enabledExecutors));
 }

@@ -87,6 +87,9 @@ class VisualizeTest(unittest.TestCase):
             self.assertIn('data-plot="vectorAdd.png"', dashboard)
             self.assertIn('data-view="candidates"', dashboard)
             self.assertIn('data-view="best"', dashboard)
+            self.assertEqual(
+                visualize.STRATEGY_LABELS["learned_hybrid"], "Learned hybrid"
+            )
 
     def test_loads_mean_reported_cuda_baseline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -105,8 +108,47 @@ class VisualizeTest(unittest.TestCase):
             )
             self.assertEqual(
                 visualize.load_baseline(root),
-                {"vectorAdd": (2.5e-6, "kernel")},
+                {"vectorAdd": {"GpuCuda": (2.5e-6, "kernel")}},
             )
+
+    def test_loads_executor_specific_cpu_and_gpu_baselines(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "summary.json").write_text(
+                json.dumps(
+                    {
+                        "vectorAdd": {
+                            "reported_runtime_kind": "kernel",
+                            "reported_runtimes": {
+                                "CpuOmpBlocks": {"mean_runtime_seconds": 4.0e-6},
+                                "GpuCuda": {"mean_runtime_seconds": 2.0e-6},
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            baselines = visualize.load_baseline(root)
+
+        self.assertEqual(
+            baselines,
+            {
+                "vectorAdd": {
+                    "CpuOmpBlocks": (4.0e-6, "kernel"),
+                    "GpuCuda": (2.0e-6, "kernel"),
+                }
+            },
+        )
+
+    def test_context_executor_uses_persisted_executor_identity(self) -> None:
+        key = (
+            ("alpaka::exec::CpuOmpBlocks=CpuOmpBlocks",),
+            "Kernel",
+            "CPU",
+            "FrameSpec{executor=CpuOmpBlocks}",
+            10,
+        )
+        self.assertEqual(visualize.context_executor(key), "CpuOmpBlocks")
 
 
 if __name__ == "__main__":

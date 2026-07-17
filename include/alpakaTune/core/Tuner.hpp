@@ -1812,6 +1812,7 @@ private:
     result["artifact_load_status"] =
         learnedModelLoadStatusName(learned->artifactLoadStatus());
     result["status_message"] = learned->statusMessage();
+    result["initialization_seconds"] = learned->initializationSeconds();
     result["cached_candidate_count"] = learned->cachedCandidateCount();
     result["incorporated_observation_count"] =
         learned->incorporatedObservationCount();

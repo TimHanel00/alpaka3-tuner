@@ -1,7 +1,7 @@
 # Tuning strategy benchmark
 
-The benchmark runs every example containing an alpakaTune context with all
-four strategies. Each example already invokes its contexts until they finish;
+The benchmark runs every example containing an alpakaTune context with the
+four model-free strategies by default. Each example already invokes its contexts until they finish;
 the runner only supplies an isolated YAML configuration and persistent history
 for each example/strategy pair.
 
@@ -14,10 +14,11 @@ python3 benchmarks/run.py
 ```
 
 Examples run every enabled backend and executor by default. Restrict a run to
-one backend and executor when desired:
+one GPU or CPU backend and executor when desired:
 
 ```bash
 python3 benchmarks/run.py --backend cuda:nvidiaGpu --executor gpuCuda
+python3 benchmarks/run.py --backend host:cpu --executor cpuOmpBlocks
 ```
 
 The same options are accepted by each tuned example executable directly.
@@ -37,12 +38,46 @@ python3 benchmarks/run.py --exclude-examples nBody grayScale
 
 When both options are present, exclusions are applied after inclusions.
 
+The learned strategy is opt-in because it must never silently use its random
+fallback during a model comparison. Supply a readable model artifact whenever
+`learned_hybrid` is selected:
+
+```bash
+python3 benchmarks/run.py \
+  --strategies exhaustive random simulated_annealing bayesian_optimization learned_hybrid \
+  --model /absolute/path/to/model.atml \
+  --backend cuda:nvidiaGpu --executor gpuCuda
+```
+
+The runner resolves the model to an absolute path and injects `learning.model`
+only into the learned pair's generated YAML. `benchmark.json` and the learned
+pair's `run.json` record its SHA-256 provenance digest and the runtime-compatible
+64-bit FNV-1a digest. A learned pair succeeds only when every persisted context
+reports `learning.status: active`, `artifact_load_status: available`, and the
+expected runtime digest. A missing or fallback model therefore fails the run.
+
 By default results are written below
 `benchmarks/results/<UTC-run-id>/<example>/<strategy>/`. Every pair contains
 the generated tuner configuration, persistent history, stdout/stderr logs, and `run.json`
 timing/status metadata. The configured launch and retired-configuration limits
 are both 100000; they are safety/inspection limits and can be changed with the
 corresponding command-line options.
+
+For a bounded comparison, add `--tune-until-terminal`. The finite
+heatEquation2D and nBody examples then keep executing their safe kernel sequence
+until tuning reaches either the complete space or one of those configured
+limits, rather than stopping after their normal scientific step count:
+
+```bash
+python3 benchmarks/run.py \
+  --tune-until-terminal \
+  --maximum-executions 40000 \
+  --examples heatEquation2D nBody \
+  --backend cuda:nvidiaGpu --executor gpuCuda
+```
+
+This bounded mode is separate from, and cannot be combined with,
+`--full-coverage`.
 
 Those limits count tuner activity, not distinct candidates. In particular,
 `maximum_executions` includes warm-up launches and repeated timing samples. An
@@ -115,7 +150,11 @@ names and measurements cannot mix with the tuned variants:
 
 ```bash
 cmake -S build/_deps/alpaka3-src -B build/alpaka-baseline \
-  -Dalpaka_EXAMPLES=ON -Dalpaka_DEP_CUDA=ON
+  -Dalpaka_EXAMPLES=ON \
+  -Dalpaka_DEP_CUDA=ON \
+  -Dalpaka_EXEC_CpuOmpBlocks=ON \
+  -Dalpaka_EXEC_CpuSerial=OFF \
+  -Dalpaka_EXEC_GpuCuda=ON
 cmake --build build/alpaka-baseline -j
 python3 benchmarks/run_baseline.py \
   --examples boundaryIter grayScale heatEquation2D nBody vectorAdd \
@@ -124,10 +163,14 @@ python3 benchmarks/run_baseline.py \
 
 Results are written below `benchmarks/baseline-results/<UTC-run-id>/`. Every
 execution has separate stdout, stderr, and `run.json` files; `summary.json`
-contains median, minimum, and maximum wall times as well as the mean CUDA
-kernel/time-step runtime reported by the upstream example. The first reported
-CUDA value is retained as a cold-start warmup measurement and excluded from the
-steady-state arithmetic mean. Overlay those means
+contains median, minimum, and maximum wall times as well as the mean
+kernel/time-step runtime reported by the upstream example. It stores
+`reported_runtimes` separately for `CpuOmpBlocks` and `GpuCuda`. CpuSerial must
+remain compiled out: heatEquation2D and nBody print only `Host`, which is mapped
+to CpuOmpBlocks under that build contract. The first reported value for each
+executor is retained as a cold-start warmup measurement and excluded from its
+steady-state arithmetic mean. The legacy CUDA-only summary fields remain for
+older tooling. Overlay those means
 on the tuning plots after both result trees are available locally:
 
 ```bash
@@ -135,8 +178,9 @@ python3 benchmarks/visualize.py benchmarks/results/<tuned-run-id> \
   --baseline benchmarks/baseline-results/<baseline-run-id>
 ```
 
-The overlay is a horizontal dashed line in matching example subplots. Examples
-that do not report a comparable CUDA runtime are left without a baseline line.
+The overlay uses separately labelled horizontal lines and selects the baseline
+matching the tuned context's CpuOmpBlocks or GpuCuda executor. Examples
+that do not report a comparable executor runtime are left without a baseline line.
 The unmodified Alpaka examples
 choose their enabled backends from their CMake configuration and do not support
 the tuner's `--backend` or `--executor` switches. Alpaka has no upstream

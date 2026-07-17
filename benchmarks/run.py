@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import copy
 import datetime as dt
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -21,7 +22,16 @@ STRATEGIES = (
     "random",
     "simulated_annealing",
     "bayesian_optimization",
+    "learned_hybrid",
 )
+
+LEARNED_STRATEGY = "learned_hybrid"
+DEFAULT_STRATEGIES = tuple(
+    strategy for strategy in STRATEGIES if strategy != LEARNED_STRATEGY
+)
+FNV1A_OFFSET_BASIS = 14_695_981_039_346_656_037
+FNV1A_PRIME = 1_099_511_628_211
+UINT64_MASK = (1 << 64) - 1
 
 PROGRESS_INTERVAL_SECONDS = 30
 DEFAULT_MAXIMUM_EXECUTIONS = 100_000
@@ -38,6 +48,11 @@ FULL_COVERAGE_TUNING = {
 FULL_COVERAGE_EXAMPLE_ARGUMENTS = {
     "heatEquation2D": ("--tune-until-complete",),
     "nBody": ("--tune-until-complete",),
+}
+
+TUNE_UNTIL_TERMINAL_EXAMPLE_ARGUMENTS = {
+    "heatEquation2D": ("--tune-until-terminal",),
+    "nBody": ("--tune-until-terminal",),
 }
 
 EXAMPLES = {
@@ -72,15 +87,53 @@ def write_json(path: Path, value: object) -> None:
     temporary.replace(path)
 
 
-def successful_run(directory: Path, require_full_coverage: bool = False) -> bool:
+def benchmark_example_arguments(
+    example: str, *, full_coverage: bool, tune_until_terminal: bool
+) -> tuple[str, ...]:
+    if full_coverage:
+        return FULL_COVERAGE_EXAMPLE_ARGUMENTS.get(example, ())
+    if tune_until_terminal:
+        return TUNE_UNTIL_TERMINAL_EXAMPLE_ARGUMENTS.get(example, ())
+    return ()
+
+
+def model_digests(path: Path) -> tuple[str, str]:
+    """Return provenance SHA-256 and the runtime's 64-bit FNV-1a digest."""
+    sha256 = hashlib.sha256()
+    fnv1a = FNV1A_OFFSET_BASIS
+    with path.open("rb") as model:
+        while chunk := model.read(64 * 1024):
+            sha256.update(chunk)
+            for value in chunk:
+                fnv1a ^= value
+                fnv1a = (fnv1a * FNV1A_PRIME) & UINT64_MASK
+    return sha256.hexdigest(), f"{fnv1a:016x}"
+
+
+def successful_run(
+    directory: Path,
+    require_full_coverage: bool = False,
+    expected_model_sha256: str | None = None,
+    expected_model_runtime_digest: str | None = None,
+) -> bool:
     metadata = directory / "run.json"
     history = directory / "history.json"
     if not metadata.exists() or not history.exists():
         return False
     try:
         value = json.loads(metadata.read_text(encoding="utf-8"))
-        return value.get("status") == "completed" and (
-            not require_full_coverage or value.get("full_coverage_verified") is True
+        return (
+            value.get("status") == "completed"
+            and (not require_full_coverage or value.get("full_coverage_verified") is True)
+            and (
+                expected_model_runtime_digest is None
+                or (
+                    value.get("learning_verified") is True
+                    and value.get("model_sha256") == expected_model_sha256
+                    and value.get("model_runtime_digest")
+                    == expected_model_runtime_digest
+                )
+            )
         )
     except (OSError, json.JSONDecodeError):
         return False
@@ -111,6 +164,7 @@ def benchmark_configuration(
     maximum_executions: int | None,
     maximum_retired_configurations: int | None,
     full_coverage: bool,
+    model: Path | None = None,
 ) -> dict:
     configuration = copy.deepcopy(base_configuration)
     tuning = configuration["tuning"]
@@ -122,6 +176,19 @@ def benchmark_configuration(
     else:
         tuning["maximum_executions"] = maximum_executions
         tuning["maximum_retired_configurations"] = maximum_retired_configurations
+    learning = configuration.get("learning")
+    if strategy == LEARNED_STRATEGY:
+        if model is None:
+            raise ValueError("learned_hybrid requires a model")
+        if learning is None:
+            learning = {}
+            configuration["learning"] = learning
+        if not isinstance(learning, dict):
+            raise ValueError("configuration learning section must be a map")
+        configuration["schema_version"] = 2
+        learning["model"] = str(model.resolve())
+    elif isinstance(learning, dict):
+        learning.pop("model", None)
     configuration["persistence"] = {"file": str(history)}
     return configuration
 
@@ -234,6 +301,90 @@ def inspect_history(path: Path) -> dict:
     }
 
 
+def inspect_learned_history(path: Path, expected_model_digest: str) -> dict:
+    """Verify that every persisted context used the requested learned artifact."""
+    try:
+        history = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exception:
+        return {
+            "valid": False,
+            "expected_model_digest": expected_model_digest,
+            "contexts": [],
+            "messages": [f"cannot inspect learned history: {exception}"],
+        }
+
+    contexts = history.get("contexts")
+    if not isinstance(contexts, dict) or not contexts:
+        return {
+            "valid": False,
+            "expected_model_digest": expected_model_digest,
+            "contexts": [],
+            "messages": ["history does not contain any learned tuning contexts"],
+        }
+
+    summaries: list[dict] = []
+    messages: list[str] = []
+    for fingerprint, context in contexts.items():
+        metadata = context.get("metadata", {}) if isinstance(context, dict) else {}
+        kernel = (
+            metadata.get("kernel", fingerprint)
+            if isinstance(metadata, dict)
+            else fingerprint
+        )
+        learning = context.get("learning") if isinstance(context, dict) else None
+        if not isinstance(learning, dict):
+            messages.append(f"context {kernel} has no learning status")
+            summaries.append(
+                {
+                    "fingerprint": fingerprint,
+                    "kernel": kernel,
+                    "valid": False,
+                }
+            )
+            continue
+
+        status = learning.get("status")
+        artifact_load_status = learning.get("artifact_load_status")
+        model_digest = learning.get("model_digest")
+        valid = (
+            status == "active"
+            and artifact_load_status == "available"
+            and model_digest == expected_model_digest
+        )
+        if status != "active":
+            messages.append(
+                f"context {kernel} learned strategy status is {status!r}, expected 'active'"
+            )
+        if artifact_load_status != "available":
+            messages.append(
+                f"context {kernel} artifact load status is "
+                f"{artifact_load_status!r}, expected 'available'"
+            )
+        if model_digest != expected_model_digest:
+            messages.append(
+                f"context {kernel} model digest is {model_digest!r}, expected "
+                f"{expected_model_digest!r}"
+            )
+        summaries.append(
+            {
+                "fingerprint": fingerprint,
+                "kernel": kernel,
+                "status": status,
+                "artifact_load_status": artifact_load_status,
+                "model_file": learning.get("model_file"),
+                "model_digest": model_digest,
+                "valid": valid,
+            }
+        )
+
+    return {
+        "valid": bool(summaries) and all(summary["valid"] for summary in summaries),
+        "expected_model_digest": expected_model_digest,
+        "contexts": summaries,
+        "messages": messages,
+    }
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     repository = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -253,8 +404,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="exclude these benchmark examples after applying --examples",
     )
     parser.add_argument("--strategies", nargs="+", choices=STRATEGIES)
-    parser.add_argument("--backend", help="limit examples to api:deviceKind, e.g. cuda:nvidiaGpu")
-    parser.add_argument("--executor", help="limit examples to one executor, e.g. gpuCuda")
+    parser.add_argument(
+        "--model",
+        type=Path,
+        help="trained .atml artifact; required when learned_hybrid is selected",
+    )
+    parser.add_argument(
+        "--backend",
+        help="limit examples to api:deviceKind, e.g. cuda:nvidiaGpu or host:cpu",
+    )
+    parser.add_argument(
+        "--executor",
+        help="limit examples to one executor, e.g. gpuCuda or cpuOmpBlocks",
+    )
     parser.add_argument("--maximum-executions", type=int)
     parser.add_argument("--maximum-retired-configurations", type=int)
     parser.add_argument(
@@ -263,6 +425,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "collect the complete exhaustive surface with three measured runs per legal "
             "candidate and no tuner-wide completion limits"
+        ),
+    )
+    parser.add_argument(
+        "--tune-until-terminal",
+        action="store_true",
+        help=(
+            "keep finite simulations running until each tuner reaches either "
+            "all configurations or a configured completion limit"
         ),
     )
     parser.add_argument("--resume", action="store_true")
@@ -279,6 +449,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if not arguments.examples:
         parser.error("the example selection is empty")
     if arguments.full_coverage:
+        if arguments.tune_until_terminal:
+            parser.error("--tune-until-terminal cannot be combined with --full-coverage")
         if arguments.strategies is not None and arguments.strategies != ["exhaustive"]:
             parser.error("--full-coverage only supports --strategies exhaustive")
         if (
@@ -288,7 +460,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             parser.error("--full-coverage cannot be combined with completion limits")
         arguments.strategies = ("exhaustive",)
     else:
-        arguments.strategies = tuple(arguments.strategies or STRATEGIES)
+        arguments.strategies = tuple(arguments.strategies or DEFAULT_STRATEGIES)
         if arguments.maximum_executions is None:
             arguments.maximum_executions = DEFAULT_MAXIMUM_EXECUTIONS
         if arguments.maximum_retired_configurations is None:
@@ -303,6 +475,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         and arguments.maximum_retired_configurations <= 0
     ):
         parser.error("completion limits must be greater than zero")
+    if LEARNED_STRATEGY in arguments.strategies and arguments.model is None:
+        parser.error("--model is required when learned_hybrid is selected")
+    if arguments.model is not None:
+        arguments.model = arguments.model.expanduser().resolve()
+        if not arguments.model.is_file():
+            parser.error(f"--model is not a readable file: {arguments.model}")
+        try:
+            with arguments.model.open("rb") as model:
+                model.read(1)
+        except OSError as exception:
+            parser.error(f"cannot read --model {arguments.model}: {exception}")
+        if LEARNED_STRATEGY not in arguments.strategies:
+            parser.error("--model requires --strategies learned_hybrid")
     if arguments.output is None:
         run_id = utc_now().strftime("%Y%m%dT%H%M%SZ")
         arguments.output = repository / "benchmarks/results" / run_id
@@ -318,6 +503,9 @@ def run_pair(
     maximum_executions: int | None,
     maximum_retired_configurations: int | None,
     full_coverage: bool,
+    model: Path | None = None,
+    model_sha256: str | None = None,
+    model_runtime_digest: str | None = None,
 ) -> bool:
     directory = output / example / strategy
     directory.mkdir(parents=True, exist_ok=True)
@@ -331,6 +519,7 @@ def run_pair(
         maximum_executions,
         maximum_retired_configurations,
         full_coverage,
+        model,
     )
     history.unlink(missing_ok=True)
     configuration_path.write_text(yaml.safe_dump(configuration, sort_keys=False), encoding="utf-8")
@@ -347,6 +536,14 @@ def run_pair(
         "started_at_unix_seconds": started.timestamp(),
         "status": "running",
     }
+    if strategy == LEARNED_STRATEGY:
+        metadata.update(
+            {
+                "model": str(model),
+                "model_sha256": model_sha256,
+                "model_runtime_digest": model_runtime_digest,
+            }
+        )
     write_json(directory / "run.json", metadata)
 
     environment = os.environ.copy()
@@ -381,6 +578,16 @@ def run_pair(
     finished = utc_now()
     history_present = history.exists()
     diagnostics = inspect_history(history) if history_present else None
+    learning_diagnostics = (
+        inspect_learned_history(history, model_runtime_digest)
+        if history_present
+        and strategy == LEARNED_STRATEGY
+        and model_runtime_digest is not None
+        else None
+    )
+    learning_verified = bool(
+        learning_diagnostics is not None and learning_diagnostics["valid"]
+    )
     full_coverage_verified = bool(
         diagnostics is not None and diagnostics["all_contexts_complete"]
     )
@@ -389,6 +596,7 @@ def run_pair(
         if return_code == 0
         and history_present
         and (not full_coverage or full_coverage_verified)
+        and (strategy != LEARNED_STRATEGY or learning_verified)
         else "failed"
     )
     metadata.update(
@@ -400,6 +608,10 @@ def run_pair(
             "history_present": history_present,
             "history_diagnostics": diagnostics,
             "full_coverage_verified": full_coverage_verified if full_coverage else None,
+            "learning_validation": learning_diagnostics,
+            "learning_verified": (
+                learning_verified if strategy == LEARNED_STRATEGY else None
+            ),
             "status": status,
         }
     )
@@ -409,6 +621,9 @@ def run_pair(
     if strategy == "exhaustive" and diagnostics is not None:
         for message in diagnostics["messages"]:
             print(f"WARN {example} / {strategy}: {message}", file=sys.stderr, flush=True)
+    if strategy == LEARNED_STRATEGY and learning_diagnostics is not None:
+        for message in learning_diagnostics["messages"]:
+            print(f"ERROR {example} / {strategy}: {message}", file=sys.stderr, flush=True)
     return status == "completed"
 
 
@@ -418,6 +633,15 @@ def main() -> int:
     build_directory = arguments.build_dir.resolve()
     output = arguments.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+
+    model_sha256 = None
+    model_runtime_digest = None
+    if arguments.model is not None:
+        try:
+            model_sha256, model_runtime_digest = model_digests(arguments.model)
+        except OSError as exception:
+            print(f"Cannot read learned model: {exception}", file=sys.stderr)
+            return 2
 
     try:
         configuration = yaml.safe_load(arguments.config.resolve().read_text(encoding="utf-8"))
@@ -451,9 +675,13 @@ def main() -> int:
             "examples": arguments.examples,
             "excluded_examples": arguments.exclude_examples,
             "strategies": arguments.strategies,
+            "model": str(arguments.model) if arguments.model is not None else None,
+            "model_sha256": model_sha256,
+            "model_runtime_digest": model_runtime_digest,
             "maximum_executions": arguments.maximum_executions,
             "maximum_retired_configurations": arguments.maximum_retired_configurations,
             "full_coverage": arguments.full_coverage,
+            "tune_until_terminal": arguments.tune_until_terminal,
             "measurement_policy": FULL_COVERAGE_TUNING if arguments.full_coverage else None,
             "backend": arguments.backend,
             "executor": arguments.executor,
@@ -469,12 +697,24 @@ def main() -> int:
             command.extend(["--backend", arguments.backend])
         if arguments.executor is not None:
             command.extend(["--executor", arguments.executor])
-        if arguments.full_coverage:
-            command.extend(FULL_COVERAGE_EXAMPLE_ARGUMENTS.get(example, ()))
+        command.extend(
+            benchmark_example_arguments(
+                example,
+                full_coverage=arguments.full_coverage,
+                tune_until_terminal=arguments.tune_until_terminal,
+            )
+        )
         for strategy in arguments.strategies:
             directory = output / example / strategy
             if arguments.resume and successful_run(
-                directory, require_full_coverage=arguments.full_coverage
+                directory,
+                require_full_coverage=arguments.full_coverage,
+                expected_model_sha256=(
+                    model_sha256 if strategy == LEARNED_STRATEGY else None
+                ),
+                expected_model_runtime_digest=(
+                    model_runtime_digest if strategy == LEARNED_STRATEGY else None
+                ),
             ):
                 print(f"SKIP {example} / {strategy}", flush=True)
                 continue
@@ -488,6 +728,9 @@ def main() -> int:
                 arguments.maximum_executions,
                 arguments.maximum_retired_configurations,
                 arguments.full_coverage,
+                arguments.model if strategy == LEARNED_STRATEGY else None,
+                model_sha256 if strategy == LEARNED_STRATEGY else None,
+                model_runtime_digest if strategy == LEARNED_STRATEGY else None,
             ):
                 failures.append((example, strategy))
                 print(f"FAIL {example} / {strategy}", file=sys.stderr, flush=True)

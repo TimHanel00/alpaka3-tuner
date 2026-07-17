@@ -25,6 +25,12 @@ STRATEGY_LABELS = {
     "random": "Random",
     "simulated_annealing": "Simulated annealing",
     "bayesian_optimization": "Bayesian optimization",
+    "learned_hybrid": "Learned hybrid",
+}
+
+BASELINE_STYLES = {
+    "CpuOmpBlocks": {"color": "#555555", "linestyle": ":"},
+    "GpuCuda": {"color": "black", "linestyle": "--"},
 }
 
 
@@ -48,6 +54,16 @@ def context_name(key: tuple) -> str:
 def context_details(key: tuple) -> str:
     _identities, _kernel, device, launch, candidate_count = key
     return f"{device} | {candidate_count:,} candidates | {launch}"
+
+
+def context_executor(key: tuple) -> str | None:
+    identities, _kernel, _device, launch, _candidate_count = key
+    description = " ".join([*identities, str(launch)]).casefold()
+    if "cpuompblocks" in description:
+        return "CpuOmpBlocks"
+    if "gpucuda" in description:
+        return "GpuCuda"
+    return None
 
 
 def context_label(example: str, key: tuple) -> str:
@@ -114,7 +130,7 @@ def candidate_series(cache: dict) -> tuple[list[int], list[float]]:
     return indexes, runtimes
 
 
-def load_baseline(path: Path | None) -> dict[str, tuple[float, str]]:
+def load_baseline(path: Path | None) -> dict[str, dict[str, tuple[float, str]]]:
     if path is None:
         return {}
     summary_path = path / "summary.json" if path.is_dir() else path
@@ -122,11 +138,29 @@ def load_baseline(path: Path | None) -> dict[str, tuple[float, str]]:
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exception:
         raise ValueError(f"cannot load baseline summary {summary_path}: {exception}") from exception
-    baselines: dict[str, tuple[float, str]] = {}
+    baselines: dict[str, dict[str, tuple[float, str]]] = {}
     for example, values in summary.items():
+        if not isinstance(values, dict):
+            continue
+        runtime_kind = values.get("reported_runtime_kind", "runtime")
+        reported = values.get("reported_runtimes")
+        if isinstance(reported, dict):
+            for executor, executor_values in reported.items():
+                if not isinstance(executor_values, dict):
+                    continue
+                runtime = executor_values.get("mean_runtime_seconds")
+                if isinstance(runtime, (int, float)):
+                    baselines.setdefault(example, {})[executor] = (
+                        runtime,
+                        runtime_kind,
+                    )
+        # Backward compatibility for CUDA-only summaries written by the old
+        # baseline runner.
         runtime = values.get("mean_reported_cuda_runtime_seconds")
         if isinstance(runtime, (int, float)):
-            baselines[example] = (runtime, values.get("reported_runtime_kind", "runtime"))
+            baselines.setdefault(example, {}).setdefault(
+                "GpuCuda", (runtime, runtime_kind)
+            )
     return baselines
 
 
@@ -186,7 +220,7 @@ def plot_context(
     *,
     view: str,
     show_details: bool,
-    baseline: tuple[float, str] | None = None,
+    baseline: dict[str, tuple[float, str]] | None = None,
 ) -> None:
     for strategy, cache in sorted(strategy_caches.items()):
         label = STRATEGY_LABELS.get(strategy, strategy)
@@ -213,16 +247,26 @@ def plot_context(
                 linewidth=1.25,
                 label=label,
             )
-    if baseline is not None:
-        runtime, kind = baseline
-        kind_label = "kernel" if kind == "kernel" else "time step"
-        axis.axhline(
-            runtime * 1.0e6,
-            color="black",
-            linestyle="--",
-            linewidth=1.3,
-            label=f"Untuned Alpaka mean {kind_label}",
+    if baseline:
+        executor = context_executor(key)
+        selected = (
+            {executor: baseline[executor]}
+            if executor is not None and executor in baseline
+            else baseline
         )
+        for baseline_executor, (runtime, kind) in sorted(selected.items()):
+            kind_label = "kernel" if kind == "kernel" else "time step"
+            style = BASELINE_STYLES.get(
+                baseline_executor, {"color": "black", "linestyle": "--"}
+            )
+            axis.axhline(
+                runtime * 1.0e6,
+                linewidth=1.3,
+                label=(
+                    f"Untuned Alpaka {baseline_executor} mean {kind_label}"
+                ),
+                **style,
+            )
     axis.set_title(context_label(example, key), fontsize=10, loc="left")
     if show_details:
         _identities, _kernel, device, _launch, candidate_count = key
@@ -262,7 +306,7 @@ def add_legend(figure: plt.Figure, axes: object) -> None:
 def render_examples(
     data: dict,
     plot_directory: Path,
-    baselines: dict[str, tuple[float, str]],
+    baselines: dict[str, dict[str, tuple[float, str]]],
     view: str,
 ) -> list[Path]:
     written: list[Path] = []
@@ -305,7 +349,7 @@ def render_examples(
 def render_overview(
     data: dict,
     plot_directory: Path,
-    baselines: dict[str, tuple[float, str]],
+    baselines: dict[str, dict[str, tuple[float, str]]],
     view: str,
 ) -> Path:
     panels = [

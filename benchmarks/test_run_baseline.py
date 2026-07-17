@@ -32,6 +32,17 @@ Average time for kernel execution: 2.5e-05s
             2.5e-05,
         )
 
+    def test_extracts_cpu_omp_blocks_and_cuda_kernel_runtimes(self) -> None:
+        output = """Using alpaka accelerator: alpaka::exec::CpuOmpBlocks for Host Cpu
+Average time for kernel execution: 0.006s
+Using alpaka accelerator: alpaka::exec::GpuCuda for Cuda NvidiaGpu
+Average time for kernel execution: 2.5e-05s
+"""
+        self.assertEqual(
+            run_baseline.reported_runtimes("vectorAdd", output),
+            {"CpuOmpBlocks": 0.006, "GpuCuda": 2.5e-05},
+        )
+
     def test_converts_cuda_time_step_milliseconds_to_seconds(self) -> None:
         output = """HOST
 Time per time step: 10 ms.
@@ -41,6 +52,17 @@ Time per time step: 0.125 ms.
         self.assertEqual(
             run_baseline.reported_cuda_runtime("heatEquation2D", output),
             0.000125,
+        )
+
+    def test_maps_host_time_step_to_cpu_omp_blocks(self) -> None:
+        output = """Host
+Time per time step: 0.750 ms.
+Cuda
+Time per time step: 0.125 ms.
+"""
+        self.assertEqual(
+            run_baseline.reported_runtimes("heatEquation2D", output),
+            {"CpuOmpBlocks": 0.00075, "GpuCuda": 0.000125},
         )
 
 

@@ -49,7 +49,7 @@ class ParseArgumentsTest(unittest.TestCase):
 
     def test_default_run_keeps_safety_limits_and_all_strategies(self) -> None:
         arguments = run.parse_args(["--examples", "vectorAdd"])
-        self.assertEqual(arguments.strategies, run.STRATEGIES)
+        self.assertEqual(arguments.strategies, run.DEFAULT_STRATEGIES)
         self.assertEqual(
             arguments.maximum_executions, run.DEFAULT_MAXIMUM_EXECUTIONS
         )
@@ -93,6 +93,64 @@ class ParseArgumentsTest(unittest.TestCase):
                 ]
             )
         self.assertIn("cannot be combined with completion limits", stderr.getvalue())
+
+    def test_terminal_mode_is_available_for_bounded_comparisons(self) -> None:
+        arguments = run.parse_args(
+            ["--examples", "heatEquation2D", "nBody", "--tune-until-terminal"]
+        )
+        self.assertTrue(arguments.tune_until_terminal)
+        self.assertEqual(
+            run.benchmark_example_arguments(
+                "heatEquation2D",
+                full_coverage=False,
+                tune_until_terminal=True,
+            ),
+            ("--tune-until-terminal",),
+        )
+        self.assertEqual(
+            run.benchmark_example_arguments(
+                "vectorAdd", full_coverage=False, tune_until_terminal=True
+            ),
+            (),
+        )
+
+    def test_terminal_mode_cannot_be_combined_with_full_coverage(self) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            run.parse_args(
+                [
+                    "--examples",
+                    "heatEquation2D",
+                    "--tune-until-terminal",
+                    "--full-coverage",
+                ]
+            )
+        self.assertIn("cannot be combined with --full-coverage", stderr.getvalue())
+
+    def test_learned_strategy_requires_a_readable_model(self) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+            run.parse_args(
+                ["--examples", "vectorAdd", "--strategies", "learned_hybrid"]
+            )
+        self.assertIn("--model is required", stderr.getvalue())
+
+    def test_learned_strategy_resolves_model_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            model = Path(temporary) / "model.atml"
+            model.write_bytes(b"artifact")
+            arguments = run.parse_args(
+                [
+                    "--examples",
+                    "vectorAdd",
+                    "--strategies",
+                    "learned_hybrid",
+                    "--model",
+                    str(model),
+                ]
+            )
+        self.assertEqual(arguments.strategies, ("learned_hybrid",))
+        self.assertEqual(arguments.model, model.resolve())
 
 
 class FullCoverageConfigurationTest(unittest.TestCase):
@@ -138,6 +196,88 @@ class FullCoverageConfigurationTest(unittest.TestCase):
             )
             self.assertTrue(run.successful_run(directory))
             self.assertFalse(run.successful_run(directory, require_full_coverage=True))
+
+
+class LearnedConfigurationTest(unittest.TestCase):
+    def test_model_is_injected_only_for_learned_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            model = Path(temporary) / "model.atml"
+            model.write_bytes(b"model")
+            base = {
+                "schema_version": 2,
+                "tuning": {"strategy": "random"},
+                "persistence": {"file": "old.json"},
+                "learning": {"model": "old.atml", "fallback": "random"},
+            }
+            learned = run.benchmark_configuration(
+                base,
+                "learned_hybrid",
+                Path("learned.json"),
+                100,
+                50,
+                False,
+                model,
+            )
+            random = run.benchmark_configuration(
+                base,
+                "random",
+                Path("random.json"),
+                100,
+                50,
+                False,
+            )
+
+        self.assertEqual(learned["learning"]["model"], str(model.resolve()))
+        self.assertNotIn("model", random["learning"])
+        self.assertEqual(base["learning"]["model"], "old.atml")
+
+    def test_model_digests_match_known_empty_file_values(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            model = Path(temporary) / "empty.atml"
+            model.write_bytes(b"")
+            sha256, runtime_digest = run.model_digests(model)
+        self.assertEqual(
+            sha256,
+            "e3b0c44298fc1c149afbf4c8996fb924"
+            "27ae41e4649b934ca495991b7852b855",
+        )
+        self.assertEqual(runtime_digest, "cbf29ce484222325")
+
+    def test_learning_history_requires_active_available_matching_model(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            history = Path(temporary) / "history.json"
+            history.write_text(
+                json.dumps(
+                    {
+                        "contexts": {
+                            "first": {
+                                "metadata": {"kernel": "KernelA"},
+                                "learning": {
+                                    "status": "active",
+                                    "artifact_load_status": "available",
+                                    "model_digest": "1234abcd",
+                                    "model_file": "/model.atml",
+                                },
+                            },
+                            "second": {
+                                "metadata": {"kernel": "KernelB"},
+                                "learning": {
+                                    "status": "fallback",
+                                    "artifact_load_status": "available",
+                                    "model_digest": "1234abcd",
+                                },
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            diagnostics = run.inspect_learned_history(history, "1234abcd")
+
+        self.assertFalse(diagnostics["valid"])
+        self.assertTrue(diagnostics["contexts"][0]["valid"])
+        self.assertFalse(diagnostics["contexts"][1]["valid"])
+        self.assertIn("KernelB learned strategy status", diagnostics["messages"][0])
 
 
 class HistoryInspectionTest(unittest.TestCase):

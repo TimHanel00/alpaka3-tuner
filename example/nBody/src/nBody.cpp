@@ -30,8 +30,15 @@ constexpr auto chunkSize = CVec<IdxType, 256_idx>{};
 inline constexpr auto velocityTileExtent =
     ALPAKA_TUNE_TUNABLE("velocityTileExtent");
 
+enum class TuningRunMode { fixedSteps, untilTerminal, untilComplete };
+
+[[nodiscard]] constexpr auto extendsUntilTuningTerminates(TuningRunMode mode)
+    -> bool {
+  return mode != TuningRunMode::fixedSteps;
+}
+
 void printExampleHeader(bool const writePngs, bool const benchmarkMode,
-                        bool const tuneUntilComplete,
+                        TuningRunMode const tuningRunMode,
                         IdxType const numParticles, IdxType const numTimeSteps,
                         BaseType const dt) {
   if (!benchmarkMode) {
@@ -44,8 +51,11 @@ void printExampleHeader(bool const writePngs, bool const benchmarkMode,
       std::cout << "    Writing pngs to disk" << std::endl;
     else
       std::cout << "    Not writing pngs to disk" << std::endl;
-    if (tuneUntilComplete)
+    if (tuningRunMode == TuningRunMode::untilComplete)
       std::cout << "    Full-coverage tuning collection is enabled"
+                << std::endl;
+    else if (tuningRunMode == TuningRunMode::untilTerminal)
+      std::cout << "    Terminal-state tuning collection is enabled"
                 << std::endl;
     std::cout << "================================" << std::endl;
     std::cout << std::endl;
@@ -74,14 +84,15 @@ void printExampleHeader(bool const writePngs, bool const benchmarkMode,
  * @param writePngs Whether to write pngs to disk or not.
  * @param benchmarkMode Whether to run in benchmark mode. See the help docs
  * below.
- * @param tuneUntilComplete Whether benchmark data collection may extend the
- * simulation until tuning completes.
+ * @param tuningRunMode Whether benchmark data collection may extend the
+ * simulation until tuning reaches a terminal state, and whether only full
+ * coverage is accepted as successful completion.
  * @param numParticles The number of particles to simulate.
  * @param numTimeSteps The number of time steps to run for.
  * @param dt The delta t to use as time steps.
  */
 int example(auto const deviceSpec, auto const computeExec, bool const writePngs,
-            bool const benchmarkMode, bool const tuneUntilComplete,
+            bool const benchmarkMode, TuningRunMode const tuningRunMode,
             IdxType const numParticles, IdxType const numTimeSteps,
             BaseType const dt) {
   using namespace alpaka;
@@ -197,11 +208,13 @@ int example(auto const deviceSpec, auto const computeExec, bool const writePngs,
 
   // Tune and execute the velocity kernel as part of each simulation step.
   // The normal simulation still performs exactly numTimeSteps. The
-  // benchmark-only collection mode continues safe simulation steps until
-  // the complete tuning space has been measured.
+  // benchmark-only collection modes continue safe simulation steps until the
+  // tuner reaches a terminal state.
   std::size_t completedSteps = 0u;
   for (IdxType step = 1;
-       step <= numTimeSteps || (tuneUntilComplete && !tuner.isTuningComplete());
+       step <= numTimeSteps ||
+       (extendsUntilTuningTerminates(tuningRunMode) &&
+        !tuner.isTuningComplete());
        ++step) {
     ++completedSteps;
     // Queue one step of the simulation
@@ -265,16 +278,34 @@ int example(auto const deviceSpec, auto const computeExec, bool const writePngs,
               << std::endl;
   }
 
-  if (tuneUntilComplete) {
-    if (tuner.info().completionReason !=
-        alpakaTune::TunerCompletionReason::allConfigurations) {
+  if (extendsUntilTuningTerminates(tuningRunMode)) {
+    auto const tunerInfo = tuner.info();
+    if (!tunerInfo.tuningComplete) {
+      std::cerr << "Tuning collection stopped before the context reached a "
+                   "terminal state."
+                << std::endl;
+      return EXIT_FAILURE;
+    }
+    if (tuningRunMode == TuningRunMode::untilComplete &&
+        tunerInfo.completionReason !=
+            alpakaTune::TunerCompletionReason::allConfigurations) {
       std::cerr
           << "Full-coverage tuning stopped at a configured completion limit."
           << std::endl;
       return EXIT_FAILURE;
     }
-    std::cout << "Full-coverage tuning mode executed " << completedSteps
-              << " time steps and completed every tuning context." << std::endl;
+
+    if (tuningRunMode == TuningRunMode::untilComplete) {
+      std::cout << "Full-coverage tuning mode executed " << completedSteps
+                << " time steps and completed every tuning context."
+                << std::endl;
+    } else {
+      std::cout << "Terminal-state tuning mode executed " << completedSteps
+                << " time steps and reached a terminal state for every tuning "
+                   "context (updateVelocities: "
+                << alpakaTune::completionReasonName(tunerInfo.completionReason)
+                << ")." << std::endl;
+    }
   }
 
   return EXIT_SUCCESS;
@@ -283,8 +314,8 @@ int example(auto const deviceSpec, auto const computeExec, bool const writePngs,
 int benchmark(auto const deviceSpec, auto const computeExec,
               BaseType const dt) {
   for (auto numParticles : numParticlesBenchmark) {
-    example(deviceSpec, computeExec, false, true, false, numParticles,
-            timeStepsBenchmark, dt);
+    example(deviceSpec, computeExec, false, true, TuningRunMode::fixedSteps,
+            numParticles, timeStepsBenchmark, dt);
   }
   return EXIT_SUCCESS;
 }
@@ -307,8 +338,12 @@ void help(char *argv[]) {
                "this mode. Default: off"
             << std::endl;
   std::cerr << "  --tune-until-complete: benchmark-only mode; continue safe "
-               "simulation steps until the "
-               "tuning context completes"
+               "simulation steps until the tuning context exhausts all "
+               "configurations; fail if a configured budget stops tuning first"
+            << std::endl;
+  std::cerr << "  --tune-until-terminal: benchmark-only mode; continue safe "
+               "simulation steps until the tuning context either exhausts all "
+               "configurations or reaches a configured budget"
             << std::endl;
   std::cerr << "  -h: Print this help message" << std::endl;
   std::cerr << std::endl;
@@ -328,12 +363,16 @@ auto main(int argc, char *argv[]) -> int {
   BaseType dt = defaultDt;
   bool writePngs = false;
   bool benchmarkMode = false;
-  bool tuneUntilComplete = false;
+  auto tuningRunMode = TuningRunMode::fixedSteps;
 
   int opt;
 
+  constexpr int tuneUntilTerminalOption = 256;
+
   static option const longOptions[] = {
       {"tune-until-complete", no_argument, nullptr, 'T'},
+      {"tune-until-terminal", no_argument, nullptr,
+       tuneUntilTerminalOption},
       {nullptr, 0, nullptr, 0}};
   while ((opt = getopt_long(argc, argv, "hn:t:d:pbT", longOptions, nullptr)) !=
          -1) {
@@ -394,7 +433,20 @@ auto main(int argc, char *argv[]) -> int {
       benchmarkMode = true;
       break;
     case 'T':
-      tuneUntilComplete = true;
+      if (tuningRunMode == TuningRunMode::untilTerminal) {
+        std::cerr << "Error: --tune-until-complete and "
+                     "--tune-until-terminal are mutually exclusive.\n";
+        return EXIT_FAILURE;
+      }
+      tuningRunMode = TuningRunMode::untilComplete;
+      break;
+    case tuneUntilTerminalOption:
+      if (tuningRunMode == TuningRunMode::untilComplete) {
+        std::cerr << "Error: --tune-until-complete and "
+                     "--tune-until-terminal are mutually exclusive.\n";
+        return EXIT_FAILURE;
+      }
+      tuningRunMode = TuningRunMode::untilTerminal;
       break;
     case 'h':
       help(argv);
@@ -405,7 +457,7 @@ auto main(int argc, char *argv[]) -> int {
     }
   }
 
-  printExampleHeader(writePngs, benchmarkMode, tuneUntilComplete, numParticles,
+  printExampleHeader(writePngs, benchmarkMode, tuningRunMode, numParticles,
                      numTimeSteps, dt);
 
   if (benchmarkMode) {
@@ -434,7 +486,7 @@ auto main(int argc, char *argv[]) -> int {
             return EXIT_SUCCESS;
           return alpaka::example::nBody::example(
               alpaka::onHost::DeviceSpec{backend}, alpaka::getExecutor(backend),
-              writePngs, benchmarkMode, tuneUntilComplete, numParticles,
+              writePngs, benchmarkMode, tuningRunMode, numParticles,
               numTimeSteps, dt);
         },
         onHost::allBackends(onHost::enabledDeviceSpecs,
