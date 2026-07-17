@@ -1,7 +1,7 @@
 // Copyright 2026 Tim Hanel
 // SPDX-License-Identifier: MPL-2.0
 
-#include <alpakaTune/detail/CandidateQueue.hpp>
+#include <alpakaTune/core/peripherals/CandidateQueue.hpp>
 
 #include <cstdlib>
 #include <random>
@@ -11,8 +11,8 @@ auto main() -> int {
   std::mt19937_64 random{0u};
   auto queue = alpakaTune::detail::CandidateQueue{2u, 2u, false, random};
 
-  if (!queue.empty() || !queue.insert(10u) || !queue.insert(20u) || !queue.full() ||
-      queue.insert(30u))
+  if (!queue.empty() || !queue.insert(10u) || !queue.insert(20u) ||
+      !queue.full() || queue.insert(30u))
     return EXIT_FAILURE;
 
   auto const first = queue.next();

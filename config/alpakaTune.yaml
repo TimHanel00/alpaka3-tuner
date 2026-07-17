@@ -1,25 +1,37 @@
-# Default alpakaTune session configuration.
-schema_version: 1
+# Default alpakaTune tuner configuration.
+schema_version: 2
 tuning:
-  # exhaustive, random, simulated_annealing, or bayesian_optimization
+  # exhaustive, random, simulated_annealing, bayesian_optimization, or learned_hybrid
   strategy: exhaustive
   random_seed: 0
+  # run one configuration X times before recording measurements
   warmup_runs: 1
-  # Hard cap; a record may retire earlier when its CI criterion is met.
-  runs_per_candidate: 1
+  # Hard cap; a record may retire earlier when its CI criterion is met or if it was retired by the Mann Whitney U test
+  runs_per_candidate: 20
   # Defaults to runs_per_candidate, preserving fixed-budget measurements.
   minimum_runs_per_candidate: 1
-  # Legacy-compatible 99 % non-parametric median CI controls.
+  # 99 % non-parametric median CI controls - when does new best candidate configuration get retired
   ci_check_interval: 10
   ci_z_score: 2.576
   ci_relative_width: 0.05
   # Reject transient timing spikes from decision statistics, not raw history.
   outlier_mad_scale: 3.5
-  # Retire a statistically slower record with a directional rank comparison.
+  # The Mann Whitney U test is used to draw comparisons between two candidates.
+  # This is useful for search strategy and might also retire configurations early by comparing against the "best" solution
   mann_whitney_early_stop: true
   mann_whitney_min_samples: 8
   mann_whitney_alpha: 0.05
+  # The candidate queue window - The queue allows interleaved candidate selection to mitigate transient system behavior
+  # the windows specifies how many slots can be occupied by distinct candidate configurations at once
   noise_cancellation_window: 50
-  max_consecutive_runs: 3
+  # how many times in the row does the same config run (warning: this has to be higher than warmup_runs)
+  max_consecutive_runs: 2
+  # Tuner-wide safety limits. Normal completion can happen earlier when the complete Cartesian space is resolved -
+  # this of course might not happen in case a non-deterministic search strategy is selected
+  maximum_executions: 100000
+  maximum_retired_configurations: 10000
 persistence:
-  directory: .alpakaTune
+  file: .alpakaTune/history.json
+learning:
+  # learned_hybrid uses the bundled model when model is omitted.
+  fallback: random

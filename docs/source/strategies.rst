@@ -19,7 +19,7 @@ in ``[0, 1]`` per tuning dimension. A strategy receives a read-only
   that normalized configuration has already been sampled.
 
 The strategy object owns all other state. It does not access the Alpaka queue,
-kernel, device, cache, or tuning internals. ``Context`` validates the returned
+kernel, device, cache, or tuning internals. ``Tuner`` validates the returned
 vector, maps it to the nearest discrete Cartesian candidate, and selects the
 nearest unscheduled candidate if the strategy repeats a point.
 
@@ -40,8 +40,8 @@ scheduling spikes do not distort tuning decisions.
 Every ``ci_check_interval`` samples, a legacy-compatible 99% non-parametric
 median confidence interval is checked. A record completes once the interval is
 within ``ci_relative_width`` and ``minimum_runs_per_candidate`` has been met,
-or at ``runs_per_candidate``. If ``mann_whitney_early_stop`` is enabled,
-Context also compares a non-incumbent record with the current best record after
+or at ``runs_per_candidate``. If ``mann_whitney_early_stop`` is enabled, the
+tuner also compares a non-incumbent record with the current best record after
 ``mann_whitney_min_samples`` accepted samples each (eight by default). A
 statistically slower record is retired early with a directional, one-sided
 Mann-Whitney U test at ``mann_whitney_alpha`` (5% by default). The test uses
@@ -60,6 +60,13 @@ uniform normalized points. ``simulated_annealing`` owns an accepted state and
 perturbs it with a cooling radius. ``bayesian_optimization`` owns its requested
 points and queries their runtimes to fit a bounded RBF surrogate, selecting a
 lower-confidence-bound proposal.
+
+``learned_hybrid`` loads a compact offline-trained candidate ranker, scores the
+complete legal space, and reserves part of its recommendations for diverse or
+uncertain points. The shared model remains frozen while a small residual
+adapter learns from retired measurements in the current context. Model
+training and campaign data live in the separate ``alpakaTune-ml`` repository;
+only a promoted deployment artifact may be bundled here.
 
 Select one in YAML:
 

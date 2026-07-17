@@ -1,4 +1,0 @@
-add_executable(alpakaTune_compile_time_tuning src/main.cpp)
-target_link_libraries(alpakaTune_compile_time_tuning PRIVATE alpakaTune::alpakaTune)
-alpaka_finalize(alpakaTune_compile_time_tuning)
-add_test(NAME alpakaTune_compile_time_tuning COMMAND alpakaTune_compile_time_tuning)

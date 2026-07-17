@@ -1,9 +1,10 @@
 alpakaTune
 ==========
 
-alpakaTune tunes Alpaka3 ``KernelBundle`` launches through YAML-backed,
-device-bound contexts. A context replaces a normal queue enqueue while it
-measures candidates, then enqueues its cached winner directly.
+alpakaTune tunes Alpaka3 ``KernelBundle`` launches with a mutable
+``TunerConfig`` and a device-bound ``Tuner``. A tuner represents one particular
+tuning context: it measures candidates, selects a winner, and replays that
+winner on subsequent enqueues.
 
 Alpaka3 provides two host-side launch descriptions:
 
@@ -21,4 +22,3 @@ Alpaka3 provides two host-side launch descriptions:
    compile_time_tuning
    instrumentation
    persistence
-   api

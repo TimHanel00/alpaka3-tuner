@@ -1,4 +1,0 @@
-[submodule "alpaka"]
-	path = alpaka
-	branch = dev
-	url = https://github.com/alpaka-group/alpaka3.git

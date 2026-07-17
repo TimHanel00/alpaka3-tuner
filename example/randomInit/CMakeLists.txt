@@ -1,0 +1,2 @@
+alpakatune_add_example(randomInit src/randomInit.cpp)
+target_include_directories(alpakaTune_randomInit PRIVATE src)

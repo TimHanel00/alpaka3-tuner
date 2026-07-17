@@ -1,0 +1,2 @@
+alpakatune_add_example(boundaryIter src/boundaryIter.cpp)
+target_include_directories(alpakaTune_boundaryIter PRIVATE src)

@@ -35,12 +35,20 @@ if(NOT TARGET alpakaTune::alpakaTune)
     else()
         set(_alpakaTune_has_json 0)
     endif()
+    set(_alpakaTune_compile_definitions
+        "ALPAKA_TUNE_HAS_JSON=${_alpakaTune_has_json};ALPAKA_TUNE_DEFAULT_CONFIG=\"${_alpakaTune_package_prefix}/@CMAKE_INSTALL_DATADIR@/alpakaTune/alpakaTune.yaml\""
+    )
+    if(@alpakaTune_HAS_BUNDLED_MODEL@)
+        list(APPEND _alpakaTune_compile_definitions
+            "ALPAKA_TUNE_DEFAULT_MODEL=\"${_alpakaTune_package_prefix}/@CMAKE_INSTALL_DATADIR@/alpakaTune/models/@alpakaTune_BUNDLED_MODEL_NAME@\""
+        )
+    endif()
     set_target_properties(
         alpakaTune::alpakaTune
         PROPERTIES
             INTERFACE_COMPILE_FEATURES cxx_std_20
             INTERFACE_INCLUDE_DIRECTORIES "${_alpakaTune_package_prefix}/@CMAKE_INSTALL_INCLUDEDIR@"
             INTERFACE_LINK_LIBRARIES "${_alpakaTune_dependencies}"
-            INTERFACE_COMPILE_DEFINITIONS "ALPAKA_TUNE_HAS_JSON=${_alpakaTune_has_json};ALPAKA_TUNE_DEFAULT_CONFIG=\"${_alpakaTune_package_prefix}/@CMAKE_INSTALL_DATADIR@/alpakaTune/alpakaTune.yaml\""
+            INTERFACE_COMPILE_DEFINITIONS "${_alpakaTune_compile_definitions}"
     )
 endif()

@@ -1,9 +1,13 @@
 # SPDX-License-Identifier: MPL-2.0
 
 /docs/source/build/
+/docs/_build/
+/docs/_doxygen/
 /docs/doxygen
 /docs/doxygen_dev
 /docs/cheatsheet/cheatsheet.pdf
+/.alpakaTune/
+/benchmarks/results/
 
 **/build*/
 .build_cmake/

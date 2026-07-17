@@ -1,3 +1,0 @@
-add_executable(alpakaTune_instrumented_vector_add src/main.cpp)
-target_link_libraries(alpakaTune_instrumented_vector_add PRIVATE alpakaTune::alpakaTune)
-alpaka_finalize(alpakaTune_instrumented_vector_add)

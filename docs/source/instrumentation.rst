@@ -1,29 +1,50 @@
-Instrumentation example
-=======================
+Instrumenting a kernel
+======================
 
-``examples/instrumented_vector_add`` is an end-to-end benchmark of the new
-interface. It combines ``RVals{0, 1}`` for a runtime offset with
-``CVals<1, 2, 4, 8>`` for a compile-time SIMD width and the reserved
-``numBlocks`` launch parameter. It uses
-``CpuOmpBlocks``, where block count is physical launch parallelism and host
-``numThreads`` is constrained to one. Its generated YAML selects
-``bayesian_optimization`` and gives every candidate the same fixed
-measurement budget.
+A ``Tuner`` represents one particular tuning context. It owns the candidate
+scheduler, measurements, and winner for one device, kernel-bundle type, and
+launch prototype. Instrument a normal Alpaka launch by replacing
+``queue.enqueue(spec, bundle)`` with ``tuner.enqueue(queue, spec, bundle)``.
 
-Mann-Whitney early retirement is disabled only for this controlled benchmark
-so that every candidate receives the same number of measurements. The normal
-YAML default enables early retirement. Each CSV row contains the raw
-launch time and the configuration's MAD-filtered median; the plot overlays the
-two histories. A labelled best is emitted only when a configuration completes
-its measurement budget and its final robust estimate improves on every
-previously-completed configuration; provisional, moving estimates are not
-labelled as best.
+Minimal example
+---------------
 
-The executable writes ``samples.csv`` and ``summary.txt``. ``plot.py`` draws
-time against runtime and labels each confirmed improvement in completion
-order.
+.. code-block:: cpp
 
-.. code-block:: sh
+   #include <tuning.hpp>
 
-   build/examples/instrumented_vector_add/alpakaTune_instrumented_vector_add /tmp/vector-add
-   python3 examples/instrumented_vector_add/plot.py /tmp/vector-add/samples.csv /tmp/vector-add/runtime.png
+   inline constexpr auto chunkSize =
+       ALPAKA_TUNE_TUNABLE("chunkSize");
+
+   auto config = alpakaTune::TunerConfig::fromYaml("tuning.yaml");
+   auto tunables = alpakaTune::TunableBundle{
+       chunkSize(alpakaTune::RVals{64u, 128u, 256u})};
+   auto tuner = alpakaTune::makeTuner(
+       config, tunables, device, executor, "vector-add");
+
+   auto bundle = alpaka::KernelBundle{
+       VectorAddKernel{}, inputA, inputB, output,
+       alpakaTune::markTunable(chunkSize)};
+
+   while (!tuner.isTuningComplete())
+       tuner.enqueue(queue, frameSpec, bundle);
+
+The marker is replaced by the selected value before Alpaka receives the
+bundle. Once tuning completes, later ``tuner.enqueue`` calls replay the winner.
+Reuse one ``TunerConfig`` for several tuners when they should share settings
+and a persistence file; every tuner still owns independent runtime state.
+
+Launch-shape convenience
+------------------------
+
+``makeTuner(config, device, frameSpec, identity)`` creates correlated
+``numFrames`` and ``frameExtent`` candidates. Omitting ``config`` uses
+``tunerConfig()``. The corresponding ``ThreadSpec`` overload creates paired
+``numBlocks`` and ``numThreads`` candidates. Explicit
+``FrameExtentTuning`` and ``NumFramesTuning`` arguments replace the generated
+candidate sets.
+
+The mirrored Alpaka examples under ``example/`` use the same instrumentation
+pattern. For a complete runtime example, see
+``example/vectorAdd/src/vectorAdd.cpp``; nested configuration tuning is shown
+in ``example/tuneTheTuner/src/tuneTheTuner.cpp``.

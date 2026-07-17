@@ -1,4 +1,21 @@
-add_executable(alpakaTune_header_check src/main.cpp)
+set(_alpakaTune_header_root "${CMAKE_CURRENT_SOURCE_DIR}/../include")
+file(GLOB_RECURSE _alpakaTune_headers RELATIVE "${_alpakaTune_header_root}" "${_alpakaTune_header_root}/*.hpp")
+
+set(_alpakaTune_generated_root "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(_alpakaTune_generated_sources "")
+foreach(_header IN LISTS _alpakaTune_headers)
+    set(_source "${_alpakaTune_generated_root}/${_header}.cpp")
+    get_filename_component(_source_directory "${_source}" DIRECTORY)
+    file(MAKE_DIRECTORY "${_source_directory}")
+    file(WRITE "${_source}" "#include <${_header}>\n#include <${_header}>\n")
+    list(APPEND _alpakaTune_generated_sources "${_source}")
+endforeach()
+
+set(_alpakaTune_main "${_alpakaTune_generated_root}/main.cpp")
+file(WRITE "${_alpakaTune_main}" "int main() { return 0; }\n")
+list(APPEND _alpakaTune_generated_sources "${_alpakaTune_main}")
+
+add_executable(alpakaTune_header_check ${_alpakaTune_generated_sources})
 target_link_libraries(alpakaTune_header_check PRIVATE alpakaTune::alpakaTune)
 alpaka_finalize(alpakaTune_header_check)
 add_test(NAME alpakaTune_header_check COMMAND alpakaTune_header_check)

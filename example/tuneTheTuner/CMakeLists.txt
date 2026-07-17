@@ -1,0 +1,2 @@
+alpakatune_add_example(tuneTheTuner src/tuneTheTuner.cpp)
+alpakatune_add_example_smoke_test(tuneTheTuner)
