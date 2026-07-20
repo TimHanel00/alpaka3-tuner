@@ -144,6 +144,15 @@ def run_once(executable: Path, directory: Path, example: str, repetition: int) -
         return_code = None
         error = str(exception)
     duration = time.monotonic() - started_monotonic
+    unexpected_cpu_serial = False
+    output = ""
+    if return_code == 0:
+        try:
+            output = (directory / "stdout.log").read_text(encoding="utf-8")
+        except OSError:
+            output = ""
+        unexpected_cpu_serial = "cpuserial" in output.casefold()
+
     metadata = {
         "example": example,
         "repetition": repetition,
@@ -152,17 +161,17 @@ def run_once(executable: Path, directory: Path, example: str, repetition: int) -
         "finished_at": utc_now().isoformat(),
         "duration_seconds": duration,
         "return_code": return_code,
-        "status": "completed" if return_code == 0 else "failed",
+        "unexpected_cpu_serial": unexpected_cpu_serial,
+        "status": (
+            "completed" if return_code == 0 and not unexpected_cpu_serial else "failed"
+        ),
     }
     if return_code == 0:
-        try:
-            runtimes = reported_runtimes(
-                example, (directory / "stdout.log").read_text(encoding="utf-8")
-            )
-        except OSError:
-            runtimes = {}
+        runtimes = reported_runtimes(example, output)
         metadata["reported_runtimes_seconds"] = runtimes
         metadata["reported_cuda_runtime_seconds"] = runtimes.get("GpuCuda")
+    if unexpected_cpu_serial:
+        metadata["error"] = "CpuSerial appeared in baseline output"
     if error is not None:
         metadata["error"] = error
     write_json(directory / "run.json", metadata)

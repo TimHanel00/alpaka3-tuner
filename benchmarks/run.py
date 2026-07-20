@@ -113,6 +113,7 @@ def model_digests(path: Path) -> tuple[str, str]:
 def successful_run(
     directory: Path,
     require_full_coverage: bool = False,
+    require_terminal_reason: bool = False,
     expected_model_sha256: str | None = None,
     expected_model_runtime_digest: str | None = None,
 ) -> bool:
@@ -125,6 +126,7 @@ def successful_run(
         return (
             value.get("status") == "completed"
             and (not require_full_coverage or value.get("full_coverage_verified") is True)
+            and (not require_terminal_reason or value.get("terminal_verified") is True)
             and (
                 expected_model_runtime_digest is None
                 or (
@@ -201,6 +203,7 @@ def inspect_history(path: Path) -> dict:
         return {
             "valid": False,
             "all_contexts_complete": False,
+            "all_contexts_terminal": False,
             "contexts": [],
             "messages": [f"cannot inspect history: {exception}"],
         }
@@ -210,6 +213,7 @@ def inspect_history(path: Path) -> dict:
         return {
             "valid": False,
             "all_contexts_complete": False,
+            "all_contexts_terminal": False,
             "contexts": [],
             "messages": ["history does not contain any tuning contexts"],
         }
@@ -295,6 +299,15 @@ def inspect_history(path: Path) -> dict:
         "valid": valid,
         "all_contexts_complete": valid and bool(summaries) and all(
             summary["complete"] for summary in summaries
+        ),
+        "all_contexts_terminal": valid and bool(summaries) and all(
+            summary["completion_reason"]
+            in {
+                "all_configurations",
+                "maximum_executions",
+                "maximum_retired_configurations",
+            }
+            for summary in summaries
         ),
         "contexts": summaries,
         "messages": messages,
@@ -503,6 +516,7 @@ def run_pair(
     maximum_executions: int | None,
     maximum_retired_configurations: int | None,
     full_coverage: bool,
+    require_terminal_reason: bool,
     model: Path | None = None,
     model_sha256: str | None = None,
     model_runtime_digest: str | None = None,
@@ -591,11 +605,15 @@ def run_pair(
     full_coverage_verified = bool(
         diagnostics is not None and diagnostics["all_contexts_complete"]
     )
+    terminal_verified = bool(
+        diagnostics is not None and diagnostics["all_contexts_terminal"]
+    )
     status = (
         "completed"
         if return_code == 0
         and history_present
         and (not full_coverage or full_coverage_verified)
+        and (not require_terminal_reason or terminal_verified)
         and (strategy != LEARNED_STRATEGY or learning_verified)
         else "failed"
     )
@@ -608,6 +626,9 @@ def run_pair(
             "history_present": history_present,
             "history_diagnostics": diagnostics,
             "full_coverage_verified": full_coverage_verified if full_coverage else None,
+            "terminal_verified": (
+                terminal_verified if require_terminal_reason else None
+            ),
             "learning_validation": learning_diagnostics,
             "learning_verified": (
                 learning_verified if strategy == LEARNED_STRATEGY else None
@@ -709,6 +730,7 @@ def main() -> int:
             if arguments.resume and successful_run(
                 directory,
                 require_full_coverage=arguments.full_coverage,
+                require_terminal_reason=arguments.tune_until_terminal,
                 expected_model_sha256=(
                     model_sha256 if strategy == LEARNED_STRATEGY else None
                 ),
@@ -728,6 +750,7 @@ def main() -> int:
                 arguments.maximum_executions,
                 arguments.maximum_retired_configurations,
                 arguments.full_coverage,
+                arguments.tune_until_terminal,
                 arguments.model if strategy == LEARNED_STRATEGY else None,
                 model_sha256 if strategy == LEARNED_STRATEGY else None,
                 model_runtime_digest if strategy == LEARNED_STRATEGY else None,

@@ -196,6 +196,7 @@ class FullCoverageConfigurationTest(unittest.TestCase):
             )
             self.assertTrue(run.successful_run(directory))
             self.assertFalse(run.successful_run(directory, require_full_coverage=True))
+            self.assertFalse(run.successful_run(directory, require_terminal_reason=True))
 
 
 class LearnedConfigurationTest(unittest.TestCase):
@@ -306,9 +307,17 @@ class HistoryInspectionTest(unittest.TestCase):
         )
         self.assertTrue(diagnostics["valid"])
         self.assertTrue(diagnostics["all_contexts_complete"])
+        self.assertTrue(diagnostics["all_contexts_terminal"])
         self.assertEqual(diagnostics["messages"], [])
         self.assertEqual(diagnostics["contexts"][0]["legal_candidate_count"], 3)
         self.assertEqual(diagnostics["contexts"][0]["coverage"], 1.0)
+
+    def test_non_terminal_history_is_rejected_by_terminal_mode(self) -> None:
+        diagnostics = self.inspect(
+            self.context("none", 1, [False, False, False])
+        )
+        self.assertTrue(diagnostics["valid"])
+        self.assertFalse(diagnostics["all_contexts_terminal"])
 
     def test_execution_cap_explains_partial_exhaustive_coverage(self) -> None:
         diagnostics = self.inspect(

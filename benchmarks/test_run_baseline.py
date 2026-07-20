@@ -2,6 +2,8 @@
 
 import contextlib
 import io
+from pathlib import Path
+import tempfile
 import unittest
 
 import run_baseline
@@ -64,6 +66,23 @@ Time per time step: 0.125 ms.
             run_baseline.reported_runtimes("heatEquation2D", output),
             {"CpuOmpBlocks": 0.00075, "GpuCuda": 0.000125},
         )
+
+    def test_cpu_serial_output_fails_the_baseline_run(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            executable = root / "baseline"
+            executable.write_text(
+                "#!/usr/bin/env bash\nprintf 'Using alpaka accelerator: CpuSerial\\n'\n",
+                encoding="utf-8",
+            )
+            executable.chmod(0o755)
+            metadata = run_baseline.run_once(
+                executable, root / "output", "boundaryIter", 1
+            )
+
+        self.assertEqual(metadata["status"], "failed")
+        self.assertTrue(metadata["unexpected_cpu_serial"])
+        self.assertIn("CpuSerial appeared", metadata["error"])
 
 
 if __name__ == "__main__":
