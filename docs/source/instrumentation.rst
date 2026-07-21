@@ -34,15 +34,47 @@ bundle. Once tuning completes, later ``tuner.enqueue`` calls replay the winner.
 Reuse one ``TunerConfig`` for several tuners when they should share settings
 and a persistence file; every tuner still owns independent runtime state.
 
-Launch-shape convenience
-------------------------
+Launch-shape tuning
+-------------------
 
-``makeTuner(config, device, frameSpec, identity)`` creates correlated
-``numFrames`` and ``frameExtent`` candidates. Omitting ``config`` uses
-``tunerConfig()``. The corresponding ``ThreadSpec`` overload creates paired
-``numBlocks`` and ``numThreads`` candidates. Explicit
-``FrameExtentTuning`` and ``NumFramesTuning`` arguments replace the generated
-candidate sets.
+``makeTuner`` always receives a completed ``TunableBundle``. Its only two
+forms are ``makeTuner(config, tunables, device, identity...)`` and
+``makeTuner(tunables, device, identity...)``; the latter snapshots
+``tunerConfig()``. Entries after the device contribute only to the persistent
+identity. Strings use their value, and supported Alpaka objects such as an
+executor use their Alpaka name.
+
+``tuneFrameExtent`` and ``tuneNumFrames`` create independent named entries.
+Putting both directly in a bundle exposes their Cartesian product:
+
+.. code-block:: cpp
+
+   auto tunables = alpakaTune::TunableBundle{
+       alpakaTune::tuneFrameExtent(frameSpec, frameExtentCandidates),
+       alpakaTune::tuneNumFrames(frameSpec, numFramesCandidates),
+       chunkSize(alpakaTune::RVals{64u, 128u, 256u})};
+
+Use ``makeFrameSpecTuning(frameSpec)`` for the generated defaults plus a lazy
+coverage-preserving relation. A tuning fragment flattens into the enclosing
+bundle alongside ordinary kernel parameters:
+
+.. code-block:: cpp
+
+   auto tunables = alpakaTune::TunableBundle{
+       alpakaTune::makeFrameSpecTuning(frameSpec),
+       chunkSize(alpakaTune::RVals{64u, 128u, 256u})};
+
+Explicit candidates can be correlated with the same factory:
+
+.. code-block:: cpp
+
+   auto frameTuning = alpakaTune::makeFrameSpecTuning(
+       alpakaTune::tuneFrameExtent(frameSpec, frameExtentCandidates),
+       alpakaTune::tuneNumFrames(frameSpec, numFramesCandidates),
+       alpakaTune::preserveCoverage(frameSpec));
+
+``tuneNumBlocks``, ``tuneNumThreads``, and ``makeThreadSpecTuning`` provide the
+corresponding ``ThreadSpec`` interface.
 
 The mirrored Alpaka examples under ``example/`` use the same instrumentation
 pattern. For a complete runtime example, see

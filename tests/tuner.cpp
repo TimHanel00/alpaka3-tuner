@@ -144,7 +144,15 @@ auto main() -> int {
   auto const bundle =
       alpaka::KernelBundle{WriteKernel{}, output.getMdSpan(), runtimeValue};
 
-  for (std::size_t launch = 0u; launch < 6u; ++launch)
+  auto firstObservation = tuner.enqueueObserved(queue, frameSpec, bundle);
+  if (!firstObservation.measured || !firstObservation.runtimeSeconds ||
+      *firstObservation.runtimeSeconds < 0.0 ||
+      firstObservation.candidateIndex >= 3u ||
+      firstObservation.configuration.size() != 1u ||
+      firstObservation.recommendationSeconds < 0.0 ||
+      firstObservation.learnedStatus)
+    return EXIT_FAILURE;
+  for (std::size_t launch = 1u; launch < 6u; ++launch)
     tuner.enqueue(queue, frameSpec, bundle);
   if (!tuner.isTuningComplete() || tuner.bestCandidateIndex() >= 3u ||
       tuner.info().completionReason !=
@@ -157,7 +165,11 @@ auto main() -> int {
   auto cached = alpakaTune::makeTuner(
       alpakaTune::TunerConfig::fromYaml(configuration), tunables, device,
       alpaka::deviceKind::cpu, alpaka::api::host, executor, "tuner-test");
-  cached.enqueue(queue, frameSpec, bundle);
+  auto const cachedObservation =
+      cached.enqueueObserved(queue, frameSpec, bundle);
+  if (cachedObservation.measured || cachedObservation.runtimeSeconds ||
+      !cachedObservation.loadedFromCache)
+    return EXIT_FAILURE;
   alpaka::onHost::wait(queue);
   if (!cached.loadedFromCache() || !cached.isTuningComplete())
     return EXIT_FAILURE;
@@ -210,12 +222,12 @@ auto main() -> int {
   // required, yet the tuner rebuilds the FrameSpec for each candidate.
   auto const frameTunables = alpakaTune::constrain(
       alpakaTune::TunableBundle{
-          alpakaTune::named(numFrames,
-                            alpakaTune::RVals<Index>{
-                                std::vector<Index>{Index{1u}, Index{2u}}}),
-          alpakaTune::named(frameExtent,
-                            alpakaTune::RVals<Index>{
-                                std::vector<Index>{Index{1u}, Index{2u}}})},
+          alpakaTune::tuneNumFrames(frameSpec,
+                                    alpakaTune::RVals<Index>{std::vector<Index>{
+                                        Index{1u}, Index{2u}}}),
+          alpakaTune::tuneFrameExtent(
+              frameSpec, alpakaTune::RVals<Index>{std::vector<Index>{
+                             Index{1u}, Index{2u}}})},
       alpakaTune::restrict(
           numFrames, frameExtent,
           [](alpaka::concepts::VectorOrScalar auto const &frames,
@@ -241,6 +253,28 @@ auto main() -> int {
   if (!reloadedFrame.loadedFromCache() || !reloadedFrame.isTuningComplete())
     return EXIT_FAILURE;
 #endif
+
+  // A correlated launch fragment flattens into the same TunableBundle as an
+  // ordinary kernel parameter. The default factory supplies both launch
+  // entries and their coverage-preserving relation.
+  auto const defaultFrameSpec =
+      alpaka::onHost::FrameSpec{Index{1u}, Index{2u}, executor};
+  auto const defaultFrameTunables = alpakaTune::TunableBundle{
+      alpakaTune::makeFrameSpecTuning(defaultFrameSpec),
+      runtimeValue(alpakaTune::RVals{1, 2})};
+  static_assert(std::remove_cvref_t<decltype(defaultFrameTunables)>::size ==
+                3u);
+  auto defaultFrameTuner =
+      alpakaTune::makeTuner(oneRunConfig(), defaultFrameTunables, device,
+                            executor, "default-frame-fragment-test");
+  for (std::size_t launch = 0u; launch < 4u; ++launch)
+    defaultFrameTuner.enqueue(queue, defaultFrameSpec, bundle);
+  auto const defaultFrameInfo = defaultFrameTuner.info();
+  if (!defaultFrameInfo.tuningComplete ||
+      defaultFrameInfo.candidateCount != 8u ||
+      defaultFrameInfo.rejectedCandidateCount != 4u ||
+      defaultFrameInfo.measuredCandidateCount != 4u)
+    return EXIT_FAILURE;
 
   using StaticFrameExtent = alpaka::CVec<std::size_t, 4u>;
   using AlternateStaticFrameExtent = alpaka::CVec<std::size_t, 2u>;
@@ -302,18 +336,19 @@ auto main() -> int {
   using SequenceLaunchValue = std::integer_sequence<std::size_t, 1u>;
   auto const threadSpec = alpaka::onHost::ThreadSpec{
       StaticLaunchValue{}, StaticLaunchValue{}, executor};
-  auto const numBlocksTunable =
-      numBlocks(alpakaTune::CTypes<StaticLaunchValue, SequenceLaunchValue>{});
-  auto const numThreadsTunable =
-      numThreads(alpakaTune::CTypes<StaticLaunchValue, SequenceLaunchValue>{});
-  auto const threadTunables = alpakaTune::constrain(
-      alpakaTune::TunableBundle{numBlocksTunable, numThreadsTunable},
-      alpakaTune::restrict(
-          numBlocks, numThreads,
-          [](alpaka::concepts::VectorOrScalar auto const &blocks,
-             alpaka::concepts::VectorOrScalar auto const &threads) {
-            return blocks == threads;
-          }));
+  auto const numBlocksTunable = alpakaTune::tuneNumBlocks(
+      threadSpec, alpakaTune::CTypes<StaticLaunchValue, SequenceLaunchValue>{});
+  auto const numThreadsTunable = alpakaTune::tuneNumThreads(
+      threadSpec, alpakaTune::CTypes<StaticLaunchValue, SequenceLaunchValue>{});
+  auto const threadTunables =
+      alpakaTune::TunableBundle{alpakaTune::makeThreadSpecTuning(
+          numBlocksTunable, numThreadsTunable,
+          alpakaTune::restrict(
+              numBlocks, numThreads,
+              [](alpaka::concepts::VectorOrScalar auto const &blocks,
+                 alpaka::concepts::VectorOrScalar auto const &threads) {
+                return blocks == threads;
+              }))};
   auto threadTuner =
       alpakaTune::makeTuner(alpakaTune::TunerConfig::fromYaml(configuration),
                             threadTunables, device, alpaka::deviceKind::cpu,

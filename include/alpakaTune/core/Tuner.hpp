@@ -276,11 +276,20 @@ public:
                   .tuningComplete = m_complete,
                   .loadedFromCache = m_loadedFromCache,
                   .executionBudgetReached = m_executionBudgetReached,
-                  .completionReason = m_completionReason};
+                  .completionReason = m_completionReason,
+                  .bestCandidateIndex = std::nullopt,
+                  .bestConfiguration = std::nullopt,
+                  .learnedStatus = std::nullopt,
+                  .learnedAdapterUpdateCount = 0u};
     if (m_complete &&
         m_bestCandidate != std::numeric_limits<std::size_t>::max()) {
       result.bestCandidateIndex = m_bestCandidate;
       result.bestConfiguration = normalizedConfiguration(m_bestCandidate);
+    }
+    if (auto const *learned =
+            dynamic_cast<LearnedHybridStrategy const *>(m_strategy.get())) {
+      result.learnedStatus = learnedHybridStatusName(learned->status());
+      result.learnedAdapterUpdateCount = learned->adapterUpdateCount();
     }
     return result;
   }
@@ -301,6 +310,16 @@ public:
             typename... Args>
   void enqueue(Queue const &queue, FrameSpec const &frameSpec,
                alpaka::KernelBundle<Kernel, Args...> const &prototype) {
+    static_cast<void>(enqueueObserved(queue, frameSpec, prototype));
+  }
+
+  template <typename Queue, typename FrameSpec, typename Kernel,
+            typename... Args>
+  [[nodiscard]] auto
+  enqueueObserved(Queue const &queue, FrameSpec const &frameSpec,
+                  alpaka::KernelBundle<Kernel, Args...> const &prototype)
+      -> LaunchObservation {
+    m_recommendationSecondsSinceLastLaunch = 0.0;
     if (!(queue.getDevice() == m_device))
       throw std::invalid_argument{
           "The queue device does not match this tuner's device."};
@@ -326,8 +345,11 @@ public:
                    : nextCandidate();
     auto const candidate = selection.candidateIndex;
     m_lastCandidate = candidate;
-    LaunchCall<Queue, FrameSpec, Bundle> call{this, &queue, &frameSpec,
-                                              &prototype};
+    LaunchCall<Queue, FrameSpec, Bundle> call{.tuner = this,
+                                              .queue = &queue,
+                                              .frameSpec = &frameSpec,
+                                              .prototype = &prototype,
+                                              .runtimeSeconds = std::nullopt};
     auto const key = compileVariantKey(indicesFor(candidate));
     m_compileVariants.at(m_compileVariantIndices.at(key))(
         &call, candidate, !m_complete, selection.beginActivation);
@@ -335,6 +357,18 @@ public:
     if (!m_complete && m_queue->empty() &&
         m_scheduledCount + m_rejectedCount == m_candidateCount)
       finishTuning();
+
+    auto const tunerInfo = info();
+    return LaunchObservation{
+        .candidateIndex = candidate,
+        .configuration = normalizedConfiguration(candidate),
+        .runtimeSeconds = call.runtimeSeconds,
+        .recommendationSeconds = m_recommendationSecondsSinceLastLaunch,
+        .measured = call.runtimeSeconds.has_value(),
+        .tuningComplete = m_complete,
+        .loadedFromCache = m_loadedFromCache,
+        .learnedStatus = tunerInfo.learnedStatus,
+        .learnedAdapterUpdateCount = tunerInfo.learnedAdapterUpdateCount};
   }
 
   template <typename Queue, typename FrameSpec, typename Kernel,
@@ -987,10 +1021,15 @@ private:
   [[nodiscard]] auto recommendCandidate() -> std::optional<std::size_t> {
     if (m_scheduledCount + m_rejectedCount == m_candidateCount)
       return std::nullopt;
+    auto const start = std::chrono::steady_clock::now();
     auto const strategyContext = TunerStrategyView{*this};
     auto recommendation = m_strategy->recommend(strategyContext);
     validateParameterConfiguration(recommendation, std::span{m_dimensionSizes});
-    return nearestUnscheduledCandidate(recommendation);
+    auto const candidate = nearestUnscheduledCandidate(recommendation);
+    m_recommendationSecondsSinceLastLaunch +=
+        std::chrono::duration<double>{std::chrono::steady_clock::now() - start}
+            .count();
+    return candidate;
   }
 
   void initialiseScheduling() {
@@ -1048,6 +1087,7 @@ private:
     Queue const *queue;
     FrameSpec const *frameSpec;
     Bundle const *prototype;
+    std::optional<double> runtimeSeconds;
   };
 
   using CompileVariantFunctor =
@@ -1105,7 +1145,7 @@ private:
             *static_cast<LaunchCall<Queue, FrameSpec, Bundle> *>(rawCall);
         call.tuner->template launchCandidate<CompileValues...>(
             *call.queue, *call.frameSpec, *call.prototype, candidate, measure,
-            beginActivation);
+            beginActivation, call.runtimeSeconds);
       });
     } else {
       using Entry = std::tuple_element_t<EntryIndex, Entries>;
@@ -1247,7 +1287,8 @@ private:
             typename Bundle>
   void launchCandidate(Queue const &queue, LaunchSpec const &prototypeLaunch,
                        Bundle const &prototype, std::size_t candidate,
-                       bool measure, bool beginActivation) {
+                       bool measure, bool beginActivation,
+                       std::optional<double> &runtimeSeconds) {
     auto const indices = indicesFor(candidate);
     auto const bundle = rebuildBundle<CompileValues...>(prototype, indices);
 
@@ -1334,8 +1375,8 @@ private:
     launch();
     alpaka::onHost::wait(queue);
     auto const elapsed = std::chrono::steady_clock::now() - start;
-    static_cast<void>(
-        history.record(std::chrono::duration<double>{elapsed}.count()));
+    runtimeSeconds = std::chrono::duration<double>{elapsed}.count();
+    static_cast<void>(history.record(*runtimeSeconds));
     retireByMannWhitneyIfWarranted(candidate);
     if (history.isFinished()) {
       recordRetiredConfiguration(candidate);
@@ -1917,6 +1958,7 @@ private:
   std::string m_launchSpecification;
   std::size_t m_bestCandidate{std::numeric_limits<std::size_t>::max()};
   std::size_t m_lastCandidate{std::numeric_limits<std::size_t>::max()};
+  double m_recommendationSecondsSinceLastLaunch{};
   TunerCompletionReason m_completionReason{TunerCompletionReason::none};
   bool m_complete{};
   bool m_loadedFromCache{};
@@ -1927,9 +1969,7 @@ private:
 };
 
 template <typename TunablesType, typename Device, typename... IdentityEntries>
-  requires requires {
-    detail::TunablesTraits<std::remove_cvref_t<TunablesType>>::dimensionCount;
-  }
+  requires detail::isTunableBundle<TunablesType>
 [[nodiscard]] auto makeTuner(TunerConfig config, TunablesType tunables,
                              Device device,
                              IdentityEntries const &...identityEntries) {
@@ -1945,9 +1985,7 @@ template <typename TunablesType, typename Device, typename... IdentityEntries>
 }
 
 template <typename TunablesType, typename Device, typename... IdentityEntries>
-  requires requires {
-    detail::TunablesTraits<std::remove_cvref_t<TunablesType>>::dimensionCount;
-  }
+  requires detail::isTunableBundle<TunablesType>
 [[nodiscard]] auto makeTuner(TunablesType tunables, Device device,
                              IdentityEntries const &...identityEntries) {
   return makeTuner(tunerConfig(), std::move(tunables), std::move(device),

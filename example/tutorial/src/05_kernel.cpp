@@ -98,17 +98,18 @@ void testVectorAddKernel(alpaka::onHost::concepts::Device auto device,
 
   // launch the 1-dimensional kernel with scalar size
   auto frameSpec = alpaka::onHost::FrameSpec{32u, 32u, computeExec};
-  auto const numFramesTuning =
-      alpakaTune::NumFramesTuning{alpakaTune::generate::linSpace(
-          Vec1D{1u}, Vec1D{frameSpec.getNumFrames()}, Vec1D{1u})};
-  auto const frameExtentTuning = alpakaTune::FrameExtentTuning{
-      alpakaTune::generate::linSpace(Vec1D{1u}, Vec1D{512u}, Vec1D{1u})};
-  auto scalarTuning =
-      alpakaTune::makeTuner(device, frameSpec, "tutorial/05/scalar",
-                            numFramesTuning, frameExtentTuning);
-  auto vectorTuning =
-      alpakaTune::makeTuner(device, frameSpec, "tutorial/05/vector",
-                            numFramesTuning, frameExtentTuning);
+  auto const tunables = alpakaTune::TunableBundle{
+      alpakaTune::tuneNumFrames(
+          frameSpec,
+          alpakaTune::generate::linSpace(
+              Vec1D{1u}, Vec1D{frameSpec.getNumFrames()}, Vec1D{1u})),
+      alpakaTune::tuneFrameExtent(
+          frameSpec,
+          alpakaTune::generate::linSpace(Vec1D{1u}, Vec1D{512u}, Vec1D{1u}))};
+  auto scalarTuning = alpakaTune::makeTuner(
+      tunables, device, frameSpec.getExecutor(), "tutorial/05/scalar");
+  auto vectorTuning = alpakaTune::makeTuner(
+      tunables, device, frameSpec.getExecutor(), "tutorial/05/vector");
   verify(scalarTuning.info().candidateCount >= 2000u);
   verify(vectorTuning.info().candidateCount >= 2000u);
 
@@ -207,12 +208,16 @@ void testVectorAddKernel3D(alpaka::onHost::concepts::Device auto device,
   // launch the 3-dimensional kernel
   auto frameSpec =
       alpaka::onHost::FrameSpec{Vec3D{5, 5, 1}, Vec3D{4, 4, 4}, computeExec};
-  auto tuner = alpakaTune::makeTuner(
-      device, frameSpec, "tutorial/05/3d",
-      alpakaTune::NumFramesTuning{alpakaTune::generate::linSpace(
-          Vec3D::fill(1u), Vec3D{frameSpec.getNumFrames()}, Vec3D::fill(1u))},
-      alpakaTune::FrameExtentTuning{alpakaTune::generate::linSpace(
-          Vec3D::fill(1u), Vec3D::fill(5u), Vec3D::fill(1u))});
+  auto const tunables = alpakaTune::TunableBundle{
+      alpakaTune::tuneNumFrames(frameSpec, alpakaTune::generate::linSpace(
+                                               Vec3D::fill(1u),
+                                               Vec3D{frameSpec.getNumFrames()},
+                                               Vec3D::fill(1u))),
+      alpakaTune::tuneFrameExtent(
+          frameSpec, alpakaTune::generate::linSpace(
+                         Vec3D::fill(1u), Vec3D::fill(5u), Vec3D::fill(1u)))};
+  auto tuner = alpakaTune::makeTuner(tunables, device, frameSpec.getExecutor(),
+                                     "tutorial/05/3d");
   verify(tuner.info().candidateCount >= 2000u);
   std::cout << "Testing VectorAddKernel3D with vector indices with a grid of "
             << frameSpec << "\n";

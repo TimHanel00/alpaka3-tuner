@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <string>
 
 namespace alpakaTune {
 
@@ -45,6 +46,20 @@ struct TunerInfo {
   TunerCompletionReason completionReason{TunerCompletionReason::none};
   std::optional<std::size_t> bestCandidateIndex;
   std::optional<ParameterConfiguration> bestConfiguration;
+  std::optional<std::string> learnedStatus;
+  std::size_t learnedAdapterUpdateCount{};
+};
+
+struct LaunchObservation {
+  std::size_t candidateIndex{};
+  ParameterConfiguration configuration;
+  std::optional<double> runtimeSeconds;
+  double recommendationSeconds{};
+  bool measured{};
+  bool tuningComplete{};
+  bool loadedFromCache{};
+  std::optional<std::string> learnedStatus;
+  std::size_t learnedAdapterUpdateCount{};
 };
 
 } // namespace alpakaTune

@@ -205,12 +205,16 @@ auto example(T_Cfg const &cfg, size_t numElements, size_t numberOfRuns,
   uint32_t elementsPerWorker = getNumElemPerThread<Data>(queue);
   auto dataBlocking = onHost::FrameSpec{
       divCeil(extent, frameExtent * elementsPerWorker), frameExtent, exec};
-  auto tuner = alpakaTune::makeTuner(
-      devAcc, dataBlocking, "grayScale",
-      alpakaTune::NumFramesTuning{alpakaTune::generate::linSpace(
-          IdxVec{1u}, IdxVec{dataBlocking.getNumFrames()}, IdxVec{1u})},
-      alpakaTune::FrameExtentTuning{alpakaTune::generate::linSpace(
-          IdxVec{1u}, IdxVec{512u}, IdxVec{1u})});
+  auto const tunables = alpakaTune::TunableBundle{
+      alpakaTune::tuneNumFrames(
+          dataBlocking,
+          alpakaTune::generate::linSpace(
+              IdxVec{1u}, IdxVec{dataBlocking.getNumFrames()}, IdxVec{1u})),
+      alpakaTune::tuneFrameExtent(
+          dataBlocking, alpakaTune::generate::linSpace(IdxVec{1u}, IdxVec{512u},
+                                                       IdxVec{1u}))};
+  auto tuner = alpakaTune::makeTuner(tunables, devAcc,
+                                     dataBlocking.getExecutor(), "grayScale");
   if (tuner.info().candidateCount < 2000u)
     throw std::logic_error{
         "grayScale must expose at least 2000 tuning configurations"};

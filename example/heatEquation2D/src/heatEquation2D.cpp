@@ -180,13 +180,19 @@ int example(auto const deviceSpec, auto const computeExec,
       stencilTunables, devAcc, computeExec, "heatEquation2D/stencil");
   using BorderVec = typename std::remove_cvref_t<ALPAKA_TYPEOF(
       dataBlockingBorder.getNumFrames())>::UniVec;
-  auto boundaryTuning = alpakaTune::makeTuner(
-      devAcc, dataBlockingBorder, "heatEquation2D/boundary",
-      alpakaTune::NumFramesTuning{alpakaTune::generate::linSpace(
-          BorderVec::fill(1u), BorderVec{dataBlockingBorder.getNumFrames()},
-          BorderVec::fill(1u))},
-      alpakaTune::FrameExtentTuning{alpakaTune::generate::linSpace(
-          BorderVec::fill(1u), BorderVec::fill(512u), BorderVec::fill(1u))});
+  auto const boundaryTunables = alpakaTune::TunableBundle{
+      alpakaTune::tuneNumFrames(
+          dataBlockingBorder,
+          alpakaTune::generate::linSpace(
+              BorderVec::fill(1u), BorderVec{dataBlockingBorder.getNumFrames()},
+              BorderVec::fill(1u))),
+      alpakaTune::tuneFrameExtent(
+          dataBlockingBorder, alpakaTune::generate::linSpace(
+                                  BorderVec::fill(1u), BorderVec::fill(512u),
+                                  BorderVec::fill(1u)))};
+  auto boundaryTuning = alpakaTune::makeTuner(boundaryTunables, devAcc,
+                                              dataBlockingBorder.getExecutor(),
+                                              "heatEquation2D/boundary");
   assert(stencilTuning.info().candidateCount >= 2000u);
   assert(boundaryTuning.info().candidateCount >= 2000u);
 
@@ -201,10 +207,9 @@ int example(auto const deviceSpec, auto const computeExec,
   // state, without changing the example's default scientific behavior.
   std::size_t completedSteps = 0u;
   for (uint32_t step = 1;
-       step <= numTimeSteps ||
-       (extendsUntilTuningTerminates(tuningRunMode) &&
-        (!stencilTuning.isTuningComplete() ||
-         !boundaryTuning.isTuningComplete()));
+       step <= numTimeSteps || (extendsUntilTuningTerminates(tuningRunMode) &&
+                                (!stencilTuning.isTuningComplete() ||
+                                 !boundaryTuning.isTuningComplete()));
        ++step) {
     ++completedSteps;
     // Compute next values
@@ -267,13 +272,14 @@ int example(auto const deviceSpec, auto const computeExec,
                 << " time steps and completed every tuning context."
                 << std::endl;
     } else {
-      std::cout << "Terminal-state tuning mode executed " << completedSteps
-                << " time steps and reached a terminal state for every tuning "
-                   "context (stencil: "
-                << alpakaTune::completionReasonName(stencilInfo.completionReason)
-                << ", boundary: "
-                << alpakaTune::completionReasonName(boundaryInfo.completionReason)
-                << ")." << std::endl;
+      std::cout
+          << "Terminal-state tuning mode executed " << completedSteps
+          << " time steps and reached a terminal state for every tuning "
+             "context (stencil: "
+          << alpakaTune::completionReasonName(stencilInfo.completionReason)
+          << ", boundary: "
+          << alpakaTune::completionReasonName(boundaryInfo.completionReason)
+          << ")." << std::endl;
     }
     return EXIT_SUCCESS;
   }
@@ -346,8 +352,7 @@ auto main(int argc, char *argv[]) -> int {
 
   static option const longOptions[] = {
       {"tune-until-complete", no_argument, nullptr, 'T'},
-      {"tune-until-terminal", no_argument, nullptr,
-       tuneUntilTerminalOption},
+      {"tune-until-terminal", no_argument, nullptr, tuneUntilTerminalOption},
       {nullptr, 0, nullptr, 0}};
   while ((opt = getopt_long(argc, argv, "hn:t:d:cT", longOptions, nullptr)) !=
          -1) {

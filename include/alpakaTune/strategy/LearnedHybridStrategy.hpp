@@ -134,6 +134,18 @@ public:
     if (m_status == LearnedHybridStatus::active)
       reconcileObservations(context);
 
+    if (m_requestedCandidateCount == m_candidates.size()) {
+      auto const position = m_status == LearnedHybridStatus::active
+                                ? m_exploitationOrder.front()
+                                : m_fallbackOrder.front();
+      m_lastSelectionReason =
+          m_status == LearnedHybridStatus::active
+              ? LearnedSelectionReason::predictedFast
+              : LearnedSelectionReason::fallbackSpaceFilling;
+      ++m_selectionCount;
+      return m_candidates[position].configuration;
+    }
+
     auto position = std::size_t{};
     if (m_status == LearnedHybridStatus::active) {
       auto const explore = m_selectionCount % m_options.selectionsPerCycle >=
@@ -149,6 +161,7 @@ public:
 
     auto &selected = m_candidates.at(position);
     selected.requested = true;
+    ++m_requestedCandidateCount;
     if (m_status == LearnedHybridStatus::active)
       m_pendingObservationPositions.push_back(position);
     ++m_selectionCount;
@@ -561,6 +574,7 @@ private:
   std::size_t m_observationsSinceUpdate{};
   std::size_t m_adapterUpdateCount{};
   std::size_t m_selectionCount{};
+  std::size_t m_requestedCandidateCount{};
   LearnedSelectionReason m_lastSelectionReason{
       LearnedSelectionReason::fallbackSpaceFilling};
   bool m_initialised{};

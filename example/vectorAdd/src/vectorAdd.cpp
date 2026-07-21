@@ -130,12 +130,16 @@ auto example(auto const deviceSpec, auto const exec, size_t numElements,
   uint32_t elementsPerWorker = getNumElemPerThread<Data>(queue);
   auto dataBlocking = onHost::FrameSpec{
       divCeil(extent, chunkSize * elementsPerWorker), chunkSize, exec};
-  auto tuner = alpakaTune::makeTuner(
-      devAcc, dataBlocking, "vectorAdd",
-      alpakaTune::NumFramesTuning{alpakaTune::generate::linSpace(
-          IdxVec{1u}, IdxVec{dataBlocking.getNumFrames()}, IdxVec{1u})},
-      alpakaTune::FrameExtentTuning{alpakaTune::generate::linSpace(
-          IdxVec{1u}, IdxVec{512u}, IdxVec{1u})});
+  auto const tunables = alpakaTune::TunableBundle{
+      alpakaTune::tuneNumFrames(
+          dataBlocking,
+          alpakaTune::generate::linSpace(
+              IdxVec{1u}, IdxVec{dataBlocking.getNumFrames()}, IdxVec{1u})),
+      alpakaTune::tuneFrameExtent(
+          dataBlocking, alpakaTune::generate::linSpace(IdxVec{1u}, IdxVec{512u},
+                                                       IdxVec{1u}))};
+  auto tuner = alpakaTune::makeTuner(tunables, devAcc,
+                                     dataBlocking.getExecutor(), "vectorAdd");
   if (tuner.info().candidateCount < 2000u)
     throw std::logic_error{
         "vectorAdd must expose at least 2000 tuning configurations"};

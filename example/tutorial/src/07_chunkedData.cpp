@@ -201,13 +201,18 @@ void testVectorAddKernel(alpaka::onHost::concepts::Device auto device,
 
   auto frameSpec = alpaka::onHost::FrameSpec{
       numFrames, alpaka::CVec<uint32_t, chunkSize>{}, computeExec};
-  auto tuner = alpakaTune::makeTuner(
-      device, frameSpec, "tutorial/07/1d",
-      alpakaTune::NumFramesTuning{alpakaTune::generate::linSpace(
-          Vec1D{1u}, Vec1D{frameSpec.getNumFrames()}, Vec1D{1u})},
-      alpakaTune::FrameExtentTuning{alpakaTune::CTypes<
-          alpaka::CVec<uint32_t, 16>, alpaka::CVec<uint32_t, 32>,
-          alpaka::CVec<uint32_t, 64>, alpaka::CVec<uint32_t, 128>>{}});
+  auto const tunables = alpakaTune::TunableBundle{
+      alpakaTune::tuneNumFrames(
+          frameSpec,
+          alpakaTune::generate::linSpace(
+              Vec1D{1u}, Vec1D{frameSpec.getNumFrames()}, Vec1D{1u})),
+      alpakaTune::tuneFrameExtent(
+          frameSpec,
+          alpakaTune::CTypes<
+              alpaka::CVec<uint32_t, 16>, alpaka::CVec<uint32_t, 32>,
+              alpaka::CVec<uint32_t, 64>, alpaka::CVec<uint32_t, 128>>{})};
+  auto tuner = alpakaTune::makeTuner(tunables, device, frameSpec.getExecutor(),
+                                     "tutorial/07/1d");
   verify(tuner.info().candidateCount >= 2000u);
 
   // fill the output buffer with zeros; the size is known from the buffer
@@ -289,14 +294,17 @@ void testVectorAddKernel3D(alpaka::onHost::concepts::Device auto device,
 
   auto frameSpec =
       alpaka::onHost::FrameSpec{numFrames, chunkExtents, computeExec};
-  auto tuner = alpakaTune::makeTuner(
-      device, frameSpec, "tutorial/07/3d",
-      alpakaTune::NumFramesTuning{alpakaTune::generate::linSpace(
-          Vec3D::fill(1u), Vec3D{frameSpec.getNumFrames()}, Vec3D::fill(1u))},
-      alpakaTune::FrameExtentTuning{
-          alpakaTune::CTypes<alpaka::CVec<uint32_t, 1, 1, 1>,
-                             alpaka::CVec<uint32_t, 2, 2, 2>,
-                             alpaka::CVec<uint32_t, 4, 4, 2>>{}});
+  auto const tunables = alpakaTune::TunableBundle{
+      alpakaTune::tuneNumFrames(frameSpec, alpakaTune::generate::linSpace(
+                                               Vec3D::fill(1u),
+                                               Vec3D{frameSpec.getNumFrames()},
+                                               Vec3D::fill(1u))),
+      alpakaTune::tuneFrameExtent(
+          frameSpec, alpakaTune::CTypes<alpaka::CVec<uint32_t, 1, 1, 1>,
+                                        alpaka::CVec<uint32_t, 2, 2, 2>,
+                                        alpaka::CVec<uint32_t, 4, 4, 2>>{})};
+  auto tuner = alpakaTune::makeTuner(tunables, device, frameSpec.getExecutor(),
+                                     "tutorial/07/3d");
   verify(tuner.info().candidateCount >= 2000u);
 
   std::cout << "Testing VectorAddKernel3D with vector indices with a grid of "

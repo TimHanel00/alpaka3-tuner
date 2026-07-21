@@ -6,6 +6,9 @@ A mutable `TunerConfig` creates device-bound `Tuner` objects through
 performs one noise-cancelled tuning launch, then later calls enqueue the
 persistent winner. Runtime (`RVals`) and compile-time
 (`CVals`) candidates share one named `Tunables` configuration.
+`makeTuner` has exactly two forms: one taking an explicit `TunerConfig`, and
+one using `tunerConfig()`; both require the tunable bundle and device before
+any identity-only names or Alpaka objects.
 
 The full guide, including FetchContent, installed-package, launch-tuning, and
 compile-time-tuning examples, is built with Sphinx for Read the Docs under

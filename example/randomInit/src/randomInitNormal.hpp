@@ -142,13 +142,18 @@ int exampleDispatch(auto const cfg, uint32_t numElements, auto const &mean,
       onHost::getFrameSpec(device, computeExec, Vec{blockSizeNormal});
   using LaunchVec = typename std::remove_cvref_t<ALPAKA_TYPEOF(
       frameSpec.getNumFrames())>::UniVec;
-  auto tuner = alpakaTune::makeTuner(
-      device, frameSpec, "randomInit/normal",
-      alpakaTune::NumFramesTuning{alpakaTune::generate::linSpace(
-          LaunchVec::fill(1u), LaunchVec{frameSpec.getNumFrames()},
-          LaunchVec::fill(1u))},
-      alpakaTune::FrameExtentTuning{alpakaTune::generate::linSpace(
-          LaunchVec::fill(1u), LaunchVec::fill(512u), LaunchVec::fill(1u))});
+  auto const tunables = alpakaTune::TunableBundle{
+      alpakaTune::tuneNumFrames(
+          frameSpec,
+          alpakaTune::generate::linSpace(LaunchVec::fill(1u),
+                                         LaunchVec{frameSpec.getNumFrames()},
+                                         LaunchVec::fill(1u))),
+      alpakaTune::tuneFrameExtent(
+          frameSpec, alpakaTune::generate::linSpace(LaunchVec::fill(1u),
+                                                    LaunchVec::fill(512u),
+                                                    LaunchVec::fill(1u)))};
+  auto tuner = alpakaTune::makeTuner(tunables, device, frameSpec.getExecutor(),
+                                     "randomInit/normal");
   assert(tuner.info().candidateCount >= 2000u);
 
   onHost::Queue queue = device.makeQueue();

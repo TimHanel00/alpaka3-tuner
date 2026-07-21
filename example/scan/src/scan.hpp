@@ -182,15 +182,18 @@ void scan(auto &exec, auto &devAcc, auto &queue,
   auto const frameSpec = onHost::FrameSpec{numLargeChunks, chunkExtent, exec};
   using LaunchVec = typename std::remove_cvref_t<ALPAKA_TYPEOF(
       frameSpec.getNumFrames())>::UniVec;
-  auto const numFramesTuning =
-      alpakaTune::NumFramesTuning{alpakaTune::generate::linSpace(
-          LaunchVec::fill(1u), LaunchVec{frameSpec.getNumFrames()},
-          LaunchVec::fill(1u))};
-  auto const frameExtentTuning =
-      alpakaTune::FrameExtentTuning{alpakaTune::generate::linSpace(
-          LaunchVec::fill(1u), LaunchVec::fill(512u), LaunchVec::fill(1u))};
-  auto scanTuning = alpakaTune::makeTuner(devAcc, frameSpec, "scan/blocks",
-                                          numFramesTuning, frameExtentTuning);
+  auto const numFramesTuning = alpakaTune::tuneNumFrames(
+      frameSpec, alpakaTune::generate::linSpace(
+                     LaunchVec::fill(1u), LaunchVec{frameSpec.getNumFrames()},
+                     LaunchVec::fill(1u)));
+  auto const frameExtentTuning = alpakaTune::tuneFrameExtent(
+      frameSpec,
+      alpakaTune::generate::linSpace(LaunchVec::fill(1u), LaunchVec::fill(512u),
+                                     LaunchVec::fill(1u)));
+  auto const scanTunables =
+      alpakaTune::TunableBundle{numFramesTuning, frameExtentTuning};
+  auto scanTuning = alpakaTune::makeTuner(
+      scanTunables, devAcc, frameSpec.getExecutor(), "scan/blocks");
 
   if (frameSpec.getNumFrames() > 1_idx) {
     // problem does not fit in 1 frame, recurse
@@ -206,15 +209,21 @@ void scan(auto &exec, auto &devAcc, auto &queue,
         CVec<IdxType, largeChunkExtents.x()>{}, exec};
     using AddLaunchVec = typename std::remove_cvref_t<ALPAKA_TYPEOF(
         addIncrementsFrameSpec.getNumFrames())>::UniVec;
-    auto addTuning = alpakaTune::makeTuner(
-        devAcc, addIncrementsFrameSpec, "scan/increments",
-        alpakaTune::NumFramesTuning{alpakaTune::generate::linSpace(
-            AddLaunchVec::fill(1u),
-            AddLaunchVec{addIncrementsFrameSpec.getNumFrames()},
-            AddLaunchVec::fill(1u))},
-        alpakaTune::FrameExtentTuning{alpakaTune::generate::linSpace(
-            AddLaunchVec::fill(1u), AddLaunchVec::fill(512u),
-            AddLaunchVec::fill(1u))});
+    auto const addTunables = alpakaTune::TunableBundle{
+        alpakaTune::tuneNumFrames(
+            addIncrementsFrameSpec,
+            alpakaTune::generate::linSpace(
+                AddLaunchVec::fill(1u),
+                AddLaunchVec{addIncrementsFrameSpec.getNumFrames()},
+                AddLaunchVec::fill(1u))),
+        alpakaTune::tuneFrameExtent(
+            addIncrementsFrameSpec,
+            alpakaTune::generate::linSpace(AddLaunchVec::fill(1u),
+                                           AddLaunchVec::fill(512u),
+                                           AddLaunchVec::fill(1u)))};
+    auto addTuning = alpakaTune::makeTuner(addTunables, devAcc,
+                                           addIncrementsFrameSpec.getExecutor(),
+                                           "scan/increments");
     // enqueue the kernel execution tasks
     auto const scanBundle =
         KernelBundle{scanBlocks, numLargeChunks, chunkExtent,

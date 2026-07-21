@@ -3,8 +3,8 @@ Launch tuning
 
 A tuner owns the tuning state for one device and one kernel bundle type.
 Construct it from a ``TunerConfig`` and named ``TunableBundle``, then pass the
-device plus optional,
-identity-only Alpaka or application entries. Alpaka ``deviceKind``, ``api``,
+device plus optional identity-only Alpaka or application entries. Alpaka
+``deviceKind``, ``api``,
 ``Device``, and executor objects use their Alpaka name; strings and values
 accepted by ``std::to_string`` are also accepted.
 
@@ -38,6 +38,12 @@ vector, spell the element type and provide a vector of values:
 ``generate::linSpace(first, last, step)`` and
 ``generate::logSpace(first, last, factor)`` provide the corresponding scalar
 or Alpaka-vector runtime candidates.
+
+Runtime candidate lists may be assembled from configuration files, command
+line arguments, device discovery, or other runtime state. ``makeTuner`` moves
+or copies the completed bundle into the tuner. Candidate dimensions, indices,
+scheduling state, and the persistence fingerprint are fixed from that
+snapshot; candidate lists do not change during tuning.
 
 Multidimensional parameters
 ---------------------------

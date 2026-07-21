@@ -44,20 +44,59 @@ inline constexpr auto numFrames = ALPAKA_TUNE_TUNABLE("numFrames");
 inline constexpr auto numBlocks = ALPAKA_TUNE_TUNABLE("numBlocks");
 inline constexpr auto numThreads = ALPAKA_TUNE_TUNABLE("numThreads");
 
-/** Candidate representations for the logical extent of a FrameSpec. */
-template <typename T_Values> struct FrameExtentTuning {
-  T_Values values;
-};
+/** One independent FrameSpec frame-extent tuning entry. */
+template <alpaka::onHost::concepts::FrameSpec T_FrameSpec, typename T_Values>
+[[nodiscard]] auto tuneFrameExtent(T_FrameSpec const &, T_Values values) {
+  return frameExtent(std::move(values));
+}
 
-template <typename T_Values>
-FrameExtentTuning(T_Values) -> FrameExtentTuning<T_Values>;
+/** One independent FrameSpec frame-count tuning entry. */
+template <alpaka::onHost::concepts::FrameSpec T_FrameSpec, typename T_Values>
+[[nodiscard]] auto tuneNumFrames(T_FrameSpec const &, T_Values values) {
+  return numFrames(std::move(values));
+}
 
-template <typename T_Values> struct NumFramesTuning {
-  T_Values values;
-};
+/** One independent ThreadSpec block-count tuning entry. */
+template <alpaka::onHost::concepts::ThreadSpec T_ThreadSpec, typename T_Values>
+[[nodiscard]] auto tuneNumBlocks(T_ThreadSpec const &, T_Values values) {
+  return numBlocks(std::move(values));
+}
 
-template <typename T_Values>
-NumFramesTuning(T_Values) -> NumFramesTuning<T_Values>;
+/** One independent ThreadSpec thread-count tuning entry. */
+template <alpaka::onHost::concepts::ThreadSpec T_ThreadSpec, typename T_Values>
+[[nodiscard]] auto tuneNumThreads(T_ThreadSpec const &, T_Values values) {
+  return numThreads(std::move(values));
+}
+
+/** Keep the logical coverage of correlated FrameSpec candidates unchanged. */
+template <alpaka::onHost::concepts::FrameSpec T_FrameSpec>
+[[nodiscard]] auto preserveCoverage(T_FrameSpec const &frameSpec) {
+  return alpakaTune::restrict(
+      numFrames, frameExtent,
+      [originalNumFrames = frameSpec.getNumFrames(),
+       originalFrameExtents = frameSpec.getFrameExtents()](
+          alpaka::concepts::VectorOrScalar auto const &candidateNumFrames,
+          alpaka::concepts::VectorOrScalar auto const &candidateFrameExtent) {
+        return detail::hasMatchingCoverage(
+            candidateNumFrames, candidateFrameExtent, originalNumFrames,
+            originalFrameExtents);
+      });
+}
+
+/** Keep the logical coverage of correlated ThreadSpec candidates unchanged. */
+template <alpaka::onHost::concepts::ThreadSpec T_ThreadSpec>
+[[nodiscard]] auto preserveCoverage(T_ThreadSpec const &threadSpec) {
+  return alpakaTune::restrict(
+      numBlocks, numThreads,
+      [originalNumBlocks = threadSpec.getNumBlocks(),
+       originalNumThreads = threadSpec.getNumThreads()](
+          alpaka::concepts::VectorOrScalar auto const &candidateNumBlocks,
+          alpaka::concepts::VectorOrScalar auto const &candidateNumThreads) {
+        return detail::hasMatchingCoverage(
+            candidateNumBlocks, candidateNumThreads, originalNumBlocks,
+            originalNumThreads);
+      });
+}
 
 template <typename T_NumFrames, typename T_FrameExtents>
 [[nodiscard]] auto frameCandidates(T_NumFrames const &numFramesValue,
@@ -150,7 +189,7 @@ matchingNumFrames(T_NumFrames const &originalNumFramesValue,
         originalNumFrames[dimension] * originalFrameExtents[dimension];
     if (candidateExtents[dimension] == 0u ||
         coverage % candidateExtents[dimension] != 0u)
-      throw std::invalid_argument{"Every FrameExtentTuning candidate must "
+      throw std::invalid_argument{"Every frame-extent candidate must "
                                   "divide the original logical extent."};
     result[dimension] = coverage / candidateExtents[dimension];
   }
@@ -175,15 +214,14 @@ void appendCompileTimeNumFrames(
 }
 
 template <typename T_NumFrames, typename T_FrameExtents, typename T_Values>
-[[nodiscard]] auto
-frameCandidates(T_NumFrames const &originalNumFrames,
-                T_FrameExtents const &originalFrameExtents,
-                FrameExtentTuning<T_Values> frameExtentTuning) {
+[[nodiscard]] auto frameCandidates(T_NumFrames const &originalNumFrames,
+                                   T_FrameExtents const &originalFrameExtents,
+                                   T_Values frameExtentValues) {
   using NumFrames = std::remove_cvref_t<T_NumFrames>;
   using RuntimeNumFrames = typename NumFrames::UniVec;
   auto numFrameValues = std::vector<RuntimeNumFrames>{};
   if constexpr (alpakaTune::detail::isRVals<T_Values>) {
-    for (auto const &candidate : frameExtentTuning.values.values())
+    for (auto const &candidate : frameExtentValues.values())
       numFrameValues.push_back(matchingNumFrames(
           originalNumFrames, originalFrameExtents, candidate));
   } else if constexpr (alpakaTune::detail::isCTypes<T_Values>) {
@@ -192,146 +230,89 @@ frameCandidates(T_NumFrames const &originalNumFrames,
   } else {
     static_assert(alpakaTune::detail::isRVals<T_Values> ||
                       alpakaTune::detail::isCTypes<T_Values>,
-                  "FrameExtentTuning needs RVals or CTypes.");
+                  "Frame-extent candidates need RVals or CTypes.");
   }
   return std::pair{
       alpakaTune::RVals<RuntimeNumFrames>{std::move(numFrameValues)},
-      std::move(frameExtentTuning.values)};
+      std::move(frameExtentValues)};
 }
 
-template <typename T_Device, alpaka::onHost::concepts::FrameSpec T_FrameSpec,
-          typename T_Values>
-[[nodiscard]] auto makeTuner(TunerConfig config, T_Device const &device,
-                             T_FrameSpec const &frameSpec,
-                             std::string_view identity,
-                             FrameExtentTuning<T_Values> frameExtentTuning) {
-  auto [numFrameValues, frameExtentValues] =
-      frameCandidates(frameSpec.getNumFrames(), frameSpec.getFrameExtents(),
-                      std::move(frameExtentTuning));
-  auto const tunables = alpakaTune::constrain(
-      alpakaTune::TunableBundle{
-          alpakaTune::named(numFrames, std::move(numFrameValues)),
-          alpakaTune::named(frameExtent, std::move(frameExtentValues))},
-      alpakaTune::restrict(
-          numFrames, frameExtent,
-          [originalNumFrames = frameSpec.getNumFrames(),
-           originalFrameExtents = frameSpec.getFrameExtents()](
-              alpaka::concepts::VectorOrScalar auto const &candidateNumFrames,
-              alpaka::concepts::VectorOrScalar auto const
-                  &candidateFrameExtent) {
-            return detail::hasMatchingCoverage(
-                candidateNumFrames, candidateFrameExtent, originalNumFrames,
-                originalFrameExtents);
-          }));
-  return alpakaTune::makeTuner(std::move(config), tunables, device,
-                               frameSpec.getExecutor(), identity);
+/** Combine independent FrameSpec entries with one or more relations. */
+template <typename T_FrameExtentTuning, typename T_NumFramesTuning,
+          typename... T_Relations>
+[[nodiscard]] auto makeFrameSpecTuning(T_FrameExtentTuning frameExtentTuning,
+                                       T_NumFramesTuning numFramesTuning,
+                                       T_Relations... relations) {
+  using FrameExtentEntry = std::remove_cvref_t<T_FrameExtentTuning>;
+  using NumFramesEntry = std::remove_cvref_t<T_NumFramesTuning>;
+  static_assert(
+      detail::sameName<FrameExtentEntry::name, detail::frameExtentName>,
+      "makeFrameSpecTuning expects a tuneFrameExtent entry first.");
+  static_assert(detail::sameName<NumFramesEntry::name, detail::numFramesName>,
+                "makeFrameSpecTuning expects a tuneNumFrames entry second.");
+  static_assert(sizeof...(T_Relations) > 0u,
+                "Independent FrameSpec entries belong directly in a "
+                "TunableBundle; makeFrameSpecTuning requires a relation.");
+  return alpakaTune::constrain(
+      alpakaTune::TunableBundle{std::move(frameExtentTuning),
+                                std::move(numFramesTuning)},
+      std::move(relations)...);
 }
 
-template <typename T_Device, alpaka::onHost::concepts::FrameSpec T_FrameSpec,
-          typename T_Values>
-[[nodiscard]] auto makeTuner(T_Device const &device,
-                             T_FrameSpec const &frameSpec,
-                             std::string_view identity,
-                             FrameExtentTuning<T_Values> frameExtentTuning) {
-  return makeTuner(tunerConfig(), device, frameSpec, identity,
-                   std::move(frameExtentTuning));
-}
-
-template <typename T_Device, alpaka::onHost::concepts::FrameSpec T_FrameSpec>
-[[nodiscard]] auto makeTuner(TunerConfig config, T_Device const &device,
-                             T_FrameSpec const &frameSpec,
-                             std::string_view identity) {
+/** Default coverage-preserving FrameSpec tuning fragment. */
+template <alpaka::onHost::concepts::FrameSpec T_FrameSpec>
+[[nodiscard]] auto makeFrameSpecTuning(T_FrameSpec const &frameSpec) {
   using FrameExtents =
       typename std::remove_cvref_t<T_FrameSpec>::FrameExtentsVecType;
   if constexpr (alpaka::isCVector_v<FrameExtents>) {
-    return makeTuner(std::move(config), device, frameSpec, identity,
-                     FrameExtentTuning{alpakaTune::CTypes<FrameExtents>{}});
+    auto [numFrameValues, frameExtentValues] =
+        frameCandidates(frameSpec.getNumFrames(), frameSpec.getFrameExtents(),
+                        alpakaTune::CTypes<FrameExtents>{});
+    return makeFrameSpecTuning(
+        tuneFrameExtent(frameSpec, std::move(frameExtentValues)),
+        tuneNumFrames(frameSpec, std::move(numFrameValues)),
+        preserveCoverage(frameSpec));
   } else {
     auto [numFrameValues, frameExtentValues] =
         frameCandidates(frameSpec.getNumFrames(), frameSpec.getFrameExtents());
-    auto const tunables = alpakaTune::constrain(
-        alpakaTune::TunableBundle{
-            alpakaTune::named(numFrames, std::move(numFrameValues)),
-            alpakaTune::named(frameExtent, std::move(frameExtentValues))},
-        alpakaTune::restrict(
-            numFrames, frameExtent,
-            [originalNumFrames = frameSpec.getNumFrames(),
-             originalFrameExtents = frameSpec.getFrameExtents()](
-                alpaka::concepts::VectorOrScalar auto const &candidateNumFrames,
-                alpaka::concepts::VectorOrScalar auto const
-                    &candidateFrameExtent) {
-              return detail::hasMatchingCoverage(
-                  candidateNumFrames, candidateFrameExtent, originalNumFrames,
-                  originalFrameExtents);
-            }));
-    return alpakaTune::makeTuner(std::move(config), tunables, device,
-                                 frameSpec.getExecutor(), identity);
+    return makeFrameSpecTuning(
+        tuneFrameExtent(frameSpec, std::move(frameExtentValues)),
+        tuneNumFrames(frameSpec, std::move(numFrameValues)),
+        preserveCoverage(frameSpec));
   }
 }
 
-template <typename T_Device, alpaka::onHost::concepts::FrameSpec T_FrameSpec>
-[[nodiscard]] auto makeTuner(T_Device const &device,
-                             T_FrameSpec const &frameSpec,
-                             std::string_view identity) {
-  return makeTuner(tunerConfig(), device, frameSpec, identity);
+/** Combine independent ThreadSpec entries with one or more relations. */
+template <typename T_NumBlocksTuning, typename T_NumThreadsTuning,
+          typename... T_Relations>
+[[nodiscard]] auto makeThreadSpecTuning(T_NumBlocksTuning numBlocksTuning,
+                                        T_NumThreadsTuning numThreadsTuning,
+                                        T_Relations... relations) {
+  using NumBlocksEntry = std::remove_cvref_t<T_NumBlocksTuning>;
+  using NumThreadsEntry = std::remove_cvref_t<T_NumThreadsTuning>;
+  static_assert(detail::sameName<NumBlocksEntry::name, detail::numBlocksName>,
+                "makeThreadSpecTuning expects a tuneNumBlocks entry first.");
+  static_assert(detail::sameName<NumThreadsEntry::name, detail::numThreadsName>,
+                "makeThreadSpecTuning expects a tuneNumThreads entry second.");
+  static_assert(sizeof...(T_Relations) > 0u,
+                "Independent ThreadSpec entries belong directly in a "
+                "TunableBundle; makeThreadSpecTuning requires a relation.");
+  return alpakaTune::constrain(
+      alpakaTune::TunableBundle{std::move(numBlocksTuning),
+                                std::move(numThreadsTuning)},
+      std::move(relations)...);
 }
 
-template <typename T_Device, alpaka::onHost::concepts::FrameSpec T_FrameSpec,
-          typename T_NumFrameValues, typename T_FrameExtentValues>
-[[nodiscard]] auto
-makeTuner(TunerConfig config, T_Device const &device,
-          T_FrameSpec const &threadSpec, std::string_view identity,
-          NumFramesTuning<T_NumFrameValues> numFramesTuning,
-          FrameExtentTuning<T_FrameExtentValues> frameExtentTuning) {
-  auto tunables = alpakaTune::TunableBundle{
-      numFrames(std::move(numFramesTuning.values)),
-      frameExtent(std::move(frameExtentTuning.values))};
-  return alpakaTune::makeTuner(std::move(config), std::move(tunables), device,
-                               threadSpec.getExecutor(), identity);
-}
-
-template <typename T_Device, alpaka::onHost::concepts::FrameSpec T_FrameSpec,
-          typename T_NumFrameValues, typename T_FrameExtentValues>
-[[nodiscard]] auto
-makeTuner(T_Device const &device, T_FrameSpec const &frameSpec,
-          std::string_view identity,
-          NumFramesTuning<T_NumFrameValues> numFramesTuning,
-          FrameExtentTuning<T_FrameExtentValues> frameExtentTuning) {
-  return makeTuner(tunerConfig(), device, frameSpec, identity,
-                   std::move(numFramesTuning), std::move(frameExtentTuning));
-}
-
-template <typename T_Device, alpaka::onHost::concepts::ThreadSpec T_ThreadSpec>
-[[nodiscard]] auto makeTuner(TunerConfig config, T_Device const &device,
-                             T_ThreadSpec const &threadSpec,
-                             std::string_view identity) {
+/** Default coverage-preserving ThreadSpec tuning fragment. */
+template <alpaka::onHost::concepts::ThreadSpec T_ThreadSpec>
+[[nodiscard]] auto makeThreadSpecTuning(T_ThreadSpec const &threadSpec) {
   auto [blockValues, threadValues] =
       threadCandidates(threadSpec.getNumBlocks(), threadSpec.getNumThreads(),
                        !alpaka::isSeqExecutor(T_ThreadSpec::getExecutor()));
-  auto const tunables = alpakaTune::constrain(
-      alpakaTune::TunableBundle{
-          alpakaTune::named(numBlocks, std::move(blockValues)),
-          alpakaTune::named(numThreads, std::move(threadValues))},
-      alpakaTune::restrict(
-          numBlocks, numThreads,
-          [originalNumBlocks = threadSpec.getNumBlocks(),
-           originalNumThreads = threadSpec.getNumThreads()](
-              alpaka::concepts::VectorOrScalar auto const &candidateNumBlocks,
-              alpaka::concepts::VectorOrScalar auto const
-                  &candidateNumThreads) {
-            return detail::hasMatchingCoverage(
-                candidateNumBlocks, candidateNumThreads, originalNumBlocks,
-                originalNumThreads);
-          }));
-  return alpakaTune::makeTuner(std::move(config), tunables, device,
-                               threadSpec.getExecutor(), identity);
-}
-
-template <typename T_Device, alpaka::onHost::concepts::ThreadSpec T_ThreadSpec>
-[[nodiscard]] auto makeTuner(T_Device const &device,
-                             T_ThreadSpec const &threadSpec,
-                             std::string_view identity) {
-  return makeTuner(tunerConfig(), device, threadSpec, identity);
+  return makeThreadSpecTuning(
+      tuneNumBlocks(threadSpec, std::move(blockValues)),
+      tuneNumThreads(threadSpec, std::move(threadValues)),
+      preserveCoverage(threadSpec));
 }
 
 } // namespace alpakaTune

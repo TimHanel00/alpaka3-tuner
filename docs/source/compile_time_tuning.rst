@@ -48,13 +48,13 @@ while the kernel continues to receive one compile-time vector.
    using Large = std::integer_sequence<std::size_t, 16u>;
 
    auto tunables = alpakaTune::TunableBundle{
-       alpakaTune::Tunable{
-           alpakaTune::frameExtent,
-           alpakaTune::CTypes<Small, Large>{}}};
+       alpakaTune::tuneFrameExtent(
+           frameSpec, alpakaTune::CTypes<Small, Large>{})};
 
-``FrameExtentTuning{...}`` is the convenience frontend for exposing these
-compile-time frame extents through ``makeTuner`` while deriving the
-matching number of frames.
+This tunes the frame extent independently and leaves ``numFrames`` fixed.
+Combine it with ``tuneNumFrames`` for the Cartesian product, or pass both
+entries and ``preserveCoverage(frameSpec)`` to ``makeFrameSpecTuning`` for a
+correlated launch-space fragment.
 
 The mirrored Alpaka examples deliberately retain their upstream kernel source
 shape. Add compile-time candidates only where an existing kernel argument is

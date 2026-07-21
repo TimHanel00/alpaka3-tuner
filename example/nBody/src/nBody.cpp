@@ -212,9 +212,8 @@ int example(auto const deviceSpec, auto const computeExec, bool const writePngs,
   // tuner reaches a terminal state.
   std::size_t completedSteps = 0u;
   for (IdxType step = 1;
-       step <= numTimeSteps ||
-       (extendsUntilTuningTerminates(tuningRunMode) &&
-        !tuner.isTuningComplete());
+       step <= numTimeSteps || (extendsUntilTuningTerminates(tuningRunMode) &&
+                                !tuner.isTuningComplete());
        ++step) {
     ++completedSteps;
     // Queue one step of the simulation
@@ -371,8 +370,7 @@ auto main(int argc, char *argv[]) -> int {
 
   static option const longOptions[] = {
       {"tune-until-complete", no_argument, nullptr, 'T'},
-      {"tune-until-terminal", no_argument, nullptr,
-       tuneUntilTerminalOption},
+      {"tune-until-terminal", no_argument, nullptr, tuneUntilTerminalOption},
       {nullptr, 0, nullptr, 0}};
   while ((opt = getopt_long(argc, argv, "hn:t:d:pbT", longOptions, nullptr)) !=
          -1) {

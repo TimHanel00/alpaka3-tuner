@@ -413,34 +413,149 @@ struct Named {
 
 inline constexpr Named named{};
 
-/** Heterogeneous, statically typed bundle of tunable parameters. */
-template <typename... Entries> class TunableBundle {
+namespace detail {
+
+template <typename Component, typename = void> struct ComponentEntries {
+  using type = std::tuple<std::remove_cvref_t<Component>>;
+};
+
+template <typename Component>
+struct ComponentEntries<
+    Component,
+    std::void_t<typename std::remove_cvref_t<Component>::entries_type>> {
+  using type = typename std::remove_cvref_t<Component>::entries_type;
+};
+
+template <typename Component>
+using component_entries_t = typename ComponentEntries<Component>::type;
+
+template <typename Component, typename = void> struct ComponentRestrictions {
+  using type = std::tuple<>;
+};
+
+template <typename Component>
+struct ComponentRestrictions<
+    Component,
+    std::void_t<typename std::remove_cvref_t<Component>::restrictions_type>> {
+  using type = typename std::remove_cvref_t<Component>::restrictions_type;
+};
+
+template <typename Component>
+using component_restrictions_t =
+    typename ComponentRestrictions<Component>::type;
+
+template <typename... Tuples>
+using tuple_cat_t = decltype(std::tuple_cat(std::declval<Tuples>()...));
+
+template <typename Component>
+[[nodiscard]] constexpr auto componentEntries(Component &&component) {
+  if constexpr (requires {
+                  typename std::remove_cvref_t<Component>::entries_type;
+                }) {
+    return std::apply(
+        [](auto &&...entries) {
+          return std::tuple<std::remove_cvref_t<decltype(entries)>...>{
+              std::forward<decltype(entries)>(entries)...};
+        },
+        std::forward<Component>(component).entries());
+  } else {
+    using Entry = std::remove_cvref_t<Component>;
+    static_assert(
+        requires { Entry::name; },
+        "TunableBundle components must be named tunables or tuning "
+        "space fragments.");
+    return std::tuple<Entry>{std::forward<Component>(component)};
+  }
+}
+
+template <typename Component>
+[[nodiscard]] constexpr auto componentRestrictions(Component &&component) {
+  if constexpr (requires {
+                  typename std::remove_cvref_t<Component>::restrictions_type;
+                }) {
+    return std::apply(
+        [](auto &&...restrictions) {
+          return std::tuple<std::remove_cvref_t<decltype(restrictions)>...>{
+              std::forward<decltype(restrictions)>(restrictions)...};
+        },
+        std::forward<Component>(component).restrictions());
+  } else {
+    return std::tuple<>{};
+  }
+}
+
+template <typename Tuple> struct TupleEntriesAreNamed;
+
+template <typename... Entries>
+struct TupleEntriesAreNamed<std::tuple<Entries...>>
+    : std::bool_constant<(requires {
+  Entries::name; } && ...)> {};
+
+} // namespace detail
+
+/**
+ * Heterogeneous, statically typed bundle of tunable parameters.
+ *
+ * A component can be one named tunable or a tuning-space fragment.  Fragment
+ * entries and restrictions are flattened into the resulting bundle.
+ */
+template <typename... Components> class TunableBundle {
 public:
-  explicit constexpr TunableBundle(Entries... entries)
-      : m_entries(std::move(entries)...) {
-    static_assert((requires { Entries::name; } && ...),
+  using entries_type =
+      detail::tuple_cat_t<detail::component_entries_t<Components>...>;
+  using restrictions_type =
+      detail::tuple_cat_t<detail::component_restrictions_t<Components>...>;
+
+  explicit constexpr TunableBundle(Components... components)
+      : m_entries(
+            std::tuple_cat(detail::componentEntries(std::move(components))...)),
+        m_restrictions(std::tuple_cat(
+            detail::componentRestrictions(std::move(components))...)) {
+    static_assert(detail::TupleEntriesAreNamed<entries_type>::value,
                   "TunableBundle entries must be bound to tunable names.");
   }
 
-  [[nodiscard]] constexpr auto entries() const noexcept
-      -> std::tuple<Entries...> const & {
+  [[nodiscard]] constexpr auto entries() const & noexcept
+      -> entries_type const & {
     return m_entries;
   }
+  [[nodiscard]] constexpr auto entries() && noexcept -> entries_type && {
+    return std::move(m_entries);
+  }
 
-  static constexpr auto size = sizeof...(Entries);
+  [[nodiscard]] constexpr auto restrictions() const & noexcept
+      -> restrictions_type const & {
+    return m_restrictions;
+  }
+  [[nodiscard]] constexpr auto restrictions() && noexcept
+      -> restrictions_type && {
+    return std::move(m_restrictions);
+  }
+
+  static constexpr auto size = std::tuple_size_v<entries_type>;
 
 private:
-  std::tuple<Entries...> m_entries;
+  entries_type m_entries;
+  restrictions_type m_restrictions;
 };
 
-template <typename... Entries>
-TunableBundle(Entries...) -> TunableBundle<Entries...>;
+template <typename... Components>
+TunableBundle(Components...) -> TunableBundle<Components...>;
 
-template <typename... Entries> using Tunables = TunableBundle<Entries...>;
+template <typename... Components> using Tunables = TunableBundle<Components...>;
 
 namespace detail {
 template <typename T> struct TunablesTraits;
-}
+
+template <typename T> struct IsTunableBundle : std::false_type {};
+
+template <typename... Components>
+struct IsTunableBundle<TunableBundle<Components...>> : std::true_type {};
+
+template <typename T>
+inline constexpr bool isTunableBundle =
+    IsTunableBundle<std::remove_cvref_t<T>>::value;
+} // namespace detail
 
 /**
  * A lazy relationship between the values of two named tuning parameters.
@@ -508,19 +623,29 @@ template <typename Name, typename Predicate>
 template <typename TunablesType, typename... Restrictions>
 class ConstrainedTunables {
 public:
+  using entries_type = typename TunablesType::entries_type;
+  using restrictions_type = std::tuple<Restrictions...>;
   static constexpr auto size = TunablesType::size;
 
   constexpr ConstrainedTunables(TunablesType tunables,
-                                Restrictions... restrictions)
+                                restrictions_type restrictions)
       : m_tunables(std::move(tunables)),
-        m_restrictions(std::move(restrictions)...) {}
+        m_restrictions(std::move(restrictions)) {}
 
-  [[nodiscard]] constexpr auto entries() const noexcept -> decltype(auto) {
+  [[nodiscard]] constexpr auto entries() const & noexcept -> decltype(auto) {
     return m_tunables.entries();
   }
+  [[nodiscard]] constexpr auto entries() && noexcept -> decltype(auto) {
+    return std::move(m_tunables).entries();
+  }
 
-  [[nodiscard]] constexpr auto restrictions() const noexcept -> decltype(auto) {
+  [[nodiscard]] constexpr auto restrictions() const & noexcept
+      -> restrictions_type const & {
     return m_restrictions;
+  }
+  [[nodiscard]] constexpr auto restrictions() && noexcept
+      -> restrictions_type && {
+    return std::move(m_restrictions);
   }
 
 private:
@@ -528,11 +653,27 @@ private:
   std::tuple<Restrictions...> m_restrictions;
 };
 
+namespace detail {
+
+template <typename TunablesType, typename RestrictionsTuple>
+struct ConstrainedTunablesFromTuple;
+
+template <typename TunablesType, typename... Restrictions>
+struct ConstrainedTunablesFromTuple<TunablesType, std::tuple<Restrictions...>> {
+  using type = ConstrainedTunables<TunablesType, Restrictions...>;
+};
+
+template <typename TunablesType, typename RestrictionsTuple>
+using constrained_tunables_from_tuple_t =
+    typename ConstrainedTunablesFromTuple<TunablesType,
+                                          RestrictionsTuple>::type;
+
+} // namespace detail
+
 /** Limit a tuning space with lazy relationships between named parameters. */
 template <typename TunablesType, typename... Restrictions>
 [[nodiscard]] constexpr auto constrain(TunablesType tunables,
-                                       Restrictions... restrictions)
-    -> ConstrainedTunables<TunablesType, std::remove_cvref_t<Restrictions>...> {
+                                       Restrictions... restrictions) {
   static_assert(
       (requires { std::remove_cvref_t<Restrictions>::first; } && ...),
       "constrain accepts relations created with alpakaTune::restrict.");
@@ -549,7 +690,14 @@ template <typename TunablesType, typename... Restrictions>
        ...),
       "Both parameters of every restriction must name tunables in this tuning "
       "space.");
-  return {std::move(tunables), std::move(restrictions)...};
+  auto allRestrictions =
+      std::tuple_cat(detail::componentRestrictions(std::move(tunables)),
+                     std::tuple<std::remove_cvref_t<Restrictions>...>{
+                         std::move(restrictions)...});
+  using Result =
+      detail::constrained_tunables_from_tuple_t<TunablesType,
+                                                decltype(allRestrictions)>;
+  return TunableBundle{Result{std::move(tunables), std::move(allRestrictions)}};
 }
 
 /** Placeholder argument in a prototype alpaka::KernelBundle. */
@@ -622,8 +770,10 @@ constexpr auto tupleEntry(std::tuple<Entries...> const &entries)
   return std::get<findEntryIndex<Name, Entries...>>(entries);
 }
 
+template <typename Tuple> struct TunablesTraitsFromTuple;
+
 template <typename... Entries>
-struct TunablesTraits<TunableBundle<Entries...>> {
+struct TunablesTraitsFromTuple<std::tuple<Entries...>> {
   using entries_type = std::tuple<Entries...>;
   static constexpr std::size_t size = sizeof...(Entries);
   static constexpr std::size_t dimensionCount =
@@ -641,6 +791,11 @@ struct TunablesTraits<TunableBundle<Entries...>> {
   static constexpr std::size_t dimensionOffset =
       findEntryDimensionOffset<Name, Entries...>;
 };
+
+template <typename... Components>
+struct TunablesTraits<TunableBundle<Components...>>
+    : TunablesTraitsFromTuple<
+          typename TunableBundle<Components...>::entries_type> {};
 
 template <typename TunablesType, typename... Restrictions>
 struct TunablesTraits<ConstrainedTunables<TunablesType, Restrictions...>>

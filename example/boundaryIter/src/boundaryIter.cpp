@@ -87,13 +87,16 @@ int example(auto const devSpec, auto const computeExec) {
       frameSpec.getNumFrames())>::UniVec;
   using FrameExtent = typename std::remove_cvref_t<ALPAKA_TYPEOF(
       frameSpec.getFrameExtents())>::UniVec;
-  auto const numFramesTuning =
-      alpakaTune::NumFramesTuning{alpakaTune::generate::linSpace(
-          NumFrames::fill(1u), NumFrames{frameSpec.getNumFrames()},
-          NumFrames::fill(1u))};
-  auto const frameExtentTuning =
-      alpakaTune::FrameExtentTuning{alpakaTune::generate::linSpace(
-          FrameExtent::fill(1u), FrameExtent::fill(4u), FrameExtent::fill(1u))};
+  auto const numFramesTuning = alpakaTune::tuneNumFrames(
+      frameSpec, alpakaTune::generate::linSpace(
+                     NumFrames::fill(1u), NumFrames{frameSpec.getNumFrames()},
+                     NumFrames::fill(1u)));
+  auto const frameExtentTuning = alpakaTune::tuneFrameExtent(
+      frameSpec, alpakaTune::generate::linSpace(FrameExtent::fill(1u),
+                                                FrameExtent::fill(4u),
+                                                FrameExtent::fill(1u)));
+  auto const tunables =
+      alpakaTune::TunableBundle{numFramesTuning, frameExtentTuning};
 
   auto exampleKernel = BoundaryExampleKernel{};
 
@@ -108,9 +111,8 @@ int example(auto const devSpec, auto const computeExec) {
     }
 
     auto const bd = makeCoreBoundaryDirection<Dimensions>();
-    auto tuner =
-        alpakaTune::makeTuner(device, frameSpec, "boundaryIter/default",
-                              numFramesTuning, frameExtentTuning);
+    auto tuner = alpakaTune::makeTuner(
+        tunables, device, frameSpec.getExecutor(), "boundaryIter/default");
     assert(tuner.info().candidateCount >= 2000u);
     auto const kernelBundle = KernelBundle{exampleKernel, view, viewTarget, bd};
     while (!tuner.isTuningComplete())
@@ -141,8 +143,8 @@ int example(auto const devSpec, auto const computeExec) {
     }
 
     auto const bd = makeCoreBoundaryDirection<Dimensions>(halo);
-    auto tuner = alpakaTune::makeTuner(device, frameSpec, "boundaryIter/halo",
-                                       numFramesTuning, frameExtentTuning);
+    auto tuner = alpakaTune::makeTuner(
+        tunables, device, frameSpec.getExecutor(), "boundaryIter/halo");
     assert(tuner.info().candidateCount >= 2000u);
     auto const kernelBundle = KernelBundle{exampleKernel, view, viewTarget, bd};
     while (!tuner.isTuningComplete())
@@ -165,8 +167,8 @@ int example(auto const devSpec, auto const computeExec) {
 
     auto const bd = makeCoreBoundaryDirection<Dimensions>(lowerHalo, upperHalo);
     auto tuner =
-        alpakaTune::makeTuner(device, frameSpec, "boundaryIter/asymmetric-halo",
-                              numFramesTuning, frameExtentTuning);
+        alpakaTune::makeTuner(tunables, device, frameSpec.getExecutor(),
+                              "boundaryIter/asymmetric-halo");
     assert(tuner.info().candidateCount >= 2000u);
     auto const kernelBundle = KernelBundle{exampleKernel, view, viewTarget, bd};
     while (!tuner.isTuningComplete())

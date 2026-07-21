@@ -211,6 +211,17 @@ auto main() -> int {
       second == third || third == fourth)
     return EXIT_FAILURE;
 
+  auto restrictedDescriptor = descriptor();
+  restrictedDescriptor.legalCandidates = {1u, 0u, 0u, 0u, 0u, 0u};
+  auto restricted = alpakaTune::LearnedHybridStrategy{
+      loaded.artifact, std::move(restrictedDescriptor), 23u, options};
+  auto const onlyLegalCandidate = restricted.recommend(context);
+  auto const repeatedCandidate = restricted.recommend(context);
+  if (onlyLegalCandidate != alpakaTune::ParameterConfiguration{0.0f} ||
+      repeatedCandidate != onlyLegalCandidate ||
+      restricted.status() != alpakaTune::LearnedHybridStatus::active)
+    return EXIT_FAILURE;
+
   auto missing = alpakaTune::LearnedHybridStrategy{directory / "missing.atml",
                                                    descriptor(), 9u};
   auto const fallback = missing.recommend(context);
