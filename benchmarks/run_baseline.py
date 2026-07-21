@@ -68,9 +68,11 @@ def reported_runtimes(example: str, output: str) -> dict[str, float]:
             runtime = float(match.group(1))
             if example in {"heatEquation2D", "nBody"}:
                 runtime *= 1.0e-3
-            # Retain the first Host value in old outputs that also contain
-            # CpuSerial. New benchmark builds must compile CpuSerial out.
-            runtimes.setdefault(current_executor, runtime)
+            # Some upstream examples report a native/reference Host pass before
+            # the enabled CpuOmpBlocks pass without distinguishing their labels.
+            # CpuSerial is forbidden by the build/run contract, so the final
+            # Host timing is the CpuOmpBlocks result.
+            runtimes[current_executor] = runtime
     return runtimes
 
 
@@ -123,6 +125,23 @@ def completed_run(path: Path) -> bool:
         return False
 
 
+def refresh_reported_runtimes(
+    directory: Path, example: str, metadata: dict
+) -> dict:
+    try:
+        output = (directory / "stdout.log").read_text(encoding="utf-8")
+    except OSError:
+        output = ""
+    runtimes = reported_runtimes(example, output)
+    metadata["reported_runtimes_seconds"] = runtimes
+    cuda_runtime = runtimes.get("GpuCuda")
+    if cuda_runtime is None:
+        metadata.pop("reported_cuda_runtime_seconds", None)
+    else:
+        metadata["reported_cuda_runtime_seconds"] = cuda_runtime
+    return metadata
+
+
 def run_once(executable: Path, directory: Path, example: str, repetition: int) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
     command = [str(executable)]
@@ -167,9 +186,7 @@ def run_once(executable: Path, directory: Path, example: str, repetition: int) -
         ),
     }
     if return_code == 0:
-        runtimes = reported_runtimes(example, output)
-        metadata["reported_runtimes_seconds"] = runtimes
-        metadata["reported_cuda_runtime_seconds"] = runtimes.get("GpuCuda")
+        refresh_reported_runtimes(directory, example, metadata)
     if unexpected_cpu_serial:
         metadata["error"] = "CpuSerial appeared in baseline output"
     if error is not None:
@@ -210,6 +227,8 @@ def main() -> int:
             metadata_path = directory / "run.json"
             if arguments.resume and completed_run(metadata_path):
                 metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                refresh_reported_runtimes(directory, example, metadata)
+                write_json(metadata_path, metadata)
                 print(f"SKIP {example} / {repetition}", flush=True)
             else:
                 if not executable.is_file():

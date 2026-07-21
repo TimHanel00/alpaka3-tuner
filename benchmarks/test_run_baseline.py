@@ -67,6 +67,41 @@ Time per time step: 0.125 ms.
             {"CpuOmpBlocks": 0.00075, "GpuCuda": 0.000125},
         )
 
+    def test_uses_final_host_pass_for_cpu_omp_blocks(self) -> None:
+        output = """Host
+Time per time step: 0.040 ms.
+Host
+Time per time step: 125.921 ms.
+Cuda
+Time per time step: 0.039 ms.
+"""
+        self.assertEqual(
+            run_baseline.reported_runtimes("heatEquation2D", output),
+            {"CpuOmpBlocks": 0.125921, "GpuCuda": 0.000039},
+        )
+
+    def test_refreshes_reported_runtimes_from_saved_stdout(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            (directory / "stdout.log").write_text(
+                "Host\nTime per time step: 125 ms.\n"
+                "Cuda\nTime per time step: 0.125 ms.\n",
+                encoding="utf-8",
+            )
+            metadata = {
+                "reported_runtimes_seconds": {"CpuOmpBlocks": 1.0},
+                "reported_cuda_runtime_seconds": 1.0,
+            }
+            run_baseline.refresh_reported_runtimes(
+                directory, "heatEquation2D", metadata
+            )
+
+        self.assertEqual(
+            metadata["reported_runtimes_seconds"],
+            {"CpuOmpBlocks": 0.125, "GpuCuda": 0.000125},
+        )
+        self.assertEqual(metadata["reported_cuda_runtime_seconds"], 0.000125)
+
     def test_cpu_serial_output_fails_the_baseline_run(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
