@@ -486,10 +486,16 @@ template <typename Component>
 
 template <typename Tuple> struct TupleEntriesAreNamed;
 
+template <typename Entry, typename = void>
+struct EntryIsNamed : std::false_type {};
+
+template <typename Entry>
+struct EntryIsNamed<Entry, std::void_t<decltype(Entry::name)>> : std::true_type {
+};
+
 template <typename... Entries>
 struct TupleEntriesAreNamed<std::tuple<Entries...>>
-    : std::bool_constant<(requires {
-  Entries::name; } && ...)> {};
+    : std::bool_constant<(EntryIsNamed<Entries>::value && ...)> {};
 
 } // namespace detail
 
