@@ -46,6 +46,8 @@ fallback during a model comparison. Supply a readable model artifact whenever
 python3 benchmarks/run.py \
   --strategies exhaustive random simulated_annealing bayesian_optimization learned_hybrid \
   --model /absolute/path/to/model.atml \
+  --learned-candidate-pool-size 4096 \
+  --learned-candidate-batch-size 256 \
   --backend cuda:nvidiaGpu --executor gpuCuda
 ```
 
@@ -55,6 +57,8 @@ pair's `run.json` record its SHA-256 provenance digest and the runtime-compatibl
 64-bit FNV-1a digest. A learned pair succeeds only when every persisted context
 reports `learning.status: active`, `artifact_load_status: available`, and the
 expected runtime digest. A missing or fallback model therefore fails the run.
+The optional pool and batch flags are written only into learned configurations;
+they make small validation pools possible without changing production defaults.
 
 By default results are written below
 `benchmarks/results/<UTC-run-id>/<example>/<strategy>/`. Every pair contains

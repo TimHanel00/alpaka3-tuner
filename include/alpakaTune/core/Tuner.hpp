@@ -1050,9 +1050,12 @@ private:
       return;
     if (m_defaults.strategy == StrategyKind::learnedHybrid) {
       auto const context = learnedModelContext();
+      auto const options = LearnedHybridOptions{
+          .candidatePoolSize = m_defaults.learnedCandidatePoolSize,
+          .candidateBatchSize = m_defaults.learnedCandidateBatchSize};
       m_strategy =
           makeParameterStrategy(m_defaults.strategy, m_defaults.randomSeed,
-                                &context, m_defaults.learnedModelFile);
+                                &context, m_defaults.learnedModelFile, options);
     } else {
       m_strategy =
           makeParameterStrategy(m_defaults.strategy, m_defaults.randomSeed);
@@ -1444,7 +1447,9 @@ private:
     if (m_defaults.strategy == StrategyKind::learnedHybrid)
       identity << "learned-model="
                << detail::fileFingerprint(m_defaults.learnedModelFile) << ':'
-               << strategyName(m_defaults.learnedFallback) << '\n';
+               << strategyName(m_defaults.learnedFallback) << ':'
+               << m_defaults.learnedCandidatePoolSize << ':'
+               << m_defaults.learnedCandidateBatchSize << '\n';
     identity << "maximum-executions="
              << m_defaults.maximumExecutions.value_or(
                     std::numeric_limits<std::size_t>::max())
@@ -1857,6 +1862,14 @@ private:
     result["status_message"] = learned->statusMessage();
     result["initialization_seconds"] = learned->initializationSeconds();
     result["cached_candidate_count"] = learned->cachedCandidateCount();
+    result["candidate_pool_capacity"] = learned->candidatePoolCapacity();
+    result["candidate_batch_size"] = learned->candidateBatchSize();
+    result["peak_cached_candidate_count"] =
+        learned->peakCachedCandidateCount();
+    result["scored_candidate_count"] = learned->scoredCandidateCount();
+    result["pool_refill_count"] = learned->poolRefillCount();
+    result["candidate_stream_exhausted"] =
+        learned->candidateStreamExhausted();
     result["incorporated_observation_count"] =
         learned->incorporatedObservationCount();
     result["adapter_update_count"] = learned->adapterUpdateCount();

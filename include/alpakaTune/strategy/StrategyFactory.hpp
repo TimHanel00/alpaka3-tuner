@@ -42,7 +42,8 @@ private:
 [[nodiscard]] inline auto makeParameterStrategy(
     StrategyKind kind, std::uint64_t seed,
     LearnedModelContextDescriptor const *learnedContext = nullptr,
-    std::filesystem::path const &learnedModel = {})
+    std::filesystem::path const &learnedModel = {},
+    LearnedHybridOptions learnedOptions = {})
     -> std::unique_ptr<ParameterStrategy> {
   switch (kind) {
   case StrategyKind::exhaustive:
@@ -58,7 +59,8 @@ private:
       throw std::invalid_argument{
           "The learned-hybrid strategy requires a Tuner-owned model context."};
     return std::make_unique<LearnedHybridStrategy>(learnedModel,
-                                                   *learnedContext, seed);
+                                                   *learnedContext, seed,
+                                                   learnedOptions);
   }
   throw std::logic_error{"Unknown alpakaTune strategy kind."};
 }

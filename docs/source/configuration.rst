@@ -63,6 +63,8 @@ YAML schema version 2 adds the optional learned-model section. Schema version
      # Omit model to use the bundled artifact when one was installed.
      model: /path/to/alternative-model.atml
      fallback: random
+     candidate_pool_size: 4096
+     candidate_batch_size: 256
 
 Unknown keys and invalid values are rejected. ``runsPerCandidate`` is the hard
 measurement cap. Lowering ``minimumRunsPerCandidate`` enables confidence-
@@ -72,3 +74,6 @@ interval retirement. ``maxConsecutiveRuns`` must exceed ``warmupRuns``.
 Selecting ``learned_hybrid`` leaves ``makeTuner`` and ``enqueue`` unchanged.
 If its model is missing, incompatible, or outside its supported feature
 contract, the configured non-learned fallback is used explicitly.
+The learned strategy scores at most ``candidate_batch_size`` new candidates at
+a time and retains at most ``candidate_pool_size`` active candidates. The
+batch size must not exceed the pool size.

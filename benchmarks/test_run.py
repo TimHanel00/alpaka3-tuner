@@ -218,6 +218,8 @@ class LearnedConfigurationTest(unittest.TestCase):
                 50,
                 False,
                 model,
+                64,
+                16,
             )
             random = run.benchmark_configuration(
                 base,
@@ -229,6 +231,8 @@ class LearnedConfigurationTest(unittest.TestCase):
             )
 
         self.assertEqual(learned["learning"]["model"], str(model.resolve()))
+        self.assertEqual(learned["learning"]["candidate_pool_size"], 64)
+        self.assertEqual(learned["learning"]["candidate_batch_size"], 16)
         self.assertNotIn("model", random["learning"])
         self.assertEqual(base["learning"]["model"], "old.atml")
 

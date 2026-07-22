@@ -167,6 +167,8 @@ def benchmark_configuration(
     maximum_retired_configurations: int | None,
     full_coverage: bool,
     model: Path | None = None,
+    learned_candidate_pool_size: int | None = None,
+    learned_candidate_batch_size: int | None = None,
 ) -> dict:
     configuration = copy.deepcopy(base_configuration)
     tuning = configuration["tuning"]
@@ -189,6 +191,10 @@ def benchmark_configuration(
             raise ValueError("configuration learning section must be a map")
         configuration["schema_version"] = 2
         learning["model"] = str(model.resolve())
+        if learned_candidate_pool_size is not None:
+            learning["candidate_pool_size"] = learned_candidate_pool_size
+        if learned_candidate_batch_size is not None:
+            learning["candidate_batch_size"] = learned_candidate_batch_size
     elif isinstance(learning, dict):
         learning.pop("model", None)
     configuration["persistence"] = {"file": str(history)}
@@ -423,6 +429,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="trained .atml artifact; required when learned_hybrid is selected",
     )
     parser.add_argument(
+        "--learned-candidate-pool-size",
+        type=int,
+        help="bounded learned candidate pool capacity (default: tuner configuration)",
+    )
+    parser.add_argument(
+        "--learned-candidate-batch-size",
+        type=int,
+        help="learned scoring batch size (default: tuner configuration)",
+    )
+    parser.add_argument(
         "--backend",
         help="limit examples to api:deviceKind, e.g. cuda:nvidiaGpu or host:cpu",
     )
@@ -490,6 +506,25 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("completion limits must be greater than zero")
     if LEARNED_STRATEGY in arguments.strategies and arguments.model is None:
         parser.error("--model is required when learned_hybrid is selected")
+    learned_sizes = (
+        arguments.learned_candidate_pool_size,
+        arguments.learned_candidate_batch_size,
+    )
+    if any(value is not None and value <= 0 for value in learned_sizes):
+        parser.error(
+            "learned candidate pool and batch sizes must be greater than zero"
+        )
+    if (
+        any(value is not None for value in learned_sizes)
+        and LEARNED_STRATEGY not in arguments.strategies
+    ):
+        parser.error("learned candidate pool and batch sizes require learned_hybrid")
+    if (
+        all(value is not None for value in learned_sizes)
+        and arguments.learned_candidate_batch_size
+        > arguments.learned_candidate_pool_size
+    ):
+        parser.error("learned candidate batch size must not exceed pool size")
     if arguments.model is not None:
         arguments.model = arguments.model.expanduser().resolve()
         if not arguments.model.is_file():
@@ -520,6 +555,8 @@ def run_pair(
     model: Path | None = None,
     model_sha256: str | None = None,
     model_runtime_digest: str | None = None,
+    learned_candidate_pool_size: int | None = None,
+    learned_candidate_batch_size: int | None = None,
 ) -> bool:
     directory = output / example / strategy
     directory.mkdir(parents=True, exist_ok=True)
@@ -534,6 +571,8 @@ def run_pair(
         maximum_retired_configurations,
         full_coverage,
         model,
+        learned_candidate_pool_size,
+        learned_candidate_batch_size,
     )
     history.unlink(missing_ok=True)
     configuration_path.write_text(yaml.safe_dump(configuration, sort_keys=False), encoding="utf-8")
@@ -699,6 +738,8 @@ def main() -> int:
             "model": str(arguments.model) if arguments.model is not None else None,
             "model_sha256": model_sha256,
             "model_runtime_digest": model_runtime_digest,
+            "learned_candidate_pool_size": arguments.learned_candidate_pool_size,
+            "learned_candidate_batch_size": arguments.learned_candidate_batch_size,
             "maximum_executions": arguments.maximum_executions,
             "maximum_retired_configurations": arguments.maximum_retired_configurations,
             "full_coverage": arguments.full_coverage,
@@ -754,6 +795,16 @@ def main() -> int:
                 arguments.model if strategy == LEARNED_STRATEGY else None,
                 model_sha256 if strategy == LEARNED_STRATEGY else None,
                 model_runtime_digest if strategy == LEARNED_STRATEGY else None,
+                (
+                    arguments.learned_candidate_pool_size
+                    if strategy == LEARNED_STRATEGY
+                    else None
+                ),
+                (
+                    arguments.learned_candidate_batch_size
+                    if strategy == LEARNED_STRATEGY
+                    else None
+                ),
             ):
                 failures.append((example, strategy))
                 print(f"FAIL {example} / {strategy}", file=sys.stderr, flush=True)

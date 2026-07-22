@@ -35,3 +35,7 @@ persistence:
 learning:
   # learned_hybrid uses the bundled model when model is omitted.
   fallback: random
+  # Bound native model inference and candidate metadata independently of the
+  # full Cartesian tuning-space size.
+  candidate_pool_size: 4096
+  candidate_batch_size: 256

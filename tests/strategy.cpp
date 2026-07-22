@@ -155,13 +155,17 @@ auto main() -> int {
                  "  file: learned-history.json\n"
                  "learning:\n"
                  "  model: alternate.atml\n"
-                 "  fallback: random\n";
+                 "  fallback: random\n"
+                 "  candidate_pool_size: 64\n"
+                 "  candidate_batch_size: 16\n";
   learnedYaml.close();
   auto const learnedDefaults =
       alpakaTune::TunerConfig::fromYaml(learnedConfiguration);
   if (learnedDefaults.strategy != alpakaTune::StrategyKind::learnedHybrid ||
       learnedDefaults.learnedModelFile != "alternate.atml" ||
-      learnedDefaults.learnedFallback != alpakaTune::StrategyKind::random)
+      learnedDefaults.learnedFallback != alpakaTune::StrategyKind::random ||
+      learnedDefaults.learnedCandidatePoolSize != 64u ||
+      learnedDefaults.learnedCandidateBatchSize != 16u)
     return EXIT_FAILURE;
   std::filesystem::remove_all(configurationDirectory);
   return EXIT_SUCCESS;

@@ -61,10 +61,13 @@ perturbs it with a cooling radius. ``bayesian_optimization`` owns its requested
 points and queries their runtimes to fit a bounded RBF surrogate, selecting a
 lower-confidence-bound proposal.
 
-``learned_hybrid`` loads a compact offline-trained candidate ranker, scores the
-complete legal space, and reserves part of its recommendations for diverse or
-uncertain points. The shared model remains frozen while a small residual
-adapter learns from retired measurements in the current context. Model
+``learned_hybrid`` loads a compact offline-trained candidate ranker and scores
+a bounded, deterministically replenished candidate pool in batches. It reserves
+part of its recommendations for diverse or uncertain points. The shared model
+remains frozen while a small residual adapter learns from retired measurements
+in the current context and re-sorts only the active pool. The core tuner still
+stores its full legality and runtime-history bookkeeping; the pool specifically
+bounds learned inference and learned candidate metadata. Model
 training and campaign data live in the separate ``alpakaTune-ml`` repository;
 only a promoted deployment artifact may be bundled here.
 

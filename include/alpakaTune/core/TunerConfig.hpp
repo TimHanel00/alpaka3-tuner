@@ -49,6 +49,10 @@ struct TunerConfig {
   };
   /** Non-learned strategy used when a model cannot be loaded safely. */
   StrategyKind learnedFallback{StrategyKind::random};
+  /** Maximum number of unmeasured learned candidates held at once. */
+  std::size_t learnedCandidatePoolSize{4'096u};
+  /** Maximum number of candidates sent through one learned scoring batch. */
+  std::size_t learnedCandidateBatchSize{256u};
 
   /** Load a mutable tuner configuration from a schema-version-1 or -2 YAML
    * file. */
@@ -153,7 +157,10 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
                 "tuning");
   rejectUnknown(persistence, {"file", "directory"}, "persistence");
   if (learning)
-    rejectUnknown(learning, {"model", "fallback"}, "learning");
+    rejectUnknown(learning,
+                  {"model", "fallback", "candidate_pool_size",
+                   "candidate_batch_size"},
+                  "learning");
 
   TunerConfig defaults;
   auto const strategy =
@@ -220,6 +227,12 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
   if (learning && learning["fallback"])
     defaults.learnedFallback =
         strategyFromName(learning["fallback"].as<std::string>());
+  if (learning) {
+    defaults.learnedCandidatePoolSize = optionalPositive(
+        learning, "candidate_pool_size", defaults.learnedCandidatePoolSize);
+    defaults.learnedCandidateBatchSize = optionalPositive(
+        learning, "candidate_batch_size", defaults.learnedCandidateBatchSize);
+  }
   defaults.validate();
   return defaults;
 }
@@ -291,6 +304,14 @@ inline void TunerConfig::validate() const {
   if (learnedFallback != StrategyKind::random)
     throw std::invalid_argument{"TunerConfig::learnedFallback currently "
                                 "supports only StrategyKind::random."};
+  positive(learnedCandidatePoolSize,
+           "TunerConfig::learnedCandidatePoolSize");
+  positive(learnedCandidateBatchSize,
+           "TunerConfig::learnedCandidateBatchSize");
+  if (learnedCandidateBatchSize > learnedCandidatePoolSize)
+    throw std::invalid_argument{
+        "TunerConfig::learnedCandidateBatchSize must not exceed "
+        "learnedCandidatePoolSize."};
 }
 
 inline auto TunerConfig::fromYaml(std::filesystem::path path) -> TunerConfig {

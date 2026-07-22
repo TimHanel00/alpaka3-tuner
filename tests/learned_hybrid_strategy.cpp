@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <optional>
 #include <span>
 #include <string>
@@ -148,22 +149,26 @@ public:
     observations.emplace_back(std::move(configuration), seconds);
   }
 
-  std::array<std::size_t, 1u> sizes{6u};
+  std::vector<std::size_t> sizes{6u};
   std::vector<std::pair<alpakaTune::ParameterConfiguration, double>>
       observations;
 };
 
-auto descriptor() -> alpakaTune::LearnedModelContextDescriptor {
+auto descriptor(std::size_t cardinality = 6u)
+    -> alpakaTune::LearnedModelContextDescriptor {
+  auto concreteValues = std::vector<float>(cardinality);
+  for (std::size_t index = 0u; index < cardinality; ++index)
+    concreteValues[index] = static_cast<float>(index + 1u);
   return {
       .deviceClass = alpakaTune::LearnedDeviceClass::gpu,
-      .contextFeatures = {{"candidate_count_log1p", std::log1p(6.0f)}},
+      .contextFeatures = {
+          {"candidate_count_log1p", std::log1p(static_cast<float>(cardinality))}},
       .dimensions = {{.name = "block_size",
                       .kind = alpakaTune::LearnedDimensionKind::launch,
-                      .cardinality = 6u,
+                      .cardinality = cardinality,
                       .componentIndex = 0u,
                       .vectorArity = 1u,
-                      .concreteValues = {32.0f, 64.0f, 128.0f, 256.0f, 512.0f,
-                                         1024.0f}}},
+                      .concreteValues = std::move(concreteValues)}},
       .legalCandidates = {},
   };
 }
@@ -185,9 +190,15 @@ auto main() -> int {
   auto model = alpakaTune::NativeDeepSetsModel{loaded.artifact, descriptor()};
   auto const slow = model.predict({1.0f});
   auto const fast = model.predict({0.0f});
+  auto const batch = model.predictBatch(
+      std::array<alpakaTune::ParameterConfiguration, 2u>{{{1.0f}, {0.0f}}});
   if (!(fast.logRuntimeSeconds < slow.logRuntimeSeconds) ||
-      !(fast.uncertainty > 0.0))
+      !(fast.uncertainty > 0.0) || batch.size() != 2u ||
+      batch[0].logRuntimeSeconds != slow.logRuntimeSeconds ||
+      batch[1].logRuntimeSeconds != fast.logRuntimeSeconds) {
+    std::cerr << "scalar/batch prediction mismatch\n";
     return EXIT_FAILURE;
+  }
 
   auto options = alpakaTune::LearnedHybridOptions{};
   options.adapterBatchSize = 2u;
@@ -205,11 +216,56 @@ auto main() -> int {
       strategy.status() != alpakaTune::LearnedHybridStatus::active ||
       strategy.adapterUpdateCount() != 1u ||
       strategy.incorporatedObservationCount() != 2u ||
-      strategy.cachedCandidateCount() != 6u || fifth.front() <= 0.6f ||
+      strategy.cachedCandidateCount() > 6u ||
+      strategy.peakCachedCandidateCount() != 6u || fifth.front() <= 0.6f ||
       strategy.lastSelectionReason() !=
           alpakaTune::LearnedSelectionReason::uncertaintyDiversity ||
-      second == third || third == fourth)
+      second == third || third == fourth) {
+    std::cerr << "small-space learned behavior mismatch: first=" << first.front()
+              << " updates=" << strategy.adapterUpdateCount()
+              << " observations=" << strategy.incorporatedObservationCount()
+              << " cached=" << strategy.cachedCandidateCount()
+              << " fifth=" << fifth.front()
+              << " reason=" << static_cast<int>(strategy.lastSelectionReason())
+              << " second=" << second.front() << " third=" << third.front()
+              << " fourth=" << fourth.front() << '\n';
     return EXIT_FAILURE;
+  }
+
+  auto boundedOptions = options;
+  boundedOptions.candidatePoolSize = 4u;
+  boundedOptions.candidateBatchSize = 2u;
+  auto boundedContext = Context{};
+  boundedContext.sizes = {24u};
+  auto bounded = alpakaTune::LearnedHybridStrategy{
+      loaded.artifact, descriptor(24u), 31u, boundedOptions};
+  auto deterministic = alpakaTune::LearnedHybridStrategy{
+      loaded.artifact, descriptor(24u), 31u, boundedOptions};
+  auto seen = std::vector<alpakaTune::ParameterConfiguration>{};
+  for (std::size_t index = 0u; index < 24u; ++index) {
+    auto const candidate = bounded.recommend(boundedContext);
+    auto const repeated = std::ranges::find(seen, candidate) != seen.end();
+    if (repeated || candidate != deterministic.recommend(boundedContext)) {
+      std::cerr << "bounded sequence mismatch at " << index << '\n';
+      return EXIT_FAILURE;
+    }
+    seen.push_back(candidate);
+  }
+  auto const exhaustedRepeat = bounded.recommend(boundedContext);
+  if (std::ranges::find(seen, exhaustedRepeat) == seen.end() ||
+      bounded.cachedCandidateCount() > 4u ||
+      bounded.peakCachedCandidateCount() > 4u ||
+      bounded.scoredCandidateCount() != 24u ||
+      bounded.poolRefillCount() <= 1u ||
+      !bounded.candidateStreamExhausted()) {
+    std::cerr << "bounded diagnostics mismatch: cached="
+              << bounded.cachedCandidateCount()
+              << " peak=" << bounded.peakCachedCandidateCount()
+              << " scored=" << bounded.scoredCandidateCount()
+              << " refills=" << bounded.poolRefillCount()
+              << " exhausted=" << bounded.candidateStreamExhausted() << '\n';
+    return EXIT_FAILURE;
+  }
 
   auto restrictedDescriptor = descriptor();
   restrictedDescriptor.legalCandidates = {1u, 0u, 0u, 0u, 0u, 0u};

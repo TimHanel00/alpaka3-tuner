@@ -114,6 +114,17 @@ public:
             .embedding = std::move(meanEmbedding)};
   }
 
+  /** Score a homogeneous batch without changing scalar inference semantics. */
+  [[nodiscard]] auto
+  predictBatch(std::span<ParameterConfiguration const> configurations) const
+      -> std::vector<LearnedModelPrediction> {
+    auto predictions = std::vector<LearnedModelPrediction>{};
+    predictions.reserve(configurations.size());
+    for (auto const &configuration : configurations)
+      predictions.push_back(predict(configuration));
+    return predictions;
+  }
+
   [[nodiscard]] auto parameterSizes() const noexcept
       -> std::span<std::size_t const> {
     return m_parameterSizes;

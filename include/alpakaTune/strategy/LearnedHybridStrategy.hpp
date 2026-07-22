@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -67,17 +68,20 @@ struct LearnedHybridOptions {
   std::size_t adapterBatchSize{16u};
   double ridgePenalty{1.0e-3};
   double diversityWeight{1.0};
-  std::size_t maximumCachedCandidates{2'000'000u};
+  std::size_t candidatePoolSize{4'096u};
+  std::size_t candidateBatchSize{256u};
 };
 
 /**
  * A frozen offline DeepSets ensemble with a small online residual adapter.
  *
- * Candidate predictions and embeddings are evaluated exactly once. The model
+ * Candidates enter a bounded, deterministically sampled pool and their model
+ * predictions and embeddings are evaluated exactly once in batches. The model
  * chooses 80% predicted-fast points and 20% uncertainty/diversity points. A
- * ridge adapter is refit after each batch of retired RuntimeObservations. When
- * loading or compatibility fails, the same object explicitly reports fallback
- * status and traverses a seeded shuffled discrete space.
+ * ridge adapter is refit after each batch of retired RuntimeObservations and
+ * only the active pool is re-sorted. When loading or compatibility fails, the
+ * same object explicitly reports fallback status and traverses the same seeded
+ * candidate stream without model scoring.
  */
 class LearnedHybridStrategy final : public ParameterStrategy {
 public:
@@ -128,22 +132,20 @@ public:
     prepare(context);
     if (m_uncachedFallback)
       return randomConfiguration(context.parameterSizes().size());
-    if (m_candidates.empty())
-      throw std::logic_error{"The learned strategy has no legal candidates."};
 
     if (m_status == LearnedHybridStatus::active)
       reconcileObservations(context);
 
-    if (m_requestedCandidateCount == m_candidates.size()) {
-      auto const position = m_status == LearnedHybridStatus::active
-                                ? m_exploitationOrder.front()
-                                : m_fallbackOrder.front();
+    replenishPool();
+    if (activeCandidateCount() == 0u) {
+      if (!m_repeatConfiguration)
+        throw std::logic_error{"The learned strategy has no legal candidates."};
       m_lastSelectionReason =
           m_status == LearnedHybridStatus::active
               ? LearnedSelectionReason::predictedFast
               : LearnedSelectionReason::fallbackSpaceFilling;
       ++m_selectionCount;
-      return m_candidates[position].configuration;
+      return *m_repeatConfiguration;
     }
 
     auto position = std::size_t{};
@@ -161,9 +163,9 @@ public:
 
     auto &selected = m_candidates.at(position);
     selected.requested = true;
-    ++m_requestedCandidateCount;
+    m_repeatConfiguration = selected.configuration;
     if (m_status == LearnedHybridStatus::active)
-      m_pendingObservationPositions.push_back(position);
+      m_pendingCandidates.push_back(selected);
     ++m_selectionCount;
     return selected.configuration;
   }
@@ -184,6 +186,24 @@ public:
   }
   [[nodiscard]] auto cachedCandidateCount() const noexcept -> std::size_t {
     return m_candidates.size();
+  }
+  [[nodiscard]] auto candidatePoolCapacity() const noexcept -> std::size_t {
+    return m_options.candidatePoolSize;
+  }
+  [[nodiscard]] auto candidateBatchSize() const noexcept -> std::size_t {
+    return m_options.candidateBatchSize;
+  }
+  [[nodiscard]] auto peakCachedCandidateCount() const noexcept -> std::size_t {
+    return m_peakCachedCandidateCount;
+  }
+  [[nodiscard]] auto scoredCandidateCount() const noexcept -> std::size_t {
+    return m_scoredCandidateCount;
+  }
+  [[nodiscard]] auto poolRefillCount() const noexcept -> std::size_t {
+    return m_poolRefillCount;
+  }
+  [[nodiscard]] auto candidateStreamExhausted() const noexcept -> bool {
+    return m_candidateStreamExhausted;
   }
   [[nodiscard]] auto incorporatedObservationCount() const noexcept
       -> std::size_t {
@@ -219,7 +239,6 @@ private:
     double uncertainty{};
     std::vector<float> adapterFeatures;
     bool requested{};
-    bool observationIncorporated{};
   };
 
   struct ResidualObservation {
@@ -237,7 +256,9 @@ private:
         m_options.ridgePenalty <= 0.0 ||
         !std::isfinite(m_options.diversityWeight) ||
         m_options.diversityWeight < 0.0 ||
-        m_options.maximumCachedCandidates == 0u)
+        m_options.candidatePoolSize == 0u ||
+        m_options.candidateBatchSize == 0u ||
+        m_options.candidateBatchSize > m_options.candidatePoolSize)
       throw std::invalid_argument{"The learned-hybrid options are invalid."};
   }
 
@@ -266,72 +287,139 @@ private:
       return;
     }
 
-    auto const total = detail::candidateCount(m_descriptor.dimensions);
-    if (total > m_options.maximumCachedCandidates) {
-      m_status = LearnedHybridStatus::fallbackCandidateSpaceTooLarge;
-      m_statusMessage =
-          "The candidate space exceeds the learned prediction cache limit.";
-      m_model.reset();
-      m_uncachedFallback = true;
+    m_totalCandidateCount = detail::candidateCount(m_descriptor.dimensions);
+    initialiseCandidateStream();
+    m_candidates.reserve(std::min(m_totalCandidateCount,
+                                  m_options.candidatePoolSize));
+    replenishPool();
+  }
+
+  void initialiseCandidateStream() {
+    if (m_totalCandidateCount == 0u) {
+      m_candidateStreamExhausted = true;
       return;
     }
+    std::uniform_int_distribution<std::size_t> start(
+        0u, m_totalCandidateCount - 1u);
+    m_nextRawCandidate = start(m_random);
+    if (m_totalCandidateCount == 1u) {
+      m_candidateStride = 0u;
+      return;
+    }
+    std::uniform_int_distribution<std::size_t> stride(
+        1u, m_totalCandidateCount - 1u);
+    m_candidateStride = stride(m_random);
+    while (std::gcd(m_candidateStride, m_totalCandidateCount) != 1u) {
+      ++m_candidateStride;
+      if (m_candidateStride == m_totalCandidateCount)
+        m_candidateStride = 1u;
+    }
+  }
 
-    try {
-      m_candidates.reserve(total);
-      for (std::size_t rawIndex = 0u; rawIndex < total; ++rawIndex) {
-        if (!m_descriptor.legalCandidates.empty() &&
-            m_descriptor.legalCandidates[rawIndex] == 0u)
-          continue;
-        auto candidate =
-            Candidate{.rawIndex = rawIndex,
-                      .configuration = detail::configurationForCandidate(
-                          rawIndex, m_descriptor.dimensions),
-                      .baseLogRuntime = 0.0,
-                      .uncertainty = 0.0,
-                      .adapterFeatures = {},
-                      .requested = false,
-                      .observationIncorporated = false};
-        if (m_status == LearnedHybridStatus::active) {
-          auto prediction = m_model->predict(candidate.configuration);
-          candidate.baseLogRuntime = prediction.logRuntimeSeconds;
-          candidate.uncertainty = prediction.uncertainty;
-          auto const count = m_model->artifact().adapterFeatureCount();
-          candidate.adapterFeatures.assign(
-              prediction.embedding.begin(),
-              prediction.embedding.begin() +
-                  static_cast<std::ptrdiff_t>(count));
+  [[nodiscard]] auto nextRawCandidate() -> std::optional<std::size_t> {
+    if (m_candidateStreamExhausted)
+      return std::nullopt;
+    auto const result = m_nextRawCandidate;
+    ++m_streamVisitedCount;
+    if (m_streamVisitedCount == m_totalCandidateCount) {
+      m_candidateStreamExhausted = true;
+    } else if (m_nextRawCandidate >=
+               m_totalCandidateCount - m_candidateStride) {
+      m_nextRawCandidate -= m_totalCandidateCount - m_candidateStride;
+    } else {
+      m_nextRawCandidate += m_candidateStride;
+    }
+    return result;
+  }
+
+  [[nodiscard]] auto activeCandidateCount() const noexcept -> std::size_t {
+    return static_cast<std::size_t>(std::ranges::count_if(
+        m_candidates, [](Candidate const &candidate) {
+          return !candidate.requested;
+        }));
+  }
+
+  void compactRequestedCandidates() {
+    std::erase_if(m_candidates,
+                  [](Candidate const &candidate) { return candidate.requested; });
+  }
+
+  void appendCandidateBatch(std::vector<Candidate> candidates) {
+    if (m_status == LearnedHybridStatus::active) {
+      try {
+        auto configurations = std::vector<ParameterConfiguration>{};
+        configurations.reserve(candidates.size());
+        for (auto const &candidate : candidates)
+          configurations.push_back(candidate.configuration);
+        auto predictions = m_model->predictBatch(
+            std::span<ParameterConfiguration const>{configurations});
+        auto const featureCount = m_model->artifact().adapterFeatureCount();
+        for (std::size_t index = 0u; index < candidates.size(); ++index) {
+          candidates[index].baseLogRuntime =
+              predictions[index].logRuntimeSeconds;
+          candidates[index].uncertainty = predictions[index].uncertainty;
+          candidates[index].adapterFeatures.assign(
+              predictions[index].embedding.begin(),
+              predictions[index].embedding.begin() +
+                  static_cast<std::ptrdiff_t>(featureCount));
         }
-        m_candidates.push_back(std::move(candidate));
-      }
-    } catch (std::exception const &error) {
-      m_status = LearnedHybridStatus::fallbackArtifactIncompatible;
-      m_statusMessage = error.what();
-      m_model.reset();
-      m_candidates.clear();
-      for (std::size_t rawIndex = 0u; rawIndex < total; ++rawIndex) {
-        if (!m_descriptor.legalCandidates.empty() &&
-            m_descriptor.legalCandidates[rawIndex] == 0u)
-          continue;
-        m_candidates.push_back(
-            Candidate{.rawIndex = rawIndex,
-                      .configuration = detail::configurationForCandidate(
-                          rawIndex, m_descriptor.dimensions),
-                      .baseLogRuntime = 0.0,
-                      .uncertainty = 0.0,
-                      .adapterFeatures = {},
-                      .requested = false,
-                      .observationIncorporated = false});
+        m_scoredCandidateCount += candidates.size();
+      } catch (std::exception const &error) {
+        m_status = LearnedHybridStatus::fallbackArtifactIncompatible;
+        m_statusMessage = error.what();
+        m_model.reset();
+        m_pendingCandidates.clear();
       }
     }
+    std::ranges::move(candidates, std::back_inserter(m_candidates));
+  }
 
+  void replenishPool() {
+    auto const active = activeCandidateCount();
+    if (!m_candidates.empty() &&
+        active > m_options.candidatePoolSize / 2u)
+      return;
+
+    auto changed = active != m_candidates.size();
+    compactRequestedCandidates();
+    auto appended = false;
+    while (m_candidates.size() < m_options.candidatePoolSize &&
+           !m_candidateStreamExhausted) {
+      auto batch = std::vector<Candidate>{};
+      batch.reserve(std::min(m_options.candidateBatchSize,
+                             m_options.candidatePoolSize -
+                                 m_candidates.size()));
+      while (batch.size() < m_options.candidateBatchSize &&
+             m_candidates.size() + batch.size() <
+                 m_options.candidatePoolSize) {
+        auto const rawIndex = nextRawCandidate();
+        if (!rawIndex)
+          break;
+        if (!m_descriptor.legalCandidates.empty() &&
+            m_descriptor.legalCandidates[*rawIndex] == 0u)
+          continue;
+        batch.push_back(
+            Candidate{.rawIndex = *rawIndex,
+                      .configuration = detail::configurationForCandidate(
+                          *rawIndex, m_descriptor.dimensions)});
+      }
+      if (batch.empty())
+        break;
+      appendCandidateBatch(std::move(batch));
+      appended = true;
+    }
+    if (appended) {
+      ++m_poolRefillCount;
+      m_peakCachedCandidateCount =
+          std::max(m_peakCachedCandidateCount, m_candidates.size());
+    }
+    changed = changed || appended;
+    if (!changed)
+      return;
     if (m_status == LearnedHybridStatus::active) {
       rebuildExploitationOrder();
       buildExplorationOrder();
     }
-
-    m_fallbackOrder.resize(m_candidates.size());
-    std::iota(m_fallbackOrder.begin(), m_fallbackOrder.end(), std::size_t{0u});
-    std::shuffle(m_fallbackOrder.begin(), m_fallbackOrder.end(), m_random);
   }
 
   [[nodiscard]] auto randomConfiguration(std::size_t dimensions)
@@ -346,16 +434,14 @@ private:
 
   void reconcileObservations(StrategyContext const &context) {
     auto newlyIncorporated = std::size_t{};
-    auto stillPending = std::vector<std::size_t>{};
-    stillPending.reserve(m_pendingObservationPositions.size());
-    for (auto const position : m_pendingObservationPositions) {
-      auto &candidate = m_candidates[position];
+    auto stillPending = std::vector<Candidate>{};
+    stillPending.reserve(m_pendingCandidates.size());
+    for (auto &candidate : m_pendingCandidates) {
       auto const observation = context.runtimeFor(candidate.configuration);
       if (!observation || !observation->isFinished()) {
-        stillPending.push_back(position);
+        stillPending.push_back(std::move(candidate));
         continue;
       }
-      candidate.observationIncorporated = true;
       if (!std::isfinite(observation->seconds) || observation->seconds <= 0.0)
         continue;
       m_observations.push_back(
@@ -364,7 +450,7 @@ private:
                                           candidate.baseLogRuntime});
       ++newlyIncorporated;
     }
-    m_pendingObservationPositions = std::move(stillPending);
+    m_pendingCandidates = std::move(stillPending);
     m_observationsSinceUpdate += newlyIncorporated;
     if (m_observationsSinceUpdate >= m_options.adapterBatchSize) {
       fitResidualAdapter();
@@ -391,8 +477,7 @@ private:
       if (!m_candidates[position].requested)
         return position;
     }
-    throw std::logic_error{
-        "The learned strategy exhausted its candidate cache."};
+    return selectAnyActive();
   }
 
   [[nodiscard]] auto selectExploration() -> std::size_t {
@@ -401,18 +486,18 @@ private:
       if (!m_candidates[position].requested)
         return position;
     }
-    throw std::logic_error{
-        "The learned strategy exhausted its candidate cache."};
+    return selectAnyActive();
   }
 
   [[nodiscard]] auto selectFallback() -> std::size_t {
-    while (m_fallbackCursor < m_fallbackOrder.size()) {
-      auto const position = m_fallbackOrder[m_fallbackCursor++];
+    return selectAnyActive();
+  }
+
+  [[nodiscard]] auto selectAnyActive() const -> std::size_t {
+    for (std::size_t position = 0u; position < m_candidates.size(); ++position)
       if (!m_candidates[position].requested)
         return position;
-    }
-    throw std::logic_error{
-        "The learned fallback exhausted its candidate cache."};
+    throw std::logic_error{"The learned strategy has no active candidate."};
   }
 
   void rebuildExploitationOrder() {
@@ -566,19 +651,25 @@ private:
   std::size_t m_exploitationCursor{};
   std::vector<std::size_t> m_explorationOrder;
   std::size_t m_explorationCursor{};
-  std::vector<std::size_t> m_pendingObservationPositions;
-  std::vector<std::size_t> m_fallbackOrder;
-  std::size_t m_fallbackCursor{};
+  std::vector<Candidate> m_pendingCandidates;
   std::vector<ResidualObservation> m_observations;
   std::vector<double> m_adapter;
   std::size_t m_observationsSinceUpdate{};
   std::size_t m_adapterUpdateCount{};
   std::size_t m_selectionCount{};
-  std::size_t m_requestedCandidateCount{};
+  std::size_t m_totalCandidateCount{};
+  std::size_t m_streamVisitedCount{};
+  std::size_t m_nextRawCandidate{};
+  std::size_t m_candidateStride{};
+  std::size_t m_peakCachedCandidateCount{};
+  std::size_t m_scoredCandidateCount{};
+  std::size_t m_poolRefillCount{};
   LearnedSelectionReason m_lastSelectionReason{
       LearnedSelectionReason::fallbackSpaceFilling};
   bool m_initialised{};
   bool m_uncachedFallback{};
+  bool m_candidateStreamExhausted{};
+  std::optional<ParameterConfiguration> m_repeatConfiguration;
   double m_initializationSeconds{};
 };
 
