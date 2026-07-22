@@ -384,32 +384,34 @@ private:
     std::vector<std::string_view> markers;
     alpaka::apply(
         [&markers](auto const &...arguments) {
-          (
-              [&] {
-                using Argument = std::remove_cvref_t<decltype(arguments)>;
-                if constexpr (detail::isMarkedTunable<Argument>)
-                  markers.push_back(Argument::name.view());
-              }(),
-              ...);
+          (collectPrototypeMarker<decltype(arguments)>(markers), ...);
         },
         prototype.m_args);
     std::apply(
         [&markers](auto const &...entries) {
-          (
-              [&] {
-                using Entry = std::remove_cvref_t<decltype(entries)>;
-                auto const consumed =
-                    detail::isReservedLaunchName<Entry::name> ||
-                    std::find(markers.begin(), markers.end(),
-                              Entry::nameView()) != markers.end();
-                if (!consumed)
-                  throw std::invalid_argument{
-                      "Every declared tunable must occur in the KernelBundle "
-                      "or be a reserved launch tunable."};
-              }(),
-              ...);
+          (validateTunableConsumed<decltype(entries)>(markers), ...);
         },
         m_tunables.entries());
+  }
+
+  template <typename Argument>
+  static void collectPrototypeMarker(std::vector<std::string_view> &markers) {
+    using CleanArgument = std::remove_cvref_t<Argument>;
+    if constexpr (detail::isMarkedTunable<CleanArgument>)
+      markers.push_back(CleanArgument::name.view());
+  }
+
+  template <typename Entry>
+  static void
+  validateTunableConsumed(std::vector<std::string_view> const &markers) {
+    using CleanEntry = std::remove_cvref_t<Entry>;
+    auto const consumed = detail::isReservedLaunchName<CleanEntry::name> ||
+                          std::find(markers.begin(), markers.end(),
+                                    CleanEntry::nameView()) != markers.end();
+    if (!consumed)
+      throw std::invalid_argument{
+          "Every declared tunable must occur in the KernelBundle or be a "
+          "reserved launch tunable."};
   }
 
   template <FixedString Name, typename Arguments, std::size_t Index = 0u>
