@@ -157,7 +157,8 @@ TEST_CASE("a host tuner can tune the configuration of another tuner",
       alpaka::onHost::FrameSpec{Index{1u}, Index{1u}, alpaka::exec::cpuSerial};
   auto const directory = testDirectory();
   auto const innerConfig =
-      alpakaTune::TunerConfig{.warmupRuns = 0u,
+      alpakaTune::TunerConfig{.mode = alpakaTune::TuningMode::onlineFixed,
+                              .warmupRuns = 0u,
                               .runsPerCandidate = 10u,
                               .minimumRunsPerCandidate = 1u,
                               .noiseCancellationWindow = 1u,

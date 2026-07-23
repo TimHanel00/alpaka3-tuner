@@ -34,8 +34,11 @@ FNV1A_PRIME = 1_099_511_628_211
 UINT64_MASK = (1 << 64) - 1
 
 PROGRESS_INTERVAL_SECONDS = 30
-DEFAULT_MAXIMUM_EXECUTIONS = 100_000
+DEFAULT_MAXIMUM_EXECUTIONS = 40_000
 DEFAULT_MAXIMUM_RETIRED_CONFIGURATIONS = 100_000
+# Full coverage is still application-bounded. This tuner guard prevents an
+# incomplete exhaustive policy from extending the example indefinitely.
+FULL_COVERAGE_MAXIMUM_EXECUTIONS = 1_000_000
 
 FULL_COVERAGE_TUNING = {
     "warmup_runs": 1,
@@ -172,10 +175,17 @@ def benchmark_configuration(
 ) -> dict:
     configuration = copy.deepcopy(base_configuration)
     tuning = configuration["tuning"]
+    # The benchmark runner deliberately uses the finite policy. Direct library
+    # users inherit online_adaptive unless they make the same explicit choice.
+    tuning["mode"] = "online_fixed"
     tuning["strategy"] = strategy
     if full_coverage:
         tuning.update(FULL_COVERAGE_TUNING)
-        tuning.pop("maximum_executions", None)
+        tuning["maximum_executions"] = (
+            FULL_COVERAGE_MAXIMUM_EXECUTIONS
+            if maximum_executions is None
+            else maximum_executions
+        )
         tuning.pop("maximum_retired_configurations", None)
     else:
         tuning["maximum_executions"] = maximum_executions
@@ -453,15 +463,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help=(
             "collect the complete exhaustive surface with three measured runs per legal "
-            "candidate and no tuner-wide completion limits"
+            "candidate within a configurable tuner execution guard"
         ),
     )
     parser.add_argument(
         "--tune-until-terminal",
         action="store_true",
         help=(
-            "keep finite simulations running until each tuner reaches either "
-            "all configurations or a configured completion limit"
+            "keep finite simulations running through the example minimum and "
+            "each tuner's policy goal (legacy option name)"
         ),
     )
     parser.add_argument("--resume", action="store_true")
@@ -482,11 +492,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             parser.error("--tune-until-terminal cannot be combined with --full-coverage")
         if arguments.strategies is not None and arguments.strategies != ["exhaustive"]:
             parser.error("--full-coverage only supports --strategies exhaustive")
-        if (
-            arguments.maximum_executions is not None
-            or arguments.maximum_retired_configurations is not None
-        ):
-            parser.error("--full-coverage cannot be combined with completion limits")
+        if arguments.maximum_retired_configurations is not None:
+            parser.error(
+                "--full-coverage cannot be combined with "
+                "--maximum-retired-configurations"
+            )
+        if arguments.maximum_executions is None:
+            arguments.maximum_executions = FULL_COVERAGE_MAXIMUM_EXECUTIONS
         arguments.strategies = ("exhaustive",)
     else:
         arguments.strategies = tuple(arguments.strategies or DEFAULT_STRATEGIES)

@@ -4,6 +4,8 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include "ExampleHelper.hpp"
+
 #include <tuning.hpp>
 
 #include <chrono>
@@ -157,7 +159,8 @@ auto example(auto const deviceSpec, auto const exec, size_t numElements,
   double totalCopyRuntime = 0.0;
   std::size_t completedRuns = 0u;
 
-  for (; completedRuns < numberOfRuns || !tuner.isTuningComplete();
+  for (; alpakaTune::example::applicationRunsRemain(completedRuns, numberOfRuns,
+                                                    tuner);
        ++completedRuns) {
     // set the device memory to all zeros (byte-wise, not element-wise)
     onHost::memset(queue, bufAccC, uint8_t{0});
@@ -208,14 +211,15 @@ auto example(auto const deviceSpec, auto const exec, size_t numElements,
 }
 
 void help(char *argv[]) {
-  std::cerr << argv[0] << " [-n  numElements] [-h]" << std::endl;
+  std::cerr << argv[0] << " [-n numElements] [-r numberOfRuns] [-h]\n"
+            << "  numberOfRuns defaults to 50000 application-owned launches\n";
 }
 
 auto main(int argc, char *argv[]) -> int {
   if (!alpakaTune::consumeBackendOptions(argc, argv))
     return EXIT_FAILURE;
   size_t numElements = 123456;
-  size_t numberOfRuns = 1;
+  size_t numberOfRuns = alpakaTune::example::minimumTuningExecutions;
 
   int opt;
   while ((opt = getopt(argc, argv, "hn:r:")) != -1) {

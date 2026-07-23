@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include "ExampleHelper.hpp"
 #include "config.h"
 
 #include <alpaka/alpaka.hpp>
@@ -149,8 +150,12 @@ void testVectorAddKernel(alpaka::onHost::concepts::Device auto device,
   verify(tuner.info().candidateCount >= 2000u);
   auto const kernelBundle = alpaka::KernelBundle{VectorAddKernel1D{}, in1_d,
                                                  in2_d, out_d, Vec1D{size}};
-  while (!tuner.isTuningComplete())
+  std::size_t completedExecutions = 0u;
+  while (
+      alpakaTune::example::applicationRunsRemain(completedExecutions, tuner)) {
     tuner.enqueue(queue, threadSpec, kernelBundle);
+    ++completedExecutions;
+  }
 
   // copy the results from the device to the host
   alpaka::onHost::memcpy(queue, out_h, out_d);
@@ -249,8 +254,12 @@ void testVectorAddKernel3D(alpaka::onHost::concepts::Device auto device,
   verify(tuner.info().candidateCount >= 2000u);
   auto const kernelBundle =
       alpaka::KernelBundle{VectorAddKernel3D{}, in1_d, in2_d, out_d, ndsize};
-  while (!tuner.isTuningComplete())
+  std::size_t completedExecutions = 0u;
+  while (
+      alpakaTune::example::applicationRunsRemain(completedExecutions, tuner)) {
     tuner.enqueue(queue, threadSpec, kernelBundle);
+    ++completedExecutions;
+  }
 
   // copy the results from the device to the host
   alpaka::onHost::memcpy(queue, out_h, out_d);

@@ -151,7 +151,8 @@ auto main() -> int {
   std::filesystem::remove_all(directory);
   std::filesystem::create_directories(directory);
   auto const innerConfig =
-      alpakaTune::TunerConfig{.warmupRuns = 0u,
+      alpakaTune::TunerConfig{.mode = alpakaTune::TuningMode::onlineFixed,
+                              .warmupRuns = 0u,
                               .runsPerCandidate = 10u,
                               .minimumRunsPerCandidate = 1u,
                               .noiseCancellationWindow = 1u,

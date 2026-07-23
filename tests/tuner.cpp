@@ -13,6 +13,7 @@
 #include <limits>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #if ALPAKA_TUNE_HAS_JSON
@@ -100,12 +101,14 @@ auto writeConfiguration() -> std::filesystem::path {
   std::ofstream output{configuration};
   output << R"(schema_version: 1
 tuning:
+  mode: online_fixed
   strategy: exhaustive
   random_seed: 0
   warmup_runs: 0
   runs_per_candidate: 2
   noise_cancellation_window: 3
   max_consecutive_runs: 1
+  maximum_executions: 100000
 persistence:
   file: )"
          << (directory / "history.json").string() << '\n';
@@ -115,6 +118,21 @@ persistence:
 } // namespace
 
 auto main() -> int {
+  if (std::abs(alpakaTune::detail::normalizedLogisticAdmission(0.0, 16.0)) >
+          1.0e-12 ||
+      std::abs(alpakaTune::detail::normalizedLogisticAdmission(0.5, 16.0) -
+               0.5) > 1.0e-12 ||
+      std::abs(alpakaTune::detail::normalizedLogisticAdmission(1.0, 16.0) -
+               1.0) > 1.0e-12 ||
+      std::abs(alpakaTune::detail::adaptiveScoreTemperature(0.0, 0.25, 0.05) -
+               0.25) > 1.0e-12 ||
+      std::abs(alpakaTune::detail::adaptiveScoreTemperature(1.0, 0.25, 0.05) -
+               0.05) > 1.0e-12 ||
+      std::abs(alpakaTune::detail::relativeScoreAdmission(1.0, 1.0, 0.1) -
+               1.0) > 1.0e-12 ||
+      !(alpakaTune::detail::relativeScoreAdmission(2.0, 1.0, 0.1) < 1.0))
+    return EXIT_FAILURE;
+
   using Index = alpaka::Vec<std::size_t, 1u>;
   auto const backend =
       alpaka::onHost::DeviceSpec{alpaka::api::host, alpaka::deviceKind::cpu};
@@ -155,7 +173,7 @@ auto main() -> int {
   for (std::size_t launch = 1u; launch < 6u; ++launch)
     tuner.enqueue(queue, frameSpec, bundle);
   if (!tuner.isTuningComplete() || tuner.bestCandidateIndex() >= 3u ||
-      tuner.info().completionReason !=
+      tuner.completionReason() !=
           alpakaTune::TunerCompletionReason::allConfigurations)
     return EXIT_FAILURE;
   if (tuner.lastCandidateIndex() == std::numeric_limits<std::size_t>::max())
@@ -392,9 +410,10 @@ auto main() -> int {
                                            "execution-budget-test");
   budgetTuner.enqueue(queue, frameSpec, bundle);
   auto const budgetInfo = budgetTuner.info();
-  if (!budgetInfo.tuningComplete || !budgetInfo.executionBudgetReached ||
-      budgetInfo.executionCount != 1u || !budgetInfo.bestCandidateIndex ||
-      budgetInfo.completionReason !=
+  if (!budgetInfo.tuningComplete || !budgetTuner.completed() ||
+      !budgetInfo.executionBudgetReached || budgetInfo.executionCount != 1u ||
+      !budgetInfo.bestCandidateIndex ||
+      budgetTuner.completionReason() !=
           alpakaTune::TunerCompletionReason::maximumExecutions)
     return EXIT_FAILURE;
 
@@ -408,28 +427,118 @@ auto main() -> int {
 #endif
 
   auto retiredBudgetConfig = oneRunConfig();
+  retiredBudgetConfig.maximumExecutions.reset();
   retiredBudgetConfig.maximumRetiredConfigurations = 2u;
   auto retiredBudgetTuner = alpakaTune::makeTuner(
       retiredBudgetConfig, tunables, device, "retired-budget-test");
-  for (std::size_t launch = 0u; launch < 2u; ++launch)
+  while (!retiredBudgetTuner.completed())
     retiredBudgetTuner.enqueue(queue, frameSpec, bundle);
   auto const retiredBudgetInfo = retiredBudgetTuner.info();
-  if (!retiredBudgetInfo.tuningComplete ||
+  if (!retiredBudgetInfo.tuningComplete || !retiredBudgetTuner.completed() ||
       retiredBudgetInfo.executionBudgetReached ||
       retiredBudgetInfo.executionCount != 2u ||
       retiredBudgetInfo.retiredConfigurationCount != 2u ||
-      retiredBudgetInfo.completionReason !=
+      retiredBudgetTuner.completionReason() !=
           alpakaTune::TunerCompletionReason::maximumRetiredConfigurations)
     return EXIT_FAILURE;
 
+  // Adaptive mode ends each queue residency after one configured activation
+  // burst. Warm-ups remain queue-controlled and do not enter the rolling
+  // timing window: 4 consecutive launches - 1 warm-up = 3 samples.
+  auto adaptiveConfig = oneRunConfig();
+  adaptiveConfig.mode = alpakaTune::TuningMode::onlineAdaptive;
+  adaptiveConfig.maximumExecutions = 4u;
+  adaptiveConfig.maximumRetiredConfigurations = 1u;
+  adaptiveConfig.warmupRuns = 1u;
+  adaptiveConfig.maxConsecutiveRuns = 4u;
+  adaptiveConfig.noiseCancellationWindow = 1u;
+  adaptiveConfig.historyWindowSize = 3u;
+  auto const adaptiveTunables =
+      alpakaTune::TunableBundle{runtimeValue(alpakaTune::RVals{7})};
+  auto adaptiveTuner = alpakaTune::makeTuner(adaptiveConfig, adaptiveTunables,
+                                             device, "adaptive-burst-test");
+  if (adaptiveTuner.completed())
+    return EXIT_FAILURE;
+  for (std::size_t launch = 0u; launch < 4u; ++launch)
+    adaptiveTuner.enqueue(queue, frameSpec, bundle);
+  auto const firstAdaptiveInfo = adaptiveTuner.info();
+  if (firstAdaptiveInfo.tuningComplete || !adaptiveTuner.completed() ||
+      firstAdaptiveInfo.executionCount != 4u ||
+      firstAdaptiveInfo.retiredConfigurationCount != 1u ||
+      adaptiveTuner.candidateRuntimeSamples(0u).size() != 3u)
+    return EXIT_FAILURE;
+  auto adaptiveReasonRejected = false;
+  try {
+    static_cast<void>(adaptiveTuner.completionReason());
+  } catch (std::logic_error const &) {
+    adaptiveReasonRejected = true;
+  }
+  if (!adaptiveReasonRejected)
+    return EXIT_FAILURE;
+
+  // maximumExecutions is an admission horizon in adaptive mode, not a stop.
+  // At and after the horizon the single current-best candidate passes both
+  // admission gates with probability one and may be visited indefinitely.
+  for (std::size_t launch = 0u; launch < 4u; ++launch)
+    adaptiveTuner.enqueue(queue, frameSpec, bundle);
+  auto const secondAdaptiveInfo = adaptiveTuner.info();
+  if (secondAdaptiveInfo.tuningComplete || !adaptiveTuner.completed() ||
+      secondAdaptiveInfo.executionCount != 8u ||
+      secondAdaptiveInfo.retiredConfigurationCount != 2u ||
+      secondAdaptiveInfo.revisitAcceptedCount == 0u ||
+      adaptiveTuner.candidateRuntimeSamples(0u).size() != 3u)
+    return EXIT_FAILURE;
+
+#if ALPAKA_TUNE_HAS_JSON
+  // Offline mode accepts the compatible adaptive history even though it has
+  // no terminal completion reason, launches its recorded best, and does not
+  // collect a timing sample or instantiate a strategy.
+  auto offlineConfig = adaptiveConfig;
+  offlineConfig.mode = alpakaTune::TuningMode::offline;
+  auto offlineTuner = alpakaTune::makeTuner(offlineConfig, adaptiveTunables,
+                                            device, "adaptive-burst-test");
+  auto const offlineObservation =
+      offlineTuner.enqueueObserved(queue, frameSpec, bundle);
+  if (!offlineTuner.loadedFromCache() || !offlineTuner.isTuningComplete() ||
+      !offlineTuner.completed() ||
+      offlineTuner.completionReason() !=
+          alpakaTune::TunerCompletionReason::offlineReplay ||
+      offlineObservation.measured || offlineObservation.runtimeSeconds ||
+      offlineTuner.info().mode != alpakaTune::TuningMode::offline ||
+      offlineTuner.candidateRuntimeSamples(0u).size() != 3u)
+    return EXIT_FAILURE;
+
+  auto const oldHistoryPath = configuration.parent_path() / "history-v10.json";
+  {
+    auto output = std::ofstream{oldHistoryPath};
+    output << R"({"schema_version":10,"contexts":{}})";
+  }
+  auto oldHistoryConfig = offlineConfig;
+  oldHistoryConfig.persistenceFile = oldHistoryPath;
+  auto oldHistoryRejected = false;
+  try {
+    auto oldHistoryTuner = alpakaTune::makeTuner(
+        oldHistoryConfig, adaptiveTunables, device, "old-history-test");
+    oldHistoryTuner.enqueue(queue, frameSpec, bundle);
+  } catch (std::runtime_error const &error) {
+    oldHistoryRejected = std::string_view{error.what()}.find(
+                             "fresh histories") != std::string_view::npos;
+  }
+  if (!oldHistoryRejected)
+    return EXIT_FAILURE;
+#endif
+
 #if ALPAKA_TUNE_HAS_JSON
   {
-    auto history = nlohmann::json{};
-    auto input = std::ifstream{configuration.parent_path() / "history.json"};
-    if (!(input >> history))
+    auto const historyPath = configuration.parent_path() / "history.json";
+    if (std::filesystem::exists(historyPath))
       return EXIT_FAILURE;
+    auto const contexts =
+        alpakaTune::detail::persistenceStore(historyPath)
+            ->stagedCaches(
+                decltype(retiredBudgetTuner)::persistenceSchemaVersion);
     auto found = false;
-    for (auto const &[fingerprint, cache] : history.at("contexts").items()) {
+    for (auto const &[fingerprint, cache] : contexts) {
       static_cast<void>(fingerprint);
       auto const identities = cache.at("metadata")
                                   .at("identity_entries")
@@ -470,7 +579,7 @@ auto main() -> int {
       retiredBudgetConfig, tunables, device, "retired-budget-test");
   reloadedRetiredBudget.enqueue(queue, frameSpec, bundle);
   if (!reloadedRetiredBudget.loadedFromCache() ||
-      reloadedRetiredBudget.info().completionReason !=
+      reloadedRetiredBudget.completionReason() !=
           alpakaTune::TunerCompletionReason::maximumRetiredConfigurations)
     return EXIT_FAILURE;
 #endif

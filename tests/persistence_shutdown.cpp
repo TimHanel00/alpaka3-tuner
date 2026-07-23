@@ -14,7 +14,7 @@
 
 namespace {
 
-constexpr auto schemaVersion = 10;
+constexpr auto schemaVersion = 11;
 constexpr auto fingerprint = "shutdown-test";
 
 [[nodiscard]] auto cache(std::string completionReason, int executionCount)
@@ -68,8 +68,8 @@ void writeCompletedHistory(std::filesystem::path const &path) {
 
   auto const completed = readHistory(completedPath);
   auto const &completedCache = completed.at("contexts").at(fingerprint);
-  if (completedCache.at("completion_reason") != "all_configurations" ||
-      completedCache.at("execution_count") != 42)
+  if (completedCache.at("completion_reason") != "none" ||
+      completedCache.at("execution_count") != 4)
     return EXIT_FAILURE;
 
   std::filesystem::remove(partialPath);

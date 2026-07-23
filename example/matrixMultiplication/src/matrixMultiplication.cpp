@@ -4,6 +4,8 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include "ExampleHelper.hpp"
+
 #include <tuning.hpp>
 
 #include <algorithm>
@@ -255,7 +257,7 @@ auto example(auto const deviceSpec, auto const executor, Index rows,
                    alpakaTune::markTunable(simdWidthTunable)};
 
   Index runs = 0u;
-  while (runs < minimumRuns || !tuner.isTuningComplete()) {
+  while (alpakaTune::example::applicationRunsRemain(runs, minimumRuns, tuner)) {
     tuner.enqueue(queue, frameSpec, bundle);
     ++runs;
   }
@@ -303,7 +305,8 @@ auto parsePositive(char const *text, char const *option) -> Index {
 void help(char const *executable) {
   std::cerr
       << executable
-      << " [-m rows] [-n columns] [-k inner-dimension] [-r minimum-runs]\n";
+      << " [-m rows] [-n columns] [-k inner-dimension] [-r minimum-runs]\n"
+      << "  minimum-runs defaults to 50000 application-owned launches\n";
 }
 } // namespace alpaka::example::matrixMultiplication
 
@@ -316,7 +319,7 @@ auto main(int argc, char *argv[]) -> int {
   Index rows = 256u;
   Index columns = 256u;
   Index innerDimension = 256u;
-  Index minimumRuns = 1u;
+  Index minimumRuns = alpakaTune::example::minimumTuningExecutions;
 
   try {
     int option;

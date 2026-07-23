@@ -29,13 +29,14 @@ namespace alpakaTune {
 /** Whether learned inference is active or why deterministic fallback is used.
  */
 enum class LearnedHybridStatus {
-  active,
-  fallbackArtifactUnavailable,
-  fallbackArtifactIncompatible,
-  fallbackContextIncompatible,
-  fallbackCandidateSpaceTooLarge,
+  active,                         ///< Native model inference is active.
+  fallbackArtifactUnavailable,    ///< Artifact could not be loaded.
+  fallbackArtifactIncompatible,   ///< Artifact metadata or inference failed.
+  fallbackContextIncompatible,    ///< Runtime context violates model contract.
+  fallbackCandidateSpaceTooLarge, ///< Legacy explicit size fallback.
 };
 
+/** @brief Return the stable diagnostic spelling of learned-model status. */
 [[nodiscard]] constexpr auto
 learnedHybridStatusName(LearnedHybridStatus status) noexcept
     -> std::string_view {
@@ -54,21 +55,29 @@ learnedHybridStatusName(LearnedHybridStatus status) noexcept
   return "unknown";
 }
 
+/** @brief Why learned hybrid chose its most recent raw proposal. */
 enum class LearnedSelectionReason {
-  predictedFast,
-  uncertaintyDiversity,
-  fallbackSpaceFilling,
+  predictedFast,        ///< Lowest adapted predicted log-runtime.
+  uncertaintyDiversity, ///< Ensemble uncertainty plus embedding diversity.
+  fallbackSpaceFilling, ///< Deterministic non-model candidate stream.
 };
 
+/** @brief Bounds learned inference and configures residual adaptation. */
 struct LearnedHybridOptions {
   /** Four exploitation selections followed by one uncertainty/diversity pick.
    */
   std::size_t exploitationSelectionsPerCycle{4u};
+  /** Total selections per exploitation/exploration cycle. */
   std::size_t selectionsPerCycle{5u};
+  /** Newly retired observations required before refitting the adapter. */
   std::size_t adapterBatchSize{16u};
+  /** L2 regularization for the small residual linear regression. */
   double ridgePenalty{1.0e-3};
+  /** Weight of embedding distance in uncertainty/diversity selection. */
   double diversityWeight{1.0};
+  /** Maximum candidates whose scores and embeddings remain resident. */
   std::size_t candidatePoolSize{4'096u};
+  /** Maximum candidates evaluated by one native model call. */
   std::size_t candidateBatchSize{256u};
 };
 
@@ -85,12 +94,14 @@ struct LearnedHybridOptions {
  */
 class LearnedHybridStrategy final : public ParameterStrategy {
 public:
+  /** @brief Load a model artifact from disk and bind it to one context. */
   LearnedHybridStrategy(std::filesystem::path const &artifactPath,
                         LearnedModelContextDescriptor descriptor,
                         std::uint64_t seed, LearnedHybridOptions options = {})
       : LearnedHybridStrategy(loadLearnedModelArtifact(artifactPath),
                               std::move(descriptor), seed, options) {}
 
+  /** @brief Bind an already loaded immutable artifact to one context. */
   LearnedHybridStrategy(std::shared_ptr<LearnedModelArtifact const> artifact,
                         LearnedModelContextDescriptor descriptor,
                         std::uint64_t seed, LearnedHybridOptions options = {})
@@ -106,6 +117,7 @@ public:
                 .artifact = std::move(artifact)},
             std::move(descriptor), seed, options) {}
 
+  /** @brief Construct from an explicit artifact-load diagnostic. */
   LearnedHybridStrategy(LearnedModelLoadResult loadResult,
                         LearnedModelContextDescriptor descriptor,
                         std::uint64_t seed, LearnedHybridOptions options = {})
@@ -127,6 +139,7 @@ public:
     }
   }
 
+  /** @brief Propose one pool candidate or one deterministic fallback point. */
   [[nodiscard]] auto recommend(StrategyContext const &context)
       -> ParameterConfiguration override {
     prepare(context);
@@ -137,16 +150,8 @@ public:
       reconcileObservations(context);
 
     replenishPool();
-    if (activeCandidateCount() == 0u) {
-      if (!m_repeatConfiguration)
-        throw std::logic_error{"The learned strategy has no legal candidates."};
-      m_lastSelectionReason =
-          m_status == LearnedHybridStatus::active
-              ? LearnedSelectionReason::predictedFast
-              : LearnedSelectionReason::fallbackSpaceFilling;
-      ++m_selectionCount;
-      return *m_repeatConfiguration;
-    }
+    if (m_candidates.empty())
+      throw std::logic_error{"The learned strategy has no legal candidates."};
 
     auto position = std::size_t{};
     if (m_status == LearnedHybridStatus::active) {
@@ -162,58 +167,80 @@ public:
     }
 
     auto &selected = m_candidates.at(position);
-    selected.requested = true;
-    m_repeatConfiguration = selected.configuration;
-    if (m_status == LearnedHybridStatus::active)
-      m_pendingCandidates.push_back(selected);
+    m_lastRecommended = selected;
     ++m_selectionCount;
     return selected.configuration;
   }
 
+  /** @brief Track only admitted model candidates for residual observation. */
+  void recommendationResult(ParameterConfiguration const &,
+                            RecommendationDisposition disposition) override {
+    if (disposition == RecommendationDisposition::scheduled &&
+        m_status == LearnedHybridStatus::active && m_lastRecommended)
+      m_pendingCandidates.push_back(*m_lastRecommended);
+    m_lastRecommended.reset();
+  }
+
+  /** @brief Whether native inference is active or which fallback is in use. */
   [[nodiscard]] auto status() const noexcept -> LearnedHybridStatus {
     return m_status;
   }
+  /** @brief Result of parsing and validating the model artifact itself. */
   [[nodiscard]] auto artifactLoadStatus() const noexcept
       -> LearnedModelLoadStatus {
     return m_artifactLoadStatus;
   }
+  /** @brief Human-readable artifact or context compatibility diagnostic. */
   [[nodiscard]] auto statusMessage() const noexcept -> std::string_view {
     return m_statusMessage;
   }
+  /** @brief Reason assigned to the most recent raw proposal. */
   [[nodiscard]] auto lastSelectionReason() const noexcept
       -> LearnedSelectionReason {
     return m_lastSelectionReason;
   }
+  /** @brief Candidates currently resident in the bounded learned pool. */
   [[nodiscard]] auto cachedCandidateCount() const noexcept -> std::size_t {
     return m_candidates.size();
   }
+  /** @brief Configured upper bound for learned candidate metadata. */
   [[nodiscard]] auto candidatePoolCapacity() const noexcept -> std::size_t {
     return m_options.candidatePoolSize;
   }
+  /** @brief Configured upper bound for one native scoring call. */
   [[nodiscard]] auto candidateBatchSize() const noexcept -> std::size_t {
     return m_options.candidateBatchSize;
   }
+  /** @brief High-water mark of resident learned candidates. */
   [[nodiscard]] auto peakCachedCandidateCount() const noexcept -> std::size_t {
     return m_peakCachedCandidateCount;
   }
+  /** @brief Total candidates evaluated by the frozen offline model. */
   [[nodiscard]] auto scoredCandidateCount() const noexcept -> std::size_t {
     return m_scoredCandidateCount;
   }
+  /** @brief Number of bounded-pool population operations. */
   [[nodiscard]] auto poolRefillCount() const noexcept -> std::size_t {
     return m_poolRefillCount;
   }
+  /** @brief Whether the deterministic candidate stream has no unseen points. */
   [[nodiscard]] auto candidateStreamExhausted() const noexcept -> bool {
     return m_candidateStreamExhausted;
   }
+  /** @brief Measurements incorporated into residual regression so far. */
   [[nodiscard]] auto incorporatedObservationCount() const noexcept
       -> std::size_t {
     return m_observations.size();
   }
+  /** @brief Number of completed residual-adapter fits. */
   [[nodiscard]] auto adapterUpdateCount() const noexcept -> std::size_t {
     return m_adapterUpdateCount;
   }
 
-  /** Run one-time full-space scoring separately from latency-sensitive picks.
+  /** @brief Initialize the bounded candidate pool outside a timed recommend.
+   *
+   * This does not score the full Cartesian space. It evaluates at most the
+   * configured bounded pool in configured-size batches.
    */
   void prepare(StrategyContext const &context) {
     if (m_initialised)
@@ -226,7 +253,9 @@ public:
             .count();
   }
 
+  /** @brief Whether model/context validation and initial pool scoring ran. */
   [[nodiscard]] auto prepared() const noexcept -> bool { return m_initialised; }
+  /** @brief Wall time consumed by one-time preparation. */
   [[nodiscard]] auto initializationSeconds() const noexcept -> double {
     return m_initializationSeconds;
   }
@@ -238,10 +267,10 @@ private:
     double baseLogRuntime{};
     double uncertainty{};
     std::vector<float> adapterFeatures;
-    bool requested{};
   };
 
   struct ResidualObservation {
+    std::size_t rawIndex{};
     std::vector<float> features;
     double residual{};
   };
@@ -255,8 +284,7 @@ private:
         !std::isfinite(m_options.ridgePenalty) ||
         m_options.ridgePenalty <= 0.0 ||
         !std::isfinite(m_options.diversityWeight) ||
-        m_options.diversityWeight < 0.0 ||
-        m_options.candidatePoolSize == 0u ||
+        m_options.diversityWeight < 0.0 || m_options.candidatePoolSize == 0u ||
         m_options.candidateBatchSize == 0u ||
         m_options.candidateBatchSize > m_options.candidatePoolSize)
       throw std::invalid_argument{"The learned-hybrid options are invalid."};
@@ -289,18 +317,23 @@ private:
 
     m_totalCandidateCount = detail::candidateCount(m_descriptor.dimensions);
     initialiseCandidateStream();
-    m_candidates.reserve(std::min(m_totalCandidateCount,
-                                  m_options.candidatePoolSize));
+    m_candidates.reserve(
+        std::min(m_totalCandidateCount, m_options.candidatePoolSize));
     replenishPool();
   }
 
+  /** @brief Build a seeded, full-period permutation of Cartesian indices.
+   *
+   * A stride coprime to the candidate count visits every raw index exactly
+   * once without allocating a full-space permutation.
+   */
   void initialiseCandidateStream() {
     if (m_totalCandidateCount == 0u) {
       m_candidateStreamExhausted = true;
       return;
     }
-    std::uniform_int_distribution<std::size_t> start(
-        0u, m_totalCandidateCount - 1u);
+    std::uniform_int_distribution<std::size_t> start(0u, m_totalCandidateCount -
+                                                             1u);
     m_nextRawCandidate = start(m_random);
     if (m_totalCandidateCount == 1u) {
       m_candidateStride = 0u;
@@ -316,6 +349,7 @@ private:
     }
   }
 
+  /** @brief Consume one index from the deterministic full-period stream. */
   [[nodiscard]] auto nextRawCandidate() -> std::optional<std::size_t> {
     if (m_candidateStreamExhausted)
       return std::nullopt;
@@ -332,18 +366,7 @@ private:
     return result;
   }
 
-  [[nodiscard]] auto activeCandidateCount() const noexcept -> std::size_t {
-    return static_cast<std::size_t>(std::ranges::count_if(
-        m_candidates, [](Candidate const &candidate) {
-          return !candidate.requested;
-        }));
-  }
-
-  void compactRequestedCandidates() {
-    std::erase_if(m_candidates,
-                  [](Candidate const &candidate) { return candidate.requested; });
-  }
-
+  /** @brief Score one bounded batch and append its metadata to the pool. */
   void appendCandidateBatch(std::vector<Candidate> candidates) {
     if (m_status == LearnedHybridStatus::active) {
       try {
@@ -374,24 +397,23 @@ private:
     std::ranges::move(candidates, std::back_inserter(m_candidates));
   }
 
+  /** @brief Populate an empty bounded pool from the deterministic stream.
+   *
+   * The method never materializes the full Cartesian space. It applies the
+   * persisted legality bitmap while filling at most candidatePoolSize entries.
+   */
   void replenishPool() {
-    auto const active = activeCandidateCount();
-    if (!m_candidates.empty() &&
-        active > m_options.candidatePoolSize / 2u)
+    if (!m_candidates.empty())
       return;
-
-    auto changed = active != m_candidates.size();
-    compactRequestedCandidates();
     auto appended = false;
     while (m_candidates.size() < m_options.candidatePoolSize &&
            !m_candidateStreamExhausted) {
       auto batch = std::vector<Candidate>{};
-      batch.reserve(std::min(m_options.candidateBatchSize,
-                             m_options.candidatePoolSize -
-                                 m_candidates.size()));
+      batch.reserve(
+          std::min(m_options.candidateBatchSize,
+                   m_options.candidatePoolSize - m_candidates.size()));
       while (batch.size() < m_options.candidateBatchSize &&
-             m_candidates.size() + batch.size() <
-                 m_options.candidatePoolSize) {
+             m_candidates.size() + batch.size() < m_options.candidatePoolSize) {
         auto const rawIndex = nextRawCandidate();
         if (!rawIndex)
           break;
@@ -413,8 +435,7 @@ private:
       m_peakCachedCandidateCount =
           std::max(m_peakCachedCandidateCount, m_candidates.size());
     }
-    changed = changed || appended;
-    if (!changed)
+    if (!appended)
       return;
     if (m_status == LearnedHybridStatus::active) {
       rebuildExploitationOrder();
@@ -432,6 +453,12 @@ private:
     return result;
   }
 
+  /** @brief Incorporate finished admitted proposals into residual training.
+   *
+   * Revisited raw candidates replace their previous residual observation so
+   * the adapter follows the tuner's rolling timing window instead of growing
+   * an unbounded duplicate dataset.
+   */
   void reconcileObservations(StrategyContext const &context) {
     auto newlyIncorporated = std::size_t{};
     auto stillPending = std::vector<Candidate>{};
@@ -444,10 +471,17 @@ private:
       }
       if (!std::isfinite(observation->seconds) || observation->seconds <= 0.0)
         continue;
-      m_observations.push_back(
-          ResidualObservation{.features = candidate.adapterFeatures,
+      auto replacement =
+          ResidualObservation{.rawIndex = candidate.rawIndex,
+                              .features = candidate.adapterFeatures,
                               .residual = std::log(observation->seconds) -
-                                          candidate.baseLogRuntime});
+                                          candidate.baseLogRuntime};
+      auto const existing = std::ranges::find(
+          m_observations, candidate.rawIndex, &ResidualObservation::rawIndex);
+      if (existing == m_observations.end())
+        m_observations.push_back(std::move(replacement));
+      else
+        *existing = std::move(replacement);
       ++newlyIncorporated;
     }
     m_pendingCandidates = std::move(stillPending);
@@ -458,6 +492,7 @@ private:
     }
   }
 
+  /** @brief Frozen prediction plus the current fitted residual correction. */
   [[nodiscard]] auto adaptedLogRuntime(Candidate const &candidate) const
       -> double {
     auto prediction = candidate.baseLogRuntime;
@@ -472,21 +507,20 @@ private:
   }
 
   [[nodiscard]] auto selectExploitation() -> std::size_t {
-    while (m_exploitationCursor < m_exploitationOrder.size()) {
-      auto const position = m_exploitationOrder[m_exploitationCursor++];
-      if (!m_candidates[position].requested)
-        return position;
-    }
-    return selectAnyActive();
+    if (m_exploitationOrder.empty())
+      return selectAnyActive();
+    // Exploitation is deliberately allowed to recommend the current predicted
+    // best again. Tuner-owned admission decides whether it may be remeasured.
+    return m_exploitationOrder.front();
   }
 
   [[nodiscard]] auto selectExploration() -> std::size_t {
-    while (m_explorationCursor < m_explorationOrder.size()) {
-      auto const position = m_explorationOrder[m_explorationCursor++];
-      if (!m_candidates[position].requested)
-        return position;
-    }
-    return selectAnyActive();
+    if (m_explorationOrder.empty())
+      return selectAnyActive();
+    auto const position =
+        m_explorationOrder[m_explorationCursor % m_explorationOrder.size()];
+    ++m_explorationCursor;
+    return position;
   }
 
   [[nodiscard]] auto selectFallback() -> std::size_t {
@@ -494,12 +528,12 @@ private:
   }
 
   [[nodiscard]] auto selectAnyActive() const -> std::size_t {
-    for (std::size_t position = 0u; position < m_candidates.size(); ++position)
-      if (!m_candidates[position].requested)
-        return position;
-    throw std::logic_error{"The learned strategy has no active candidate."};
+    if (m_candidates.empty())
+      throw std::logic_error{"The learned strategy has no active candidate."};
+    return 0u;
   }
 
+  /** @brief Sort pool positions by adapted predicted log-runtime. */
   void rebuildExploitationOrder() {
     m_exploitationOrder.resize(m_candidates.size());
     std::iota(m_exploitationOrder.begin(), m_exploitationOrder.end(),
@@ -515,6 +549,7 @@ private:
     m_exploitationCursor = 0u;
   }
 
+  /** @brief Interleave uncertain candidates across embedding sign buckets. */
   void buildExplorationOrder() {
     auto const featureCount =
         m_candidates.empty() || m_options.diversityWeight == 0.0
@@ -607,6 +642,11 @@ private:
     return rightHandSide;
   }
 
+  /** @brief Fit ridge regression from embeddings to observed log residuals.
+   *
+   * The frozen offline model is never modified. A successful fit only changes
+   * m_adapter and consequently reorders the bounded exploitation pool.
+   */
   void fitResidualAdapter() {
     if (m_observations.empty())
       return;
@@ -652,6 +692,7 @@ private:
   std::vector<std::size_t> m_explorationOrder;
   std::size_t m_explorationCursor{};
   std::vector<Candidate> m_pendingCandidates;
+  std::optional<Candidate> m_lastRecommended;
   std::vector<ResidualObservation> m_observations;
   std::vector<double> m_adapter;
   std::size_t m_observationsSinceUpdate{};
@@ -669,7 +710,6 @@ private:
   bool m_initialised{};
   bool m_uncachedFallback{};
   bool m_candidateStreamExhausted{};
-  std::optional<ParameterConfiguration> m_repeatConfiguration;
   double m_initializationSeconds{};
 };
 

@@ -2,6 +2,9 @@
  * SPDX-License-Identifier: MPL-2.0
  */
 #pragma once
+
+#include "ExampleHelper.hpp"
+
 #include <alpaka/alpaka.hpp>
 #include <alpaka/onHost/example/executors.hpp>
 #include <alpaka/onHost/executeForEach.hpp>
@@ -162,8 +165,12 @@ int exampleDispatch(auto const cfg, uint32_t numElements, auto const &mean,
             << "\n";
   auto const kernelBundle = alpaka::KernelBundle{
       RandomInitKernelNormal{}, outArray_d.getMdSpan(), mean, stdDev};
-  while (!tuner.isTuningComplete())
+  std::size_t completedExecutions = 0u;
+  while (
+      alpakaTune::example::applicationRunsRemain(completedExecutions, tuner)) {
     tuner.enqueue(queue, frameSpec, kernelBundle);
+    ++completedExecutions;
+  }
 
   onHost::wait(queue);
   onHost::memcpy(queue, outArray_h, outArray_d);

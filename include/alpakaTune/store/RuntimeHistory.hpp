@@ -16,42 +16,66 @@
 
 namespace alpakaTune::detail {
 
-/** Controls the legacy-style lifecycle of one configuration record. */
+/** @brief Controls one configuration's warm-up and measurement lifecycle. */
 struct RuntimeHistoryOptions {
+  /** Untimed launches at the beginning of each activation. */
   std::size_t warmupRuns{};
+  /** Earliest sample count at which CI retirement is allowed. */
   std::size_t minimumMeasuredRuns{1u};
+  /** Hard fixed-mode sample cap. */
   std::size_t maximumMeasuredRuns{1u};
+  /** Sample cadence for confidence-interval checks. */
   std::size_t ciCheckInterval{10u};
+  /** Z score used by the non-parametric median interval. */
   double ciZScore{2.576}; // 99 % normal approximation, as in the legacy tuner.
+  /** Relative interval width required for confidence retirement. */
   double ciRelativeWidth{0.05};
+  /** Median-absolute-deviation threshold for decision outliers. */
   double outlierMadScale{3.5};
+  /** Maximum newest raw samples retained as a rolling window. */
+  std::size_t historyWindowSize{10u};
+  /** Enable CI and maximum-sample retirement for fixed mode. */
+  bool automaticRetirement{true};
 };
 
 /** Statistics retained for a concrete configuration's timing history. */
 struct RuntimeStatistics {
+  /** Raw retained sample count. */
   std::size_t sampleCount{};
+  /** MAD-filtered sample count used for robust estimates. */
   std::size_t acceptedSampleCount{};
+  /** Minimum across the raw rolling window. */
   double rawMinimum{std::numeric_limits<double>::infinity()};
+  /** Maximum across the raw rolling window. */
   double rawMaximum{-std::numeric_limits<double>::infinity()};
+  /** Arithmetic mean across the raw rolling window. */
   double rawMean{};
+  /** Arithmetic mean after MAD filtering. */
   double mean{};
+  /** Median after MAD filtering and the tuner decision estimate. */
   double median{};
+  /** Sample standard deviation after MAD filtering. */
   double standardDeviation{};
+  /** Lower order-statistic bound of the median confidence interval. */
   double confidenceLow{};
+  /** Upper order-statistic bound of the median confidence interval. */
   double confidenceHigh{};
+  /** Confidence width divided by the robust median magnitude. */
   double confidenceRelativeWidth{std::numeric_limits<double>::infinity()};
+  /** Whether confidenceRelativeWidth satisfies the configured threshold. */
   bool confidenceReached{};
 
   /** Median of MAD-filtered samples: the runtime used for decisions. */
   [[nodiscard]] auto estimate() const noexcept -> double { return median; }
 };
 
-/** Why a configuration record was retired. */
+/** @brief Why a configuration record ended its current lifecycle. */
 enum class RuntimeCompletion {
-  none,
-  confidenceInterval,
-  maximumSamples,
-  mannWhitneyU,
+  none,               ///< Record is open or has not started.
+  confidenceInterval, ///< Fixed record reached its CI criterion.
+  maximumSamples,     ///< Fixed record reached its sample cap.
+  mannWhitneyU,       ///< Fixed record was statistically slower.
+  adaptiveVisit,      ///< One adaptive activation burst ended.
 };
 
 /**
@@ -97,8 +121,12 @@ public:
     }
 
     m_samples.push_back(seconds);
+    if (m_samples.size() > m_options.historyWindowSize)
+      m_samples.erase(m_samples.begin());
     rebuildAcceptedSamples();
     auto const current = statistics();
+    if (!m_options.automaticRetirement)
+      return false;
     if (m_samples.size() >= m_options.maximumMeasuredRuns) {
       retire(RuntimeCompletion::maximumSamples);
     } else if (m_samples.size() >= m_options.minimumMeasuredRuns &&
@@ -109,6 +137,7 @@ public:
     return isFinished();
   }
 
+  /** @brief End the current lifecycle with at least one retained sample. */
   void retire(RuntimeCompletion completion) {
     if (m_samples.empty())
       throw std::logic_error{
@@ -117,12 +146,23 @@ public:
     m_state = ConfigurationState::retired;
   }
 
+  /** Make a completed record eligible for another adaptive queue residency. */
+  void reopen() {
+    m_completion = RuntimeCompletion::none;
+    m_warmupRemaining = 0u;
+    m_state = ConfigurationState::unmeasured;
+  }
+
   /** Restore a persisted, completed record without replaying warm-up state. */
   void restoreCompleted(std::span<double const> samples) {
     if (samples.empty())
       throw std::invalid_argument{
           "A persisted runtime history must contain a measurement."};
-    m_samples.assign(samples.begin(), samples.end());
+    auto const first = samples.size() > m_options.historyWindowSize
+                           ? samples.end() - static_cast<std::ptrdiff_t>(
+                                                 m_options.historyWindowSize)
+                           : samples.begin();
+    m_samples.assign(first, samples.end());
     for (auto const sample : m_samples) {
       if (!std::isfinite(sample) || sample < 0.0)
         throw std::invalid_argument{
@@ -134,26 +174,33 @@ public:
     m_state = ConfigurationState::retired;
   }
 
+  /** @brief Current warm-up, measurement, or retired state. */
   [[nodiscard]] auto state() const noexcept -> ConfigurationState {
     return m_state;
   }
+  /** @brief Reason the current lifecycle ended, or none while open. */
   [[nodiscard]] auto completion() const noexcept -> RuntimeCompletion {
     return m_completion;
   }
+  /** @brief Whether the current lifecycle is retired. */
   [[nodiscard]] auto isFinished() const noexcept -> bool {
     return m_state == ConfigurationState::retired;
   }
+  /** @brief Whether no timing sample is retained. */
   [[nodiscard]] auto empty() const noexcept -> bool {
     return m_samples.empty();
   }
+  /** @brief Raw retained rolling window, including decision outliers. */
   [[nodiscard]] auto samples() const noexcept -> std::span<double const> {
     return m_samples;
   }
+  /** @brief MAD-filtered samples used by estimates and comparisons. */
   [[nodiscard]] auto acceptedSamples() const noexcept
       -> std::span<double const> {
     return m_acceptedSamples;
   }
 
+  /** @brief Recompute robust statistics for the current rolling window. */
   [[nodiscard]] auto statistics() const -> RuntimeStatistics {
     RuntimeStatistics result;
     result.sampleCount = m_samples.size();
@@ -225,6 +272,12 @@ private:
         m_options.minimumMeasuredRuns > m_options.maximumMeasuredRuns)
       throw std::invalid_argument{
           "Runtime history requires 0 < minimum runs <= maximum runs."};
+    if (m_options.historyWindowSize == 0u ||
+        (m_options.automaticRetirement &&
+         m_options.maximumMeasuredRuns > m_options.historyWindowSize))
+      throw std::invalid_argument{
+          "Runtime history requires a non-empty window large enough for its "
+          "maximum measured runs."};
     if (m_options.ciCheckInterval == 0u || !std::isfinite(m_options.ciZScore) ||
         m_options.ciZScore <= 0.0 ||
         !std::isfinite(m_options.ciRelativeWidth) ||

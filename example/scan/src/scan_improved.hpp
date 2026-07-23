@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "ExampleHelper.hpp"
 #include "common.hpp"
 
 #include <alpaka/alpaka.hpp>
@@ -378,8 +379,12 @@ void scan(auto &exec, auto &devAcc, auto &queue,
     // enqueue the kernel execution tasks
     auto const scanBundle = KernelBundle{scanBlocks, numChunks, chunkExtent,
                                          inputVec,   outputVec, increments};
-    while (!scanTuning.isTuningComplete())
+    std::size_t scanExecutions = 0u;
+    while (alpakaTune::example::applicationRunsRemain(scanExecutions,
+                                                      scanTuning)) {
       scanTuning.enqueue(queue, frameSpec, scanBundle);
+      ++scanExecutions;
+    }
 
     // always recurse into exclusive scan
     scan<EXCLUSIVE_SCAN>(exec, devAcc, queue, increments, blockSums);
@@ -389,9 +394,12 @@ void scan(auto &exec, auto &devAcc, auto &queue,
 
     auto const incrementBundle =
         KernelBundle{addIncrements, chunkExtent, blockSums, outputVec};
-    while (!incrementTuning.isTuningComplete()) {
+    std::size_t incrementExecutions = 0u;
+    while (alpakaTune::example::applicationRunsRemain(
+        incrementExecutions, scanTuning, incrementTuning)) {
       scanTuning.enqueue(queue, frameSpec, scanBundle);
       incrementTuning.enqueue(queue, frameSpec, incrementBundle);
+      ++incrementExecutions;
     }
 
     // block sums need to stay valid until here
@@ -400,8 +408,12 @@ void scan(auto &exec, auto &devAcc, auto &queue,
     // problem fits within 1 frame
     auto const scanBundle =
         KernelBundle{scanBlocks, numChunks, chunkExtent, inputVec, outputVec};
-    while (!scanTuning.isTuningComplete())
+    std::size_t scanExecutions = 0u;
+    while (alpakaTune::example::applicationRunsRemain(scanExecutions,
+                                                      scanTuning)) {
       scanTuning.enqueue(queue, frameSpec, scanBundle);
+      ++scanExecutions;
+    }
   }
 }
 } // namespace alpaka::example::scan

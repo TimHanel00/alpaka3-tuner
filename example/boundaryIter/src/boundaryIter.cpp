@@ -4,6 +4,8 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include "ExampleHelper.hpp"
+
 #include <tuning.hpp>
 
 #include <iostream>
@@ -115,8 +117,12 @@ int example(auto const devSpec, auto const computeExec) {
         tunables, device, frameSpec.getExecutor(), "boundaryIter/default");
     assert(tuner.info().candidateCount >= 2000u);
     auto const kernelBundle = KernelBundle{exampleKernel, view, viewTarget, bd};
-    while (!tuner.isTuningComplete())
+    std::size_t completedExecutions = 0u;
+    while (alpakaTune::example::applicationRunsRemain(completedExecutions,
+                                                      tuner)) {
       tuner.enqueue(blockingQueue, frameSpec, kernelBundle);
+      ++completedExecutions;
+    }
   }
 
   {
@@ -147,8 +153,12 @@ int example(auto const devSpec, auto const computeExec) {
         tunables, device, frameSpec.getExecutor(), "boundaryIter/halo");
     assert(tuner.info().candidateCount >= 2000u);
     auto const kernelBundle = KernelBundle{exampleKernel, view, viewTarget, bd};
-    while (!tuner.isTuningComplete())
+    std::size_t completedExecutions = 0u;
+    while (alpakaTune::example::applicationRunsRemain(completedExecutions,
+                                                      tuner)) {
       tuner.enqueue(blockingQueue, frameSpec, kernelBundle);
+      ++completedExecutions;
+    }
   }
 
   {
@@ -171,8 +181,12 @@ int example(auto const devSpec, auto const computeExec) {
                               "boundaryIter/asymmetric-halo");
     assert(tuner.info().candidateCount >= 2000u);
     auto const kernelBundle = KernelBundle{exampleKernel, view, viewTarget, bd};
-    while (!tuner.isTuningComplete())
+    std::size_t completedExecutions = 0u;
+    while (alpakaTune::example::applicationRunsRemain(completedExecutions,
+                                                      tuner)) {
       tuner.enqueue(blockingQueue, frameSpec, kernelBundle);
+      ++completedExecutions;
+    }
   }
 
   return EXIT_SUCCESS;

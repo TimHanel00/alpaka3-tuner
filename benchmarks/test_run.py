@@ -58,12 +58,15 @@ class ParseArgumentsTest(unittest.TestCase):
             run.DEFAULT_MAXIMUM_RETIRED_CONFIGURATIONS,
         )
 
-    def test_full_coverage_is_uncapped_exhaustive(self) -> None:
+    def test_full_coverage_is_bounded_exhaustive(self) -> None:
         arguments = run.parse_args(
             ["--examples", "heatEquation2D", "nBody", "--full-coverage"]
         )
         self.assertEqual(arguments.strategies, ("exhaustive",))
-        self.assertIsNone(arguments.maximum_executions)
+        self.assertEqual(
+            arguments.maximum_executions,
+            run.FULL_COVERAGE_MAXIMUM_EXECUTIONS,
+        )
         self.assertIsNone(arguments.maximum_retired_configurations)
 
     def test_full_coverage_rejects_search_strategies(self) -> None:
@@ -80,7 +83,19 @@ class ParseArgumentsTest(unittest.TestCase):
             )
         self.assertIn("only supports --strategies exhaustive", stderr.getvalue())
 
-    def test_full_coverage_rejects_completion_limits(self) -> None:
+    def test_full_coverage_accepts_an_explicit_execution_horizon(self) -> None:
+        arguments = run.parse_args(
+            [
+                "--examples",
+                "vectorAdd",
+                "--full-coverage",
+                "--maximum-executions",
+                "4000",
+            ]
+        )
+        self.assertEqual(arguments.maximum_executions, 4000)
+
+    def test_full_coverage_rejects_retired_configuration_limit(self) -> None:
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
             run.parse_args(
@@ -88,11 +103,14 @@ class ParseArgumentsTest(unittest.TestCase):
                     "--examples",
                     "vectorAdd",
                     "--full-coverage",
-                    "--maximum-executions",
+                    "--maximum-retired-configurations",
                     "4000",
                 ]
             )
-        self.assertIn("cannot be combined with completion limits", stderr.getvalue())
+        self.assertIn(
+            "cannot be combined with --maximum-retired-configurations",
+            stderr.getvalue(),
+        )
 
     def test_terminal_mode_is_available_for_bounded_comparisons(self) -> None:
         arguments = run.parse_args(
@@ -154,7 +172,9 @@ class ParseArgumentsTest(unittest.TestCase):
 
 
 class FullCoverageConfigurationTest(unittest.TestCase):
-    def test_full_coverage_uses_fixed_measurements_and_omits_limits(self) -> None:
+    def test_full_coverage_uses_fixed_measurements_and_explicit_horizon(
+        self,
+    ) -> None:
         base = {
             "schema_version": 1,
             "tuning": {
@@ -173,15 +193,19 @@ class FullCoverageConfigurationTest(unittest.TestCase):
             base,
             "exhaustive",
             Path("history.json"),
-            None,
+            250_000,
             None,
             True,
         )
 
         self.assertEqual(generated["tuning"]["strategy"], "exhaustive")
+        self.assertEqual(generated["tuning"]["mode"], "online_fixed")
         for key, value in run.FULL_COVERAGE_TUNING.items():
             self.assertEqual(generated["tuning"][key], value)
-        self.assertNotIn("maximum_executions", generated["tuning"])
+        self.assertEqual(
+            generated["tuning"]["maximum_executions"],
+            250_000,
+        )
         self.assertNotIn("maximum_retired_configurations", generated["tuning"])
         self.assertEqual(generated["persistence"]["file"], "history.json")
         self.assertIn("maximum_executions", base["tuning"])
@@ -231,6 +255,7 @@ class LearnedConfigurationTest(unittest.TestCase):
             )
 
         self.assertEqual(learned["learning"]["model"], str(model.resolve()))
+        self.assertEqual(learned["tuning"]["mode"], "online_fixed")
         self.assertEqual(learned["learning"]["candidate_pool_size"], 64)
         self.assertEqual(learned["learning"]["candidate_batch_size"], 16)
         self.assertNotIn("model", random["learning"])

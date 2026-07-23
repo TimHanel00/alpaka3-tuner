@@ -1,0 +1,14 @@
+schema_version: 2
+tuning:
+  mode: online_adaptive
+  strategy: exhaustive
+  random_seed: 0
+  warmup_runs: 0
+  runs_per_candidate: 1
+  minimum_runs_per_candidate: 1
+  noise_cancellation_window: 1
+  max_consecutive_runs: 1
+  maximum_executions: 1
+  history_window_size: 1
+persistence:
+  file: .alpakaTune/smoke-history.json

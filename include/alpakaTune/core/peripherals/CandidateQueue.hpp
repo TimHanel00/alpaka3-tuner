@@ -21,11 +21,22 @@ namespace alpakaTune::detail {
 class CandidateQueue {
 public:
   struct Selection {
+    /** Exact Cartesian index selected for the next launch. */
     std::size_t candidateIndex;
     /** True only when this candidate becomes active after another record. */
     bool beginActivation;
+    /** True on the final launch allowed in this activation burst. */
+    bool endActivation;
+    /** False for a production-best launch outside the active queue. */
+    bool measure{true};
   };
 
+  /** @brief Construct an empty bounded scheduler.
+   * @param activeWindow Maximum simultaneously resident candidates.
+   * @param maxConsecutiveRuns Launches in one activation burst.
+   * @param randomOrder Randomize selection instead of round-robin order.
+   * @param random Shared deterministic random engine.
+   */
   CandidateQueue(std::size_t activeWindow, std::size_t maxConsecutiveRuns,
                  bool randomOrder, std::mt19937_64 &random)
       : m_slots(activeWindow), m_maxConsecutiveRuns(maxConsecutiveRuns),
@@ -38,11 +49,21 @@ public:
           "The maximum consecutive candidate runs must be greater than zero."};
   }
 
+  /** @brief Whether no candidate is currently queue-resident. */
   [[nodiscard]] bool empty() const noexcept { return m_activeCount == 0u; }
+  /** @brief Whether every active-window slot is occupied. */
   [[nodiscard]] bool full() const noexcept {
     return m_activeCount == m_slots.size();
   }
+  /** @brief Number of currently queue-resident candidates. */
   [[nodiscard]] std::size_t size() const noexcept { return m_activeCount; }
+  /** @brief Whether a candidate currently occupies an active slot. */
+  [[nodiscard]] bool contains(std::size_t candidateIndex) const noexcept {
+    for (auto const &slot : m_slots)
+      if (slot && slot->candidateIndex == candidateIndex)
+        return true;
+    return false;
+  }
 
   /** Add one configuration record to the active measurement window. */
   bool insert(std::size_t candidateIndex) {
@@ -80,7 +101,8 @@ public:
 
     if (mayReuseLastSlot()) {
       ++m_consecutiveRuns;
-      return Selection{m_slots.at(*m_lastSlot)->candidateIndex, false};
+      return Selection{m_slots.at(*m_lastSlot)->candidateIndex, false,
+                       m_consecutiveRuns == m_maxConsecutiveRuns};
     }
 
     auto const previous = m_lastSlot;
@@ -89,7 +111,8 @@ public:
     m_consecutiveRuns = 1u;
     m_nextSlot = (selected + 1u) % m_slots.size();
     return Selection{m_slots.at(selected)->candidateIndex,
-                     !previous || *previous != selected};
+                     !previous || *previous != selected,
+                     m_maxConsecutiveRuns == 1u};
   }
 
 private:

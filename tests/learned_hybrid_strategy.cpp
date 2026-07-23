@@ -15,6 +15,7 @@
 #include <fstream>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <utility>
@@ -161,8 +162,8 @@ auto descriptor(std::size_t cardinality = 6u)
     concreteValues[index] = static_cast<float>(index + 1u);
   return {
       .deviceClass = alpakaTune::LearnedDeviceClass::gpu,
-      .contextFeatures = {
-          {"candidate_count_log1p", std::log1p(static_cast<float>(cardinality))}},
+      .contextFeatures = {{"candidate_count_log1p",
+                           std::log1p(static_cast<float>(cardinality))}},
       .dimensions = {{.name = "block_size",
                       .kind = alpakaTune::LearnedDimensionKind::launch,
                       .cardinality = cardinality,
@@ -206,8 +207,12 @@ auto main() -> int {
                                                     descriptor(), 17u, options};
   auto context = Context{};
   auto const first = strategy.recommend(context);
+  strategy.recommendationResult(
+      first, alpakaTune::RecommendationDisposition::scheduled);
   context.record(first, std::exp(0.5));
   auto const second = strategy.recommend(context);
+  strategy.recommendationResult(
+      second, alpakaTune::RecommendationDisposition::scheduled);
   context.record(second, std::exp(0.6));
   auto const third = strategy.recommend(context);
   auto const fourth = strategy.recommend(context);
@@ -215,14 +220,13 @@ auto main() -> int {
   if (first != alpakaTune::ParameterConfiguration{0.0f} ||
       strategy.status() != alpakaTune::LearnedHybridStatus::active ||
       strategy.adapterUpdateCount() != 1u ||
-      strategy.incorporatedObservationCount() != 2u ||
+      strategy.incorporatedObservationCount() != 1u ||
       strategy.cachedCandidateCount() > 6u ||
-      strategy.peakCachedCandidateCount() != 6u || fifth.front() <= 0.6f ||
+      strategy.peakCachedCandidateCount() != 6u ||
       strategy.lastSelectionReason() !=
-          alpakaTune::LearnedSelectionReason::uncertaintyDiversity ||
-      second == third || third == fourth) {
-    std::cerr << "small-space learned behavior mismatch: first=" << first.front()
-              << " updates=" << strategy.adapterUpdateCount()
+          alpakaTune::LearnedSelectionReason::uncertaintyDiversity) {
+    std::cerr << "small-space learned behavior mismatch: first="
+              << first.front() << " updates=" << strategy.adapterUpdateCount()
               << " observations=" << strategy.incorporatedObservationCount()
               << " cached=" << strategy.cachedCandidateCount()
               << " fifth=" << fifth.front()
@@ -244,26 +248,50 @@ auto main() -> int {
   auto seen = std::vector<alpakaTune::ParameterConfiguration>{};
   for (std::size_t index = 0u; index < 24u; ++index) {
     auto const candidate = bounded.recommend(boundedContext);
-    auto const repeated = std::ranges::find(seen, candidate) != seen.end();
-    if (repeated || candidate != deterministic.recommend(boundedContext)) {
+    if (candidate != deterministic.recommend(boundedContext)) {
       std::cerr << "bounded sequence mismatch at " << index << '\n';
       return EXIT_FAILURE;
     }
-    seen.push_back(candidate);
+    if (std::ranges::find(seen, candidate) == seen.end())
+      seen.push_back(candidate);
   }
-  auto const exhaustedRepeat = bounded.recommend(boundedContext);
-  if (std::ranges::find(seen, exhaustedRepeat) == seen.end() ||
-      bounded.cachedCandidateCount() > 4u ||
+  if (seen.size() < 3u || bounded.cachedCandidateCount() > 4u ||
       bounded.peakCachedCandidateCount() > 4u ||
-      bounded.scoredCandidateCount() != 24u ||
-      bounded.poolRefillCount() <= 1u ||
-      !bounded.candidateStreamExhausted()) {
+      bounded.scoredCandidateCount() != 4u || bounded.poolRefillCount() != 1u ||
+      bounded.candidateStreamExhausted()) {
     std::cerr << "bounded diagnostics mismatch: cached="
               << bounded.cachedCandidateCount()
               << " peak=" << bounded.peakCachedCandidateCount()
               << " scored=" << bounded.scoredCandidateCount()
               << " refills=" << bounded.poolRefillCount()
               << " exhausted=" << bounded.candidateStreamExhausted() << '\n';
+    return EXIT_FAILURE;
+  }
+
+  auto diversityOptions = options;
+  diversityOptions.candidatePoolSize = 100u;
+  diversityOptions.candidateBatchSize = 25u;
+  auto diversityContext = Context{};
+  diversityContext.sizes = {100u};
+  constexpr auto deterministicDiversitySeed = std::uint64_t{0x5eedu};
+  auto diversity = alpakaTune::LearnedHybridStrategy{
+      loaded.artifact, descriptor(100u), deterministicDiversitySeed,
+      diversityOptions};
+  auto repeatedDiversity = alpakaTune::LearnedHybridStrategy{
+      loaded.artifact, descriptor(100u), deterministicDiversitySeed,
+      diversityOptions};
+  auto rawRecommendations = std::set<std::size_t>{};
+  for (std::size_t recommendation = 0u; recommendation < 100u;
+       ++recommendation) {
+    auto const configuration = diversity.recommend(diversityContext);
+    if (configuration != repeatedDiversity.recommend(diversityContext))
+      return EXIT_FAILURE;
+    rawRecommendations.insert(static_cast<std::size_t>(
+        std::lround(static_cast<double>(configuration.front()) * 99.0)));
+  }
+  if (rawRecommendations.size() < 10u) {
+    std::cerr << "learned raw recommendation diversity mismatch: "
+              << rawRecommendations.size() << '\n';
     return EXIT_FAILURE;
   }
 

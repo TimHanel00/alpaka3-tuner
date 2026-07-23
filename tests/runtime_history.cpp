@@ -13,7 +13,8 @@ auto main() -> int {
   using alpakaTune::detail::RuntimeHistory;
   using alpakaTune::detail::RuntimeHistoryOptions;
 
-  auto const options = RuntimeHistoryOptions{0u, 5u, 20u, 5u, 2.576, 0.05, 3.5};
+  auto const options =
+      RuntimeHistoryOptions{0u, 5u, 20u, 5u, 2.576, 0.05, 3.5, 20u};
   auto history = RuntimeHistory{options};
   history.beginActivation();
   for (auto const runtime : std::array{10.0, 10.05, 9.95, 10.0, 1'000.0, 10.02,
@@ -28,9 +29,9 @@ auto main() -> int {
     return EXIT_FAILURE;
 
   auto fast = RuntimeHistory{
-      RuntimeHistoryOptions{0u, 20u, 20u, 10u, 2.576, 0.05, 3.5}};
+      RuntimeHistoryOptions{0u, 20u, 20u, 10u, 2.576, 0.05, 3.5, 20u}};
   auto slow = RuntimeHistory{
-      RuntimeHistoryOptions{0u, 20u, 20u, 10u, 2.576, 0.05, 3.5}};
+      RuntimeHistoryOptions{0u, 20u, 20u, 10u, 2.576, 0.05, 3.5, 20u}};
   fast.beginActivation();
   slow.beginActivation();
   for (auto index = 0u; index < 8u; ++index) {

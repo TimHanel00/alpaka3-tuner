@@ -21,25 +21,91 @@
 
 namespace alpakaTune {
 
+/** @brief Selects persistence reuse and online measurement lifecycle. */
+enum class TuningMode {
+  offline,       ///< Replay the best compatible persisted configuration.
+  onlineFixed,   ///< Tune to a terminal guard, then replay the winner.
+  onlineAdaptive ///< Continue measuring and revisiting without termination.
+};
+
+/** @brief Return the stable YAML spelling of an execution mode. */
+[[nodiscard]] constexpr auto tuningModeName(TuningMode mode)
+    -> std::string_view {
+  switch (mode) {
+  case TuningMode::offline:
+    return "offline";
+  case TuningMode::onlineFixed:
+    return "online_fixed";
+  case TuningMode::onlineAdaptive:
+    return "online_adaptive";
+  }
+  return "unknown";
+}
+
+/** @brief Parse a YAML execution-mode spelling.
+ * @throws std::runtime_error if @p name is not a supported mode.
+ */
+[[nodiscard]] inline auto tuningModeFromName(std::string_view name)
+    -> TuningMode {
+  if (name == "offline")
+    return TuningMode::offline;
+  if (name == "online_fixed")
+    return TuningMode::onlineFixed;
+  if (name == "online_adaptive")
+    return TuningMode::onlineAdaptive;
+  throw std::runtime_error{
+      "YAML tuning.mode must be offline, online_fixed, or online_adaptive."};
+}
+
+/** @brief Complete, copyable policy used to construct one or more tuners.
+ *
+ * A tuner snapshots this aggregate at construction. Configuration controls
+ * tuner policy only; it never determines the surrounding application's loop.
+ */
 struct TunerConfig {
+  /** Persistence reuse and online measurement lifecycle. */
+  TuningMode mode{TuningMode::onlineAdaptive};
+  /** Untimed launches at the beginning of every queue activation. */
   std::size_t warmupRuns{1u};
   /** Maximum number of recorded (non-warm-up) runs per configuration. */
   std::size_t runsPerCandidate{1u};
   /** CI convergence may retire a configuration once this many runs exist. */
   std::size_t minimumRunsPerCandidate{1u};
+  /** Recompute the fixed-mode confidence interval at this sample cadence. */
   std::size_t ciCheckInterval{10u};
+  /** Z score used by the non-parametric median confidence interval. */
   double ciZScore{2.576};
+  /** Fixed-mode retirement threshold for relative CI width. */
   double ciRelativeWidth{0.05};
+  /** Median-absolute-deviation multiplier used to reject decision outliers. */
   double outlierMadScale{3.5};
+  /** Enable fixed-mode early retirement of statistically slower candidates. */
   bool mannWhitneyEarlyStop{true};
+  /** Samples required in both records before the rank test is eligible. */
   std::size_t mannWhitneyMinimumSamples{8u};
+  /** One-sided significance level for Mann-Whitney retirement. */
   double mannWhitneyAlpha{0.05};
+  /** Maximum number of distinct candidates interleaved in the active queue. */
   std::size_t noiseCancellationWindow{50u};
+  /** Launches in one queue activation, including warm-up launches. */
   std::size_t maxConsecutiveRuns{3u};
-  std::optional<std::size_t> maximumExecutions;
+  /** Adaptive schedule horizon; also a completion guard in online-fixed. */
+  std::optional<std::size_t> maximumExecutions{40'000u};
+  /** Alternative online-fixed completion guard; ignored in adaptive mode. */
   std::optional<std::size_t> maximumRetiredConfigurations;
+  /** Maximum number of newest timing records retained per configuration. */
+  std::size_t historyWindowSize{10u};
+  /** Shape of the normalized-logistic adaptive revisit-admission ramp. */
+  double revisitAdmissionSteepness{16.0};
+  /** Relative-Boltzmann temperature at execution zero. */
+  double scoreTemperatureStart{0.25};
+  /** Relative-Boltzmann temperature at the adaptive execution horizon. */
+  double scoreTemperatureEnd{0.05};
+  /** Parameter-proposal algorithm; admission remains tuner-owned. */
   StrategyKind strategy{StrategyKind::exhaustive};
+  /** Reproducible seed shared by strategy and tuner admission randomness. */
   std::uint64_t randomSeed{0u};
+  /** Process-shared JSON history written during normal shutdown. */
   std::filesystem::path persistenceFile{".alpakaTune/history.json"};
   /** Optional override for the model used by the learned-hybrid strategy. */
   std::filesystem::path learnedModelFile{
@@ -54,11 +120,14 @@ struct TunerConfig {
   /** Maximum number of candidates sent through one learned scoring batch. */
   std::size_t learnedCandidateBatchSize{256u};
 
-  /** Load a mutable tuner configuration from a schema-version-1 or -2 YAML
-   * file. */
+  /** @brief Load a mutable configuration from schema-version-1 or -2 YAML.
+   * @throws std::runtime_error for missing, malformed, or unsupported input.
+   */
   [[nodiscard]] static auto fromYaml(std::filesystem::path path) -> TunerConfig;
 
-  /** Reject values which cannot form a valid tuner. */
+  /** @brief Reject values which cannot form a valid tuner.
+   * @throws std::invalid_argument when any cross-field invariant is violated.
+   */
   void validate() const;
 };
 
@@ -147,22 +216,39 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
   if (learning && !learning.IsMap())
     throw std::runtime_error{"YAML learning must contain a map."};
   rejectUnknown(tuning,
-                {"strategy", "random_seed", "warmup_runs", "runs_per_candidate",
-                 "minimum_runs_per_candidate", "ci_check_interval",
-                 "ci_z_score", "ci_relative_width", "outlier_mad_scale",
-                 "mann_whitney_early_stop", "mann_whitney_min_samples",
-                 "mann_whitney_alpha", "noise_cancellation_window",
-                 "max_consecutive_runs", "maximum_executions",
-                 "maximum_retired_configurations"},
+                {"mode",
+                 "strategy",
+                 "random_seed",
+                 "warmup_runs",
+                 "runs_per_candidate",
+                 "minimum_runs_per_candidate",
+                 "ci_check_interval",
+                 "ci_z_score",
+                 "ci_relative_width",
+                 "outlier_mad_scale",
+                 "mann_whitney_early_stop",
+                 "mann_whitney_min_samples",
+                 "mann_whitney_alpha",
+                 "noise_cancellation_window",
+                 "max_consecutive_runs",
+                 "maximum_executions",
+                 "maximum_retired_configurations",
+                 "history_window_size",
+                 "revisit_admission_steepness",
+                 "score_temperature_start",
+                 "score_temperature_end"},
                 "tuning");
   rejectUnknown(persistence, {"file", "directory"}, "persistence");
   if (learning)
-    rejectUnknown(learning,
-                  {"model", "fallback", "candidate_pool_size",
-                   "candidate_batch_size"},
-                  "learning");
+    rejectUnknown(
+        learning,
+        {"model", "fallback", "candidate_pool_size", "candidate_batch_size"},
+        "learning");
 
   TunerConfig defaults;
+  defaults.mode = tuning["mode"]
+                      ? tuningModeFromName(tuning["mode"].as<std::string>())
+                      : defaults.mode;
   auto const strategy =
       tuning["strategy"] ? tuning["strategy"].as<std::string>() : "exhaustive";
   defaults.strategy = strategyFromName(strategy);
@@ -193,11 +279,30 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
   defaults.noiseCancellationWindow =
       requirePositive(tuning, "noise_cancellation_window");
   defaults.maxConsecutiveRuns = requirePositive(tuning, "max_consecutive_runs");
-  if (tuning["maximum_executions"])
-    defaults.maximumExecutions = requirePositive(tuning, "maximum_executions");
-  if (tuning["maximum_retired_configurations"])
-    defaults.maximumRetiredConfigurations =
-        requirePositive(tuning, "maximum_retired_configurations");
+  if (auto const limit = tuning["maximum_executions"]; limit.IsDefined()) {
+    if (limit.IsNull())
+      defaults.maximumExecutions.reset();
+    else
+      defaults.maximumExecutions =
+          requirePositive(tuning, "maximum_executions");
+  }
+  if (auto const limit = tuning["maximum_retired_configurations"];
+      limit.IsDefined()) {
+    if (limit.IsNull())
+      defaults.maximumRetiredConfigurations.reset();
+    else
+      defaults.maximumRetiredConfigurations =
+          requirePositive(tuning, "maximum_retired_configurations");
+  }
+  defaults.historyWindowSize = optionalPositive(tuning, "history_window_size",
+                                                defaults.historyWindowSize);
+  defaults.revisitAdmissionSteepness =
+      optionalPositiveFinite(tuning, "revisit_admission_steepness",
+                             defaults.revisitAdmissionSteepness);
+  defaults.scoreTemperatureStart = optionalPositiveFinite(
+      tuning, "score_temperature_start", defaults.scoreTemperatureStart);
+  defaults.scoreTemperatureEnd = optionalPositiveFinite(
+      tuning, "score_temperature_end", defaults.scoreTemperatureEnd);
   if (defaults.maxConsecutiveRuns <= defaults.warmupRuns)
     throw std::runtime_error{"YAML max_consecutive_runs must exceed "
                              "warmup_runs so every activation is measured."};
@@ -290,6 +395,15 @@ inline void TunerConfig::validate() const {
         "TunerConfig::mannWhitneyAlpha must be finite and in (0, 1)."};
   positive(noiseCancellationWindow, "TunerConfig::noiseCancellationWindow");
   positive(maxConsecutiveRuns, "TunerConfig::maxConsecutiveRuns");
+  positive(historyWindowSize, "TunerConfig::historyWindowSize");
+  positiveFinite(revisitAdmissionSteepness,
+                 "TunerConfig::revisitAdmissionSteepness");
+  positiveFinite(scoreTemperatureStart, "TunerConfig::scoreTemperatureStart");
+  positiveFinite(scoreTemperatureEnd, "TunerConfig::scoreTemperatureEnd");
+  if (scoreTemperatureEnd > scoreTemperatureStart)
+    throw std::invalid_argument{
+        "TunerConfig::scoreTemperatureEnd must not exceed "
+        "scoreTemperatureStart."};
   if (maxConsecutiveRuns <= warmupRuns)
     throw std::invalid_argument{
         "TunerConfig::maxConsecutiveRuns must exceed warmupRuns."};
@@ -298,16 +412,29 @@ inline void TunerConfig::validate() const {
   if (maximumRetiredConfigurations)
     positive(*maximumRetiredConfigurations,
              "TunerConfig::maximumRetiredConfigurations");
+  if (mode == TuningMode::onlineFixed && !maximumExecutions &&
+      !maximumRetiredConfigurations)
+    throw std::invalid_argument{
+        "TunerConfig::onlineFixed requires maximumExecutions or "
+        "maximumRetiredConfigurations."};
+  if (mode == TuningMode::onlineAdaptive) {
+    if (!maximumExecutions)
+      throw std::invalid_argument{
+          "TunerConfig::onlineAdaptive requires maximumExecutions as its "
+          "admission horizon."};
+  }
+  if (mode == TuningMode::onlineFixed && runsPerCandidate > historyWindowSize)
+    throw std::invalid_argument{
+        "TunerConfig::runsPerCandidate must not exceed historyWindowSize in "
+        "online-fixed mode."};
   if (persistenceFile.empty())
     throw std::invalid_argument{
         "TunerConfig::persistenceFile must not be empty."};
   if (learnedFallback != StrategyKind::random)
     throw std::invalid_argument{"TunerConfig::learnedFallback currently "
                                 "supports only StrategyKind::random."};
-  positive(learnedCandidatePoolSize,
-           "TunerConfig::learnedCandidatePoolSize");
-  positive(learnedCandidateBatchSize,
-           "TunerConfig::learnedCandidateBatchSize");
+  positive(learnedCandidatePoolSize, "TunerConfig::learnedCandidatePoolSize");
+  positive(learnedCandidateBatchSize, "TunerConfig::learnedCandidateBatchSize");
   if (learnedCandidateBatchSize > learnedCandidatePoolSize)
     throw std::invalid_argument{
         "TunerConfig::learnedCandidateBatchSize must not exceed "
@@ -318,11 +445,17 @@ inline auto TunerConfig::fromYaml(std::filesystem::path path) -> TunerConfig {
   return detail::loadTunerConfig(detail::canonicalConfigPath(std::move(path)));
 }
 
+/** @brief Return a mutable copy of the process-default YAML configuration.
+ *
+ * The source path is selected once from ALPAKA_TUNE_CONFIG or the installed
+ * default. Each returned value can be modified independently before makeTuner.
+ */
 [[nodiscard]] inline auto tunerConfig() -> TunerConfig {
   static TunerConfig const defaultConfig =
       TunerConfig::fromYaml(detail::defaultConfigurationPath());
   return defaultConfig;
 }
+/** @brief Load a mutable configuration from an explicit YAML path. */
 [[nodiscard]] inline auto tunerConfig(std::filesystem::path path)
     -> TunerConfig {
   return TunerConfig::fromYaml(std::move(path));

@@ -6,10 +6,12 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -48,6 +50,23 @@ private:
   std::vector<std::pair<alpakaTune::ParameterConfiguration, double>> m_runtimes;
 };
 
+class DiversityStrategyContext final : public alpakaTune::StrategyContext {
+public:
+  [[nodiscard]] auto parameterSizes() const noexcept
+      -> std::span<std::size_t const> override {
+    return m_sizes;
+  }
+
+  [[nodiscard]] auto
+  runtimeFor(alpakaTune::ParameterConfiguration const &) const
+      -> std::optional<alpakaTune::RuntimeObservation> override {
+    return std::nullopt;
+  }
+
+private:
+  std::array<std::size_t, 1u> m_sizes{100u};
+};
+
 auto valid(alpakaTune::ParameterConfiguration const &configuration) -> bool {
   if (configuration.size() != 3u)
     return false;
@@ -61,6 +80,13 @@ auto valid(alpakaTune::ParameterConfiguration const &configuration) -> bool {
 } // namespace
 
 auto main() -> int {
+  auto defaultConfig = alpakaTune::TunerConfig{};
+  defaultConfig.validate();
+  if (defaultConfig.mode != alpakaTune::TuningMode::onlineAdaptive ||
+      defaultConfig.maximumExecutions != 40'000u ||
+      defaultConfig.maximumRetiredConfigurations)
+    return EXIT_FAILURE;
+
   for (auto const strategyKind :
        {alpakaTune::StrategyKind::random,
         alpakaTune::StrategyKind::simulatedAnnealing,
@@ -73,6 +99,32 @@ auto main() -> int {
     context.record(first, 1.0e-3);
     auto const second = strategy->recommend(context);
     if (!valid(second))
+      return EXIT_FAILURE;
+  }
+
+  // Diversity is a strategy contract, not an admission-guard side effect.
+  // Inspect raw recommendations without reporting them as scheduled.
+  for (auto const strategyKind :
+       {alpakaTune::StrategyKind::exhaustive, alpakaTune::StrategyKind::random,
+        alpakaTune::StrategyKind::simulatedAnnealing,
+        alpakaTune::StrategyKind::bayesianOptimization}) {
+    constexpr auto deterministicContractSeed = std::uint64_t{0x5eedu};
+    auto context = DiversityStrategyContext{};
+    auto strategy = alpakaTune::makeParameterStrategy(
+        strategyKind, deterministicContractSeed);
+    auto repeated = alpakaTune::makeParameterStrategy(
+        strategyKind, deterministicContractSeed);
+    auto candidates = std::set<std::size_t>{};
+    for (std::size_t recommendation = 0u; recommendation < 100u;
+         ++recommendation) {
+      auto const configuration = strategy->recommend(context);
+      if (configuration.size() != 1u ||
+          configuration != repeated->recommend(context))
+        return EXIT_FAILURE;
+      candidates.insert(static_cast<std::size_t>(
+          std::lround(static_cast<double>(configuration.front()) * 99.0)));
+    }
+    if (candidates.size() < 10u)
       return EXIT_FAILURE;
   }
 
@@ -106,6 +158,7 @@ auto main() -> int {
     auto yaml = std::ofstream{configuration};
     yaml << "schema_version: 1\n"
             "tuning:\n"
+            "  mode: online_fixed\n"
             "  strategy: "
          << name
          << "\n"
@@ -146,11 +199,13 @@ auto main() -> int {
   auto learnedYaml = std::ofstream{learnedConfiguration};
   learnedYaml << "schema_version: 2\n"
                  "tuning:\n"
+                 "  mode: online_fixed\n"
                  "  strategy: learned_hybrid\n"
                  "  warmup_runs: 0\n"
                  "  runs_per_candidate: 1\n"
                  "  noise_cancellation_window: 1\n"
                  "  max_consecutive_runs: 1\n"
+                 "  maximum_executions: 100000\n"
                  "persistence:\n"
                  "  file: learned-history.json\n"
                  "learning:\n"
@@ -167,6 +222,61 @@ auto main() -> int {
       learnedDefaults.learnedCandidatePoolSize != 64u ||
       learnedDefaults.learnedCandidateBatchSize != 16u)
     return EXIT_FAILURE;
+
+  auto const adaptiveConfiguration =
+      configurationDirectory / "adaptive-v2.yaml";
+  auto adaptiveYaml = std::ofstream{adaptiveConfiguration};
+  adaptiveYaml << "schema_version: 2\n"
+                  "tuning:\n"
+                  "  mode: online_adaptive\n"
+                  "  strategy: random\n"
+                  "  warmup_runs: 1\n"
+                  "  runs_per_candidate: 1\n"
+                  "  noise_cancellation_window: 2\n"
+                  "  max_consecutive_runs: 4\n"
+                  "  maximum_executions: 4000\n"
+                  "  maximum_retired_configurations: 1\n"
+                  "  history_window_size: 10\n"
+                  "  revisit_admission_steepness: 16\n"
+                  "  score_temperature_start: 0.25\n"
+                  "  score_temperature_end: 0.05\n"
+                  "persistence:\n"
+                  "  file: adaptive-history.json\n";
+  adaptiveYaml.close();
+  auto const adaptiveDefaults =
+      alpakaTune::TunerConfig::fromYaml(adaptiveConfiguration);
+  if (adaptiveDefaults.mode != alpakaTune::TuningMode::onlineAdaptive ||
+      adaptiveDefaults.maximumExecutions != 4000u ||
+      adaptiveDefaults.maximumRetiredConfigurations != 1u ||
+      adaptiveDefaults.historyWindowSize != 10u ||
+      std::abs(adaptiveDefaults.revisitAdmissionSteepness - 16.0) > 1.0e-12 ||
+      std::abs(adaptiveDefaults.scoreTemperatureStart - 0.25) > 1.0e-12 ||
+      std::abs(adaptiveDefaults.scoreTemperatureEnd - 0.05) > 1.0e-12)
+    return EXIT_FAILURE;
+
+  auto const retiredOnlyConfiguration =
+      configurationDirectory / "retired-only-v2.yaml";
+  auto retiredOnlyYaml = std::ofstream{retiredOnlyConfiguration};
+  retiredOnlyYaml << "schema_version: 2\n"
+                     "tuning:\n"
+                     "  mode: online_fixed\n"
+                     "  strategy: random\n"
+                     "  warmup_runs: 0\n"
+                     "  runs_per_candidate: 1\n"
+                     "  noise_cancellation_window: 1\n"
+                     "  max_consecutive_runs: 1\n"
+                     "  maximum_executions: null\n"
+                     "  maximum_retired_configurations: 7\n"
+                     "persistence:\n"
+                     "  file: retired-only-history.json\n";
+  retiredOnlyYaml.close();
+  auto const retiredOnlyDefaults =
+      alpakaTune::TunerConfig::fromYaml(retiredOnlyConfiguration);
+  if (retiredOnlyDefaults.mode != alpakaTune::TuningMode::onlineFixed ||
+      retiredOnlyDefaults.maximumExecutions ||
+      retiredOnlyDefaults.maximumRetiredConfigurations != 7u)
+    return EXIT_FAILURE;
+
   std::filesystem::remove_all(configurationDirectory);
   return EXIT_SUCCESS;
 }

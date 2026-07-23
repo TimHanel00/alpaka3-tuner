@@ -18,8 +18,10 @@ namespace alpakaTune {
  */
 class SimulatedAnnealingStrategy final : public ParameterStrategy {
 public:
+  /** @brief Construct a reproducible annealing proposal stream. */
   explicit SimulatedAnnealingStrategy(std::uint64_t seed) : m_random(seed) {}
 
+  /** @brief Reconcile finished admitted points, then perturb accepted state. */
   [[nodiscard]] auto recommend(StrategyContext const &context)
       -> ParameterConfiguration override {
     reconcile(context);
@@ -28,7 +30,6 @@ public:
       auto initial = ParameterConfiguration(dimensions.size());
       for (auto &value : initial)
         value = m_uniform(m_random);
-      m_pending.push_back(initial);
       return initial;
     }
 
@@ -38,11 +39,22 @@ public:
     auto const radius = std::max(0.02f, 0.35f * m_temperature);
     for (auto &value : proposal)
       value = std::clamp(value + radius * m_normal(m_random), 0.0f, 1.0f);
-    m_pending.push_back(proposal);
     return proposal;
   }
 
+  /** @brief Add only tuner-admitted proposals to pending annealing state. */
+  void recommendationResult(ParameterConfiguration const &configuration,
+                            RecommendationDisposition disposition) override {
+    if (disposition == RecommendationDisposition::scheduled)
+      m_pending.push_back(configuration);
+  }
+
 private:
+  /** @brief Incorporate finished admitted proposals into annealing state.
+   *
+   * Only configurations reported as scheduled enter m_pending. Rejected raw
+   * proposals therefore cannot influence the accepted state or temperature.
+   */
   void reconcile(StrategyContext const &context) {
     if (!m_current.empty()) {
       if (auto const runtime = context.runtimeFor(m_current);

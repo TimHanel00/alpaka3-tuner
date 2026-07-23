@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: MPL-2.0
  */
 
+#include "ExampleHelper.hpp"
 #include "randomInitNormal.hpp"
 
 #include <alpaka/alpaka.hpp>
@@ -229,9 +230,12 @@ bool testRandomInitKernels(alpaka::onHost::concepts::Device auto host,
   assert(vectorTuning.info().candidateCount >= 2000u);
 
   auto tuneHistogram = [&](auto &tuner, auto const &kernelBundle) {
-    while (!tuner.isTuningComplete()) {
+    std::size_t completedExecutions = 0u;
+    while (alpakaTune::example::applicationRunsRemain(completedExecutions,
+                                                      tuner)) {
       alpaka::onHost::memcpy(queue, outBins_d, outBins_h);
       tuner.enqueue(queue, frameSpec, kernelBundle);
+      ++completedExecutions;
     }
   };
 

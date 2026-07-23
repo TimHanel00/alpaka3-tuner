@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: ISC
  */
 
+#include "ExampleHelper.hpp"
 #include "Kernels.hpp"
 #include "alpaka/onHost/FrameSpec.hpp"
 #include "common.hpp"
@@ -30,9 +31,9 @@ constexpr auto chunkSize = CVec<IdxType, 256_idx>{};
 inline constexpr auto velocityTileExtent =
     ALPAKA_TUNE_TUNABLE("velocityTileExtent");
 
-enum class TuningRunMode { fixedSteps, untilTerminal, untilComplete };
+enum class TuningRunMode { fixedSteps, untilPolicyGoal, untilComplete };
 
-[[nodiscard]] constexpr auto extendsUntilTuningTerminates(TuningRunMode mode)
+[[nodiscard]] constexpr auto extendsForTuningCollection(TuningRunMode mode)
     -> bool {
   return mode != TuningRunMode::fixedSteps;
 }
@@ -54,9 +55,8 @@ void printExampleHeader(bool const writePngs, bool const benchmarkMode,
     if (tuningRunMode == TuningRunMode::untilComplete)
       std::cout << "    Full-coverage tuning collection is enabled"
                 << std::endl;
-    else if (tuningRunMode == TuningRunMode::untilTerminal)
-      std::cout << "    Terminal-state tuning collection is enabled"
-                << std::endl;
+    else if (tuningRunMode == TuningRunMode::untilPolicyGoal)
+      std::cout << "    Policy-goal tuning collection is enabled" << std::endl;
     std::cout << "================================" << std::endl;
     std::cout << std::endl;
   } else {
@@ -85,8 +85,8 @@ void printExampleHeader(bool const writePngs, bool const benchmarkMode,
  * @param benchmarkMode Whether to run in benchmark mode. See the help docs
  * below.
  * @param tuningRunMode Whether benchmark data collection may extend the
- * simulation until tuning reaches a terminal state, and whether only full
- * coverage is accepted as successful completion.
+ * simulation through the application minimum and tuning-policy goal, and
+ * whether only full coverage is accepted as successful completion.
  * @param numParticles The number of particles to simulate.
  * @param numTimeSteps The number of time steps to run for.
  * @param dt The delta t to use as time steps.
@@ -208,12 +208,13 @@ int example(auto const deviceSpec, auto const computeExec, bool const writePngs,
 
   // Tune and execute the velocity kernel as part of each simulation step.
   // The normal simulation still performs exactly numTimeSteps. The
-  // benchmark-only collection modes continue safe simulation steps until the
-  // tuner reaches a terminal state.
+  // benchmark-only collection modes continue safe simulation steps until both
+  // the application minimum and tuning-policy goal have been reached.
   std::size_t completedSteps = 0u;
   for (IdxType step = 1;
-       step <= numTimeSteps || (extendsUntilTuningTerminates(tuningRunMode) &&
-                                !tuner.isTuningComplete());
+       step <= numTimeSteps ||
+       (extendsForTuningCollection(tuningRunMode) &&
+        alpakaTune::example::applicationRunsRemain(completedSteps, tuner));
        ++step) {
     ++completedSteps;
     // Queue one step of the simulation
@@ -277,17 +278,17 @@ int example(auto const deviceSpec, auto const computeExec, bool const writePngs,
               << std::endl;
   }
 
-  if (extendsUntilTuningTerminates(tuningRunMode)) {
-    auto const tunerInfo = tuner.info();
-    if (!tunerInfo.tuningComplete) {
-      std::cerr << "Tuning collection stopped before the context reached a "
-                   "terminal state."
+  if (extendsForTuningCollection(tuningRunMode)) {
+    if (alpakaTune::example::applicationRunsRemain(completedSteps, tuner)) {
+      std::cerr << "Tuning collection stopped before the application minimum "
+                   "and tuning-policy goal were reached."
                 << std::endl;
       return EXIT_FAILURE;
     }
     if (tuningRunMode == TuningRunMode::untilComplete &&
-        tunerInfo.completionReason !=
-            alpakaTune::TunerCompletionReason::allConfigurations) {
+        (!tuner.isTuningComplete() ||
+         tuner.completionReason() !=
+             alpakaTune::TunerCompletionReason::allConfigurations)) {
       std::cerr
           << "Full-coverage tuning stopped at a configured completion limit."
           << std::endl;
@@ -299,11 +300,15 @@ int example(auto const deviceSpec, auto const computeExec, bool const writePngs,
                 << " time steps and completed every tuning context."
                 << std::endl;
     } else {
-      std::cout << "Terminal-state tuning mode executed " << completedSteps
-                << " time steps and reached a terminal state for every tuning "
-                   "context (updateVelocities: "
-                << alpakaTune::completionReasonName(tunerInfo.completionReason)
-                << ")." << std::endl;
+      std::cout << "Tuning-collection mode executed " << completedSteps
+                << " time steps and reached the application minimum plus the "
+                   "tuning-policy goal.";
+      if (tuner.isTuningComplete())
+        std::cout << " Terminal reason: "
+                  << alpakaTune::completionReasonName(tuner.completionReason());
+      else
+        std::cout << " Adaptive horizon reached; tuning remains active";
+      std::cout << "." << std::endl;
     }
   }
 
@@ -337,12 +342,14 @@ void help(char *argv[]) {
                "this mode. Default: off"
             << std::endl;
   std::cerr << "  --tune-until-complete: benchmark-only mode; continue safe "
-               "simulation steps until the tuning context exhausts all "
+               "simulation steps for at least 50000 iterations and until the "
+               "tuning context exhausts all "
                "configurations; fail if a configured budget stops tuning first"
             << std::endl;
   std::cerr << "  --tune-until-terminal: benchmark-only mode; continue safe "
-               "simulation steps until the tuning context either exhausts all "
-               "configurations or reaches a configured budget"
+               "simulation steps through the 50000-iteration application "
+               "minimum and tuning policy goal; the legacy option name is "
+               "retained"
             << std::endl;
   std::cerr << "  -h: Print this help message" << std::endl;
   std::cerr << std::endl;
@@ -431,7 +438,7 @@ auto main(int argc, char *argv[]) -> int {
       benchmarkMode = true;
       break;
     case 'T':
-      if (tuningRunMode == TuningRunMode::untilTerminal) {
+      if (tuningRunMode == TuningRunMode::untilPolicyGoal) {
         std::cerr << "Error: --tune-until-complete and "
                      "--tune-until-terminal are mutually exclusive.\n";
         return EXIT_FAILURE;
@@ -444,7 +451,7 @@ auto main(int argc, char *argv[]) -> int {
                      "--tune-until-terminal are mutually exclusive.\n";
         return EXIT_FAILURE;
       }
-      tuningRunMode = TuningRunMode::untilTerminal;
+      tuningRunMode = TuningRunMode::untilPolicyGoal;
       break;
     case 'h':
       help(argv);

@@ -1,6 +1,8 @@
 # Default alpakaTune tuner configuration.
 schema_version: 2
 tuning:
+  # offline, online_fixed, or online_adaptive
+  mode: online_adaptive
   # exhaustive, random, simulated_annealing, bayesian_optimization, or learned_hybrid
   strategy: exhaustive
   random_seed: 0
@@ -26,10 +28,17 @@ tuning:
   noise_cancellation_window: 50
   # how many times in the row does the same config run (warning: this has to be higher than warmup_runs)
   max_consecutive_runs: 2
-  # Tuner-wide safety limits. Normal completion can happen earlier when the complete Cartesian space is resolved -
-  # this of course might not happen in case a non-deterministic search strategy is selected
-  maximum_executions: 100000
-  maximum_retired_configurations: 10000
+  # In adaptive mode this is the revisit-probability and temperature horizon;
+  # it does not terminate tuning. The surrounding application owns its run
+  # count independently.
+  maximum_executions: 40000
+  # Alternative online_fixed guard; accepted but ignored by online_adaptive.
+  # maximum_retired_configurations: 100000
+  # Retain a rolling window per configuration independently of revisit count.
+  history_window_size: 10
+  revisit_admission_steepness: 16
+  score_temperature_start: 0.25
+  score_temperature_end: 0.05
 persistence:
   file: .alpakaTune/history.json
 learning:

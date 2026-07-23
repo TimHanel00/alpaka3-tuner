@@ -4,6 +4,8 @@
 
 #include <alpaka/alpaka.hpp>
 
+#include "ExampleHelper.hpp"
+
 #include <tuning.hpp>
 
 #include <algorithm>
@@ -226,7 +228,8 @@ auto example(T_Cfg const &cfg, size_t numElements, size_t numberOfRuns,
   double totalCopyRuntime = 0.0;
   std::size_t completedRuns = 0u;
 
-  for (; completedRuns < numberOfRuns || !tuner.isTuningComplete();
+  for (; alpakaTune::example::applicationRunsRemain(completedRuns, numberOfRuns,
+                                                    tuner);
        ++completedRuns) {
     onHost::memcpy(queue, bufAccARGB, bufHostInitialARGB);
     onHost::wait(queue);
@@ -288,7 +291,7 @@ void help(char *argv[]) {
       << "  -n  numElements: Number of elements to process. Default: 1024*1024"
       << std::endl;
   std::cerr << "  -r  numberOfRuns: Number of kernel executions for averaging. "
-               "Default: 1"
+               "Default: 50000"
             << std::endl;
   std::cerr
       << "  -e: disable execution of the native std::for_each implementation"
@@ -301,7 +304,7 @@ auto main(int argc, char *argv[]) -> int {
     return EXIT_FAILURE;
   // Default value if no command line argument used
   size_t numElements = 1024 * 1024;
-  size_t numberOfRuns = 1;
+  size_t numberOfRuns = alpakaTune::example::minimumTuningExecutions;
 
   int opt;
   bool enableStdForEach = true;

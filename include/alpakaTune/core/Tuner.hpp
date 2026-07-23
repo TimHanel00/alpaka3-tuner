@@ -62,6 +62,56 @@ struct BestImprovement {
   double elapsedSeconds{};
 };
 
+/** @brief Normalized sigmoid used to admit adaptive revisits.
+ *
+ * @param progress Execution progress; clamped to [0, 1].
+ * @param steepness Positive sigmoid steepness.
+ * @return A probability normalized to exactly 0 at progress 0 and exactly 1
+ * at progress 1.
+ */
+[[nodiscard]] inline auto normalizedLogisticAdmission(double progress,
+                                                      double steepness)
+    -> double {
+  progress = std::clamp(progress, 0.0, 1.0);
+  auto const sigmoid = [](double value) {
+    return 1.0 / (1.0 + std::exp(-value));
+  };
+  auto const lower = sigmoid(-steepness / 2.0);
+  auto const upper = sigmoid(steepness / 2.0);
+  return std::clamp((sigmoid(steepness * (progress - 0.5)) - lower) /
+                        (upper - lower),
+                    0.0, 1.0);
+}
+
+/** @brief Exponentially interpolate the adaptive score temperature.
+ * @param progress Execution progress; clamped to [0, 1].
+ * @param start Temperature at progress zero.
+ * @param end Temperature at and after the schedule horizon.
+ */
+[[nodiscard]] inline auto adaptiveScoreTemperature(double progress,
+                                                   double start, double end)
+    -> double {
+  progress = std::clamp(progress, 0.0, 1.0);
+  return start * std::pow(end / start, progress);
+}
+
+/** @brief Boltzmann admission probability relative to the current best.
+ *
+ * The best candidate and any equally fast candidate receive probability one.
+ * Slower candidates decay according to their relative slowdown, keeping the
+ * gate invariant under uniform runtime scaling.
+ */
+[[nodiscard]] inline auto relativeScoreAdmission(double score, double best,
+                                                 double temperature) -> double {
+  if (!std::isfinite(score) || !std::isfinite(best) || score < 0.0 ||
+      best < 0.0 || !std::isfinite(temperature) || temperature <= 0.0)
+    throw std::invalid_argument{
+        "Adaptive admission received an invalid score."};
+  auto const scale = std::max(best, std::numeric_limits<double>::min());
+  auto const relativeSlowdown = std::max(0.0, score / scale - 1.0);
+  return std::exp(-relativeSlowdown / temperature);
+}
+
 template <FixedString Name>
 inline constexpr bool isReservedLaunchName =
     sameName<Name, frameExtentName> || sameName<Name, numFramesName> ||
@@ -204,7 +254,13 @@ void forEachTupleType(Callable &&callable) {
 
 } // namespace detail
 
-/** A device-bound tuner constructed from one TunerConfig. */
+/** @brief Device-bound owner of scheduling, measurement, and persistence.
+ *
+ * Each enqueue call performs exactly one application-requested kernel launch.
+ * The tuner selects the candidate and may time it, but never decides how often
+ * the surrounding application calls enqueue. One instance binds lazily to one
+ * launch prototype and one persistent fingerprint.
+ */
 template <typename TunablesType, typename Device> class Tuner {
 public:
   using Traits = detail::TunablesTraits<TunablesType>;
@@ -212,7 +268,7 @@ public:
   static constexpr std::size_t dimensionCount = Traits::dimensionCount;
   // The executor is part of the launch identity. Histories produced before
   // that identity was persisted must not be reused by a newer tuner.
-  static constexpr int persistenceSchemaVersion = 10;
+  static constexpr int persistenceSchemaVersion = 11;
   static constexpr bool tunesFrameSpec =
       Traits::template has<detail::numFramesName> ||
       Traits::template has<detail::frameExtentName>;
@@ -222,6 +278,11 @@ public:
   static_assert(!(tunesFrameSpec && tunesThreadSpec),
                 "A tuner cannot combine FrameSpec and ThreadSpec parameters.");
 
+  /** @brief Construct a tuner from a validated policy and identity components.
+   *
+   * Prefer makeTuner(); this constructor is public to preserve the aggregate
+   * factory's concrete return type.
+   */
   Tuner(TunerConfig defaults,
         std::shared_ptr<detail::PersistenceStore> persistence,
         TunablesType tunables, Device device,
@@ -233,32 +294,74 @@ public:
     initialiseDimensions();
   }
 
+  /** Whether tuning entered an actual terminal state.
+   *
+   * This remains false in online-adaptive mode. Use completed() only when the
+   * application also wants the adaptive schedule-horizon diagnostic.
+   */
   [[nodiscard]] auto isTuningComplete() const noexcept -> bool {
     return m_complete;
   }
+  /** Whether the configured tuning-policy goal has been reached.
+   *
+   * In online-fixed and offline mode this is a terminal state. In
+   * online-adaptive mode it only reports that the admission/cooling horizon
+   * has been reached; enqueue() continues adapting normally afterward.
+   */
+  [[nodiscard]] auto completed() const noexcept -> bool {
+    if (m_defaults.mode == TuningMode::onlineAdaptive)
+      return executionBudgetReached();
+    return m_complete;
+  }
+  /** @brief Explain why an actual terminal state was entered.
+   *
+   * This is a post-completion diagnostic, not a configuration input or a
+   * general status field.
+   *
+   * @throws std::logic_error if isTuningComplete() is false. Reaching the
+   * adaptive schedule horizon does not create a terminal reason.
+   */
+  [[nodiscard]] auto completionReason() const -> TunerCompletionReason {
+    if (!m_complete)
+      throw std::logic_error{
+          "The tuner has not entered a terminal completion state."};
+    return m_completionReason;
+  }
+  /** @brief Whether compatible persistence initialized this tuner. */
   [[nodiscard]] auto loadedFromCache() const noexcept -> bool {
     return m_loadedFromCache;
   }
+  /** @brief Configured proposal strategy, including an explicit learned kind.
+   */
   [[nodiscard]] auto strategyKind() const noexcept -> StrategyKind {
     return m_defaults.strategy;
   }
+  /** @brief Return the terminal winner's Cartesian index.
+   * @throws std::logic_error before fixed/offline terminal completion.
+   */
   [[nodiscard]] auto bestCandidateIndex() const -> std::size_t {
     if (!m_complete)
       throw std::logic_error{"The tuner has not selected a winner yet."};
     return m_bestCandidate;
   }
+  /** @brief Return the terminal winner's normalized parameter vector. */
   [[nodiscard]] auto bestConfiguration() const -> ParameterConfiguration {
     return candidateConfiguration(bestCandidateIndex());
   }
+  /** @brief Map an exact Cartesian candidate to normalized parameters.
+   * @throws std::out_of_range if @p candidate is outside this tuner.
+   */
   [[nodiscard]] auto candidateConfiguration(std::size_t candidate) const
       -> ParameterConfiguration {
     if (candidate >= m_candidateCount)
       throw std::out_of_range{"The candidate index is outside this tuner."};
     return normalizedConfiguration(candidate);
   }
+  /** @brief Cartesian index used by the most recent enqueue call. */
   [[nodiscard]] auto lastCandidateIndex() const noexcept -> std::size_t {
     return m_lastCandidate;
   }
+  /** @brief Snapshot current coverage, policy, best, and admission counters. */
   [[nodiscard]] auto info() const -> TunerInfo {
     auto measured = std::size_t{};
     for (std::size_t candidate = 0u; candidate < m_histories.size();
@@ -266,23 +369,32 @@ public:
       if (!m_rejected.empty() && !m_rejected.at(candidate) &&
           !m_histories.at(candidate).empty())
         ++measured;
-    auto result =
-        TunerInfo{.candidateCount = m_candidateCount,
-                  .rejectedCandidateCount = m_rejectedCount,
-                  .scheduledCandidateCount = m_scheduledCount,
-                  .measuredCandidateCount = measured,
-                  .retiredConfigurationCount = m_retiredConfigurationCount,
-                  .executionCount = m_executionCount,
-                  .tuningComplete = m_complete,
-                  .loadedFromCache = m_loadedFromCache,
-                  .executionBudgetReached = m_executionBudgetReached,
-                  .completionReason = m_completionReason,
-                  .bestCandidateIndex = std::nullopt,
-                  .bestConfiguration = std::nullopt,
-                  .learnedStatus = std::nullopt,
-                  .learnedAdapterUpdateCount = 0u};
-    if (m_complete &&
-        m_bestCandidate != std::numeric_limits<std::size_t>::max()) {
+    auto result = TunerInfo{
+        .mode = m_defaults.mode,
+        .candidateCount = m_candidateCount,
+        .rejectedCandidateCount = m_rejectedCount,
+        .scheduledCandidateCount = m_scheduledCount,
+        .measuredCandidateCount = measured,
+        .retiredConfigurationCount = m_retiredConfigurationCount,
+        .executionCount = m_executionCount,
+        .maximumExecutions = m_defaults.maximumExecutions,
+        .tuningComplete = m_complete,
+        .loadedFromCache = m_loadedFromCache,
+        .executionBudgetReached = m_executionBudgetReached,
+        .bestCandidateIndex = std::nullopt,
+        .bestConfiguration = std::nullopt,
+        .learnedStatus = std::nullopt,
+        .learnedAdapterUpdateCount = 0u,
+        .unseenAcceptedCount = m_unseenAcceptedCount,
+        .revisitAcceptedCount = m_revisitAcceptedCount,
+        .activeDuplicateRejectedCount = m_activeDuplicateRejectedCount,
+        .restrictionRejectedCount = m_restrictionRejectedCount,
+        .revisitRejectedCount = m_revisitRejectedCount,
+        .scoreRejectedCount = m_scoreRejectedCount};
+    if (auto const best = currentBestCandidate()) {
+      result.bestCandidateIndex = *best;
+      result.bestConfiguration = normalizedConfiguration(*best);
+    } else if (m_bestCandidate != std::numeric_limits<std::size_t>::max()) {
       result.bestCandidateIndex = m_bestCandidate;
       result.bestConfiguration = normalizedConfiguration(m_bestCandidate);
     }
@@ -293,12 +405,14 @@ public:
     }
     return result;
   }
+  /** @brief Current robust statistics for one Cartesian candidate. */
   [[nodiscard]] auto candidateRuntimeStatistics(std::size_t candidate) const
       -> detail::RuntimeStatistics {
     if (m_histories.empty())
       throw std::logic_error{"The tuner has not launched a candidate yet."};
     return m_histories.at(candidate).statistics();
   }
+  /** @brief Retained rolling timing window for one Cartesian candidate. */
   [[nodiscard]] auto candidateRuntimeSamples(std::size_t candidate) const
       -> std::span<double const> {
     if (m_histories.empty())
@@ -308,6 +422,12 @@ public:
 
   template <typename Queue, typename FrameSpec, typename Kernel,
             typename... Args>
+  /** @brief Select and perform exactly one kernel launch.
+   *
+   * The application owns call count and lifetime. Depending on mode and queue
+   * state, the launch may be a warm-up, measurement, adaptive revisit, or
+   * terminal winner replay.
+   */
   void enqueue(Queue const &queue, FrameSpec const &frameSpec,
                alpaka::KernelBundle<Kernel, Args...> const &prototype) {
     static_cast<void>(enqueueObserved(queue, frameSpec, prototype));
@@ -315,6 +435,7 @@ public:
 
   template <typename Queue, typename FrameSpec, typename Kernel,
             typename... Args>
+  /** @brief Perform one launch and return its selection/timing diagnostics. */
   [[nodiscard]] auto
   enqueueObserved(Queue const &queue, FrameSpec const &frameSpec,
                   alpaka::KernelBundle<Kernel, Args...> const &prototype)
@@ -333,15 +454,18 @@ public:
         launchDescription(frameSpec));
     initialiseScheduling();
 
-    if (!m_complete && executionBudgetReached())
+    if (m_defaults.mode == TuningMode::onlineFixed && !m_complete &&
+        executionBudgetReached())
       finishTuningAtBudget(TunerCompletionReason::maximumExecutions);
-    if (!m_complete && retiredConfigurationBudgetReached())
+    if (m_defaults.mode == TuningMode::onlineFixed && !m_complete &&
+        retiredConfigurationBudgetReached())
       finishTuningAtBudget(TunerCompletionReason::maximumRetiredConfigurations);
 
     using Bundle = std::remove_cvref_t<decltype(prototype)>;
     initialiseCompileVariants<Queue, FrameSpec, Bundle>();
     auto const selection =
-        m_complete ? detail::CandidateQueue::Selection{m_bestCandidate, false}
+        m_complete ? detail::CandidateQueue::Selection{m_bestCandidate, false,
+                                                       false, false}
                    : nextCandidate();
     auto const candidate = selection.candidateIndex;
     m_lastCandidate = candidate;
@@ -352,9 +476,11 @@ public:
                                               .runtimeSeconds = std::nullopt};
     auto const key = compileVariantKey(indicesFor(candidate));
     m_compileVariants.at(m_compileVariantIndices.at(key))(
-        &call, candidate, !m_complete, selection.beginActivation);
+        &call, candidate, selection.measure, selection.beginActivation,
+        selection.endActivation);
 
-    if (!m_complete && m_queue->empty() &&
+    if (m_defaults.mode == TuningMode::onlineFixed && !m_complete &&
+        m_queue->empty() &&
         m_scheduledCount + m_rejectedCount == m_candidateCount)
       finishTuning();
 
@@ -834,89 +960,96 @@ private:
     return rawCandidate;
   }
 
-  [[nodiscard]] auto claimCandidate(std::size_t candidate) -> bool {
-    if (m_scheduled.at(candidate) || m_rejected.at(candidate))
-      return false;
+  /** @brief Clamped progress through the adaptive schedule horizon. */
+  [[nodiscard]] auto adaptiveProgress() const -> double {
+    return std::clamp(static_cast<double>(m_executionCount) /
+                          static_cast<double>(*m_defaults.maximumExecutions),
+                      0.0, 1.0);
+  }
+
+  /** @brief Apply the single shared legality and mode-specific admission path.
+   *
+   * Unseen legal candidates are scheduled directly. Adaptive revisits must
+   * pass the normalized sigmoid and relative-score gates. Fixed mode rejects
+   * measured proposals because its records are single-lifecycle.
+   */
+  [[nodiscard]] auto admitCandidate(std::size_t candidate)
+      -> RecommendationDisposition {
+    if (m_scheduled.at(candidate)) {
+      ++m_activeDuplicateRejectedCount;
+      return RecommendationDisposition::activeDuplicate;
+    }
+    if (m_rejected.at(candidate)) {
+      ++m_restrictionRejectedCount;
+      return RecommendationDisposition::restrictionRejected;
+    }
     if (!candidateAccepted(indicesFor(candidate))) {
       m_rejected.at(candidate) = true;
       ++m_rejectedCount;
-      return false;
+      ++m_restrictionRejectedCount;
+      return RecommendationDisposition::restrictionRejected;
+    }
+
+    auto &history = m_histories.at(candidate);
+    auto const revisit = !history.empty();
+    if (revisit && m_defaults.mode == TuningMode::onlineFixed) {
+      ++m_revisitRejectedCount;
+      return RecommendationDisposition::revisitRejected;
+    }
+    if (revisit && m_defaults.mode == TuningMode::onlineAdaptive) {
+      auto const progress = adaptiveProgress();
+      auto const revisitProbability = detail::normalizedLogisticAdmission(
+          progress, m_defaults.revisitAdmissionSteepness);
+      if (m_admissionDistribution(m_random) >= revisitProbability) {
+        ++m_revisitRejectedCount;
+        return RecommendationDisposition::revisitRejected;
+      }
+      auto const best = currentBestCandidate();
+      if (!best)
+        throw std::logic_error{
+            "An adaptive revisit exists without a current best candidate."};
+      auto const temperature = detail::adaptiveScoreTemperature(
+          progress, m_defaults.scoreTemperatureStart,
+          m_defaults.scoreTemperatureEnd);
+      auto const scoreProbability = detail::relativeScoreAdmission(
+          history.statistics().estimate(),
+          m_histories.at(*best).statistics().estimate(), temperature);
+      if (m_admissionDistribution(m_random) >= scoreProbability) {
+        ++m_scoreRejectedCount;
+        return RecommendationDisposition::scoreRejected;
+      }
+      history.reopen();
+      ++m_revisitAcceptedCount;
+    } else {
+      ++m_unseenAcceptedCount;
     }
     m_scheduled.at(candidate) = true;
     ++m_scheduledCount;
-    return true;
+    return RecommendationDisposition::scheduled;
   }
 
-  [[nodiscard]] auto
-  nearestUnscheduledCandidate(ParameterConfiguration const &recommendation)
-      -> std::optional<std::size_t> {
-    try {
-      auto const selected = candidateForConfiguration(recommendation);
-      if (claimCandidate(selected))
-        return selected;
-    } catch (std::invalid_argument const &) {
-      // A malformed recommendation falls through to the nearest candidate.
-    }
-
-    auto nearest = std::numeric_limits<std::size_t>::max();
-    auto nearestDistance = std::numeric_limits<double>::infinity();
-    for (std::size_t candidate = 0u; candidate < m_candidateCount;
-         ++candidate) {
-      if (m_scheduled.at(candidate) || m_rejected.at(candidate))
-        continue;
-      auto const configuration = normalizedConfiguration(candidate);
-      auto distance = 0.0;
-      for (std::size_t dimension = 0u; dimension < dimensionCount;
-           ++dimension) {
-        auto const difference = static_cast<double>(recommendation[dimension]) -
-                                static_cast<double>(configuration[dimension]);
-        distance += difference * difference;
-      }
-      if (distance < nearestDistance) {
-        nearest = candidate;
-        nearestDistance = distance;
-      }
-    }
-    while (nearest != std::numeric_limits<std::size_t>::max()) {
-      if (claimCandidate(nearest))
-        return nearest;
-      nearest = std::numeric_limits<std::size_t>::max();
-      nearestDistance = std::numeric_limits<double>::infinity();
-      for (std::size_t candidate = 0u; candidate < m_candidateCount;
-           ++candidate) {
-        if (m_scheduled.at(candidate) || m_rejected.at(candidate))
-          continue;
-        auto const configuration = normalizedConfiguration(candidate);
-        auto distance = 0.0;
-        for (std::size_t dimension = 0u; dimension < dimensionCount;
-             ++dimension) {
-          auto const difference =
-              static_cast<double>(recommendation[dimension]) -
-              static_cast<double>(configuration[dimension]);
-          distance += difference * difference;
-        }
-        if (distance < nearestDistance) {
-          nearest = candidate;
-          nearestDistance = distance;
-        }
-      }
-    }
-    return std::nullopt;
-  }
-
+  /** @brief Translate public configuration into per-candidate history policy.
+   */
   [[nodiscard]] auto runtimeHistoryOptions() const
       -> detail::RuntimeHistoryOptions {
-    return {m_defaults.warmupRuns,       m_defaults.minimumRunsPerCandidate,
-            m_defaults.runsPerCandidate, m_defaults.ciCheckInterval,
-            m_defaults.ciZScore,         m_defaults.ciRelativeWidth,
-            m_defaults.outlierMadScale};
+    return {m_defaults.warmupRuns,
+            m_defaults.minimumRunsPerCandidate,
+            m_defaults.runsPerCandidate,
+            m_defaults.ciCheckInterval,
+            m_defaults.ciZScore,
+            m_defaults.ciRelativeWidth,
+            m_defaults.outlierMadScale,
+            m_defaults.historyWindowSize,
+            m_defaults.mode == TuningMode::onlineFixed};
   }
 
+  /** @brief Whether the configured execution horizon/guard has been reached. */
   [[nodiscard]] auto executionBudgetReached() const noexcept -> bool {
     return m_defaults.maximumExecutions &&
            m_executionCount >= *m_defaults.maximumExecutions;
   }
 
+  /** @brief Whether the fixed-mode retired-record guard has been reached. */
   [[nodiscard]] auto retiredConfigurationBudgetReached() const noexcept
       -> bool {
     return m_defaults.maximumRetiredConfigurations &&
@@ -1020,20 +1153,31 @@ private:
     Tuner const &m_tuner;
   };
 
+  /** @brief Request and process exactly one strategy recommendation.
+   *
+   * Rejection returns no candidate; callers never synchronously retry the
+   * strategy to replace the rejected point.
+   */
   [[nodiscard]] auto recommendCandidate() -> std::optional<std::size_t> {
-    if (m_scheduledCount + m_rejectedCount == m_candidateCount)
+    if (m_defaults.mode == TuningMode::onlineFixed &&
+        m_scheduledCount + m_rejectedCount == m_candidateCount)
       return std::nullopt;
     auto const start = std::chrono::steady_clock::now();
     auto const strategyContext = TunerStrategyView{*this};
     auto recommendation = m_strategy->recommend(strategyContext);
     validateParameterConfiguration(recommendation, std::span{m_dimensionSizes});
-    auto const candidate = nearestUnscheduledCandidate(recommendation);
+    auto const candidate = candidateForConfiguration(recommendation);
+    auto const disposition = admitCandidate(candidate);
+    m_strategy->recommendationResult(recommendation, disposition);
     m_recommendationSecondsSinceLastLaunch +=
         std::chrono::duration<double>{std::chrono::steady_clock::now() - start}
             .count();
-    return candidate;
+    return disposition == RecommendationDisposition::scheduled
+               ? std::optional<std::size_t>{candidate}
+               : std::nullopt;
   }
 
+  /** @brief Lazily bind persistence, histories, strategy, and active queue. */
   void initialiseScheduling() {
     if (m_queue || m_complete)
       return;
@@ -1046,7 +1190,15 @@ private:
                        detail::RuntimeHistory{runtimeHistoryOptions()});
     m_scheduled.assign(m_candidateCount, false);
     m_rejected.assign(m_candidateCount, false);
-    if (loadCache())
+    auto const loaded = loadCache();
+    if (m_defaults.mode == TuningMode::offline) {
+      if (!loaded)
+        throw std::runtime_error{
+            "Offline tuning requires a compatible history with at least one "
+            "measured configuration."};
+      return;
+    }
+    if (loaded && m_defaults.mode == TuningMode::onlineFixed && m_complete)
       return;
     if (m_defaults.strategy == StrategyKind::learnedHybrid) {
       auto const context = learnedModelContext();
@@ -1069,21 +1221,33 @@ private:
           "The tuning-space restrictions rejected every candidate."};
   }
 
+  /** @brief Make at most one recommendation attempt per vacant queue slot. */
   void refillQueue() {
-    while (!m_queue->full() && m_scheduledCount < m_candidateCount) {
+    auto const attempts = m_defaults.noiseCancellationWindow - m_queue->size();
+    for (std::size_t attempt = 0u; attempt < attempts && !m_queue->full();
+         ++attempt) {
       auto const candidate = recommendCandidate();
-      if (!candidate)
-        return;
-      m_queue->insert(*candidate);
+      if (candidate)
+        m_queue->insert(*candidate);
     }
   }
 
+  /** @brief Select an admitted candidate or replay the current best.
+   *
+   * An empty queue after rejected refill attempts does not terminate adaptive
+   * tuning. The best measured candidate is launched without measurement and a
+   * new admission attempt occurs on the following application call.
+   */
   [[nodiscard]] auto nextCandidate() -> detail::CandidateQueue::Selection {
+    refillQueue();
     auto const selected = m_queue->next();
-    if (!selected)
-      throw std::logic_error{
-          "The tuning scheduler completed without selecting a winner."};
-    return *selected;
+    if (selected)
+      return *selected;
+    if (auto const best = currentBestCandidate())
+      return detail::CandidateQueue::Selection{*best, false, false, false};
+    throw std::logic_error{
+        "The tuning scheduler has neither an admitted nor a measured "
+        "candidate."};
   }
 
   template <typename Queue, typename FrameSpec, typename Bundle>
@@ -1096,7 +1260,7 @@ private:
   };
 
   using CompileVariantFunctor =
-      std::function<void(void *, std::size_t, bool, bool)>;
+      std::function<void(void *, std::size_t, bool, bool, bool)>;
 
   [[nodiscard]] auto compileVariantKey(
       std::array<std::size_t, dimensionCount> const &indices) const
@@ -1145,12 +1309,13 @@ private:
       auto const key = compileVariantKey(indices);
       m_compileVariantIndices.emplace(key, m_compileVariants.size());
       m_compileVariants.emplace_back([](void *rawCall, std::size_t candidate,
-                                        bool measure, bool beginActivation) {
+                                        bool measure, bool beginActivation,
+                                        bool endActivation) {
         auto &call =
             *static_cast<LaunchCall<Queue, FrameSpec, Bundle> *>(rawCall);
         call.tuner->template launchCandidate<CompileValues...>(
             *call.queue, *call.frameSpec, *call.prototype, candidate, measure,
-            beginActivation, call.runtimeSeconds);
+            beginActivation, endActivation, call.runtimeSeconds);
       });
     } else {
       using Entry = std::tuple_element_t<EntryIndex, Entries>;
@@ -1292,7 +1457,7 @@ private:
             typename Bundle>
   void launchCandidate(Queue const &queue, LaunchSpec const &prototypeLaunch,
                        Bundle const &prototype, std::size_t candidate,
-                       bool measure, bool beginActivation,
+                       bool measure, bool beginActivation, bool endActivation,
                        std::optional<double> &runtimeSeconds) {
     auto const indices = indicesFor(candidate);
     auto const bundle = rebuildBundle<CompileValues...>(prototype, indices);
@@ -1382,18 +1547,27 @@ private:
     auto const elapsed = std::chrono::steady_clock::now() - start;
     runtimeSeconds = std::chrono::duration<double>{elapsed}.count();
     static_cast<void>(history.record(*runtimeSeconds));
-    retireByMannWhitneyIfWarranted(candidate);
+    if (m_defaults.mode == TuningMode::onlineFixed)
+      retireByMannWhitneyIfWarranted(candidate);
+    if (m_defaults.mode == TuningMode::onlineAdaptive && endActivation)
+      history.retire(detail::RuntimeCompletion::adaptiveVisit);
     if (history.isFinished()) {
       recordRetiredConfiguration(candidate);
       if (!m_queue->retire(candidate))
         throw std::logic_error{
             "The completed configuration was not active in the queue."};
+      if (m_defaults.mode == TuningMode::onlineAdaptive) {
+        m_scheduled.at(candidate) = false;
+        --m_scheduledCount;
+      }
     }
-    if (executionBudgetReached()) {
+    if (m_defaults.mode == TuningMode::onlineFixed &&
+        executionBudgetReached()) {
       finishTuningAtBudget(TunerCompletionReason::maximumExecutions);
       return;
     }
-    if (retiredConfigurationBudgetReached()) {
+    if (m_defaults.mode == TuningMode::onlineFixed &&
+        retiredConfigurationBudgetReached()) {
       finishTuningAtBudget(TunerCompletionReason::maximumRetiredConfigurations);
       return;
     }
@@ -1432,32 +1606,6 @@ private:
                     "alpakaTune::Tuner::enqueue requires "
                     "alpaka::onHost::FrameSpec or ThreadSpec.");
     }
-    identity << "runs=" << m_defaults.runsPerCandidate << ':'
-             << m_defaults.warmupRuns << ':'
-             << m_defaults.noiseCancellationWindow << ':'
-             << m_defaults.maxConsecutiveRuns << '\n';
-    identity << "statistics=" << m_defaults.minimumRunsPerCandidate << ':'
-             << m_defaults.ciCheckInterval << ':' << m_defaults.ciZScore << ':'
-             << m_defaults.ciRelativeWidth << ':' << m_defaults.outlierMadScale
-             << ':' << m_defaults.mannWhitneyEarlyStop << ':'
-             << m_defaults.mannWhitneyMinimumSamples << ':'
-             << m_defaults.mannWhitneyAlpha << '\n';
-    identity << "strategy=" << strategyName(m_defaults.strategy) << ':'
-             << m_defaults.randomSeed << '\n';
-    if (m_defaults.strategy == StrategyKind::learnedHybrid)
-      identity << "learned-model="
-               << detail::fileFingerprint(m_defaults.learnedModelFile) << ':'
-               << strategyName(m_defaults.learnedFallback) << ':'
-               << m_defaults.learnedCandidatePoolSize << ':'
-               << m_defaults.learnedCandidateBatchSize << '\n';
-    identity << "maximum-executions="
-             << m_defaults.maximumExecutions.value_or(
-                    std::numeric_limits<std::size_t>::max())
-             << '\n';
-    identity << "maximum-retired-configurations="
-             << m_defaults.maximumRetiredConfigurations.value_or(
-                    std::numeric_limits<std::size_t>::max())
-             << '\n';
     for (auto const &entry : m_identityEntries)
       identity << "context=" << entry << '\n';
     std::apply(
@@ -1572,6 +1720,8 @@ private:
       -> TunerCompletionReason {
     if (name == "all_configurations")
       return TunerCompletionReason::allConfigurations;
+    if (name == "offline_replay")
+      return TunerCompletionReason::offlineReplay;
     if (name == "maximum_executions")
       return TunerCompletionReason::maximumExecutions;
     if (name == "maximum_retired_configurations")
@@ -1581,33 +1731,37 @@ private:
 
   [[nodiscard]] auto loadCache() -> bool {
 #if ALPAKA_TUNE_HAS_JSON
-    std::lock_guard lock{m_persistence->mutex};
-    if (!std::filesystem::exists(m_persistence->file))
-      return false;
-    std::ifstream input{m_persistence->file};
-    nlohmann::json store;
-    if (!(input >> store) ||
-        store.value("schema_version", 0) != persistenceSchemaVersion ||
-        !store.contains("contexts") || !store["contexts"].is_object() ||
-        !store["contexts"].contains(m_fingerprint))
-      return false;
-    auto const &cache = store["contexts"][m_fingerprint];
+    auto staged =
+        m_persistence->stagedCache(persistenceSchemaVersion, m_fingerprint);
+    auto store = nlohmann::json{};
+    auto const *cachePointer = staged.get();
+    if (cachePointer == nullptr) {
+      std::lock_guard lock{m_persistence->mutex};
+      if (!std::filesystem::exists(m_persistence->file))
+        return false;
+      std::ifstream input{m_persistence->file};
+      if (!(input >> store) || !store.contains("contexts") ||
+          !store["contexts"].is_object())
+        throw std::runtime_error{
+            "The alpakaTune persistent tuning file is invalid."};
+      if (store.value("schema_version", 0) != persistenceSchemaVersion)
+        throw std::runtime_error{
+            "The alpakaTune persistent tuning file uses an incompatible "
+            "schema; fresh histories are required."};
+      if (!store["contexts"].contains(m_fingerprint))
+        return false;
+      cachePointer = &store["contexts"][m_fingerprint];
+    }
+    auto const &cache = *cachePointer;
     if (cache.value("fingerprint", "") != m_fingerprint)
       return false;
     if (cache.value("candidate_count", std::size_t{}) != m_candidateCount)
       return false;
-    auto const best = cache.value("best_candidate_index", m_candidateCount);
-    if (best >= m_candidateCount)
-      return false;
     auto const completionReason = completionReasonFromName(
         cache.value("completion_reason", std::string{"none"}));
-    if (completionReason == TunerCompletionReason::none)
-      return false;
-    auto const capped =
-        completionReason == TunerCompletionReason::maximumExecutions ||
-        completionReason == TunerCompletionReason::maximumRetiredConfigurations;
     auto const storedExecutionCount =
         cache.value("execution_count", std::size_t{});
+    auto measuredCount = std::size_t{};
     try {
       auto const &storedHistories = cache.at("candidate_samples");
       if (!storedHistories.is_array() ||
@@ -1626,73 +1780,65 @@ private:
             return false;
           continue;
         }
-        if (samples.empty()) {
-          if (!capped)
-            return false;
+        if (samples.empty())
           continue;
-        }
         m_histories.at(candidate).restoreCompleted(samples);
+        ++measuredCount;
       }
+      if (measuredCount == 0u)
+        return false;
       m_rejected = rejected;
       m_rejectedCount = static_cast<std::size_t>(
           std::count(m_rejected.begin(), m_rejected.end(), true));
       m_scheduled.assign(m_candidateCount, false);
       m_scheduledCount = 0u;
-      for (std::size_t candidate = 0u; candidate < m_candidateCount;
-           ++candidate) {
-        if (!m_rejected.at(candidate) && !m_histories.at(candidate).empty()) {
+      if (m_defaults.mode == TuningMode::onlineFixed) {
+        for (std::size_t candidate = 0u; candidate < m_candidateCount;
+             ++candidate) {
+          if (m_rejected.at(candidate) || m_histories.at(candidate).empty())
+            continue;
           m_scheduled.at(candidate) = true;
           ++m_scheduledCount;
         }
       }
 
       m_retiredConfigurationCount =
-          cache.at("retired_configuration_count").get<std::size_t>();
-      if (m_retiredConfigurationCount > m_candidateCount)
-        return false;
-      m_bestImprovements.clear();
-      auto previousRuntime = std::numeric_limits<double>::infinity();
-      auto previousExecutions = std::size_t{};
-      auto previousRetired = std::size_t{};
-      for (auto const &stored : cache.at("best_improvements")) {
-        auto improvement = detail::BestImprovement{
-            .candidateIndex = stored.at("candidate_index").get<std::size_t>(),
-            .executionCount = stored.at("execution_count").get<std::size_t>(),
-            .retiredConfigurationCount =
-                stored.at("retired_configuration_count").get<std::size_t>(),
-            .runtimeSeconds = stored.at("runtime_seconds").get<double>(),
-            .elapsedSeconds = stored.at("elapsed_seconds").get<double>()};
-        if (improvement.candidateIndex >= m_candidateCount ||
-            !std::isfinite(improvement.runtimeSeconds) ||
-            improvement.runtimeSeconds < 0.0 ||
-            !std::isfinite(improvement.elapsedSeconds) ||
-            improvement.elapsedSeconds < 0.0 ||
-            improvement.runtimeSeconds >= previousRuntime ||
-            improvement.executionCount < previousExecutions ||
-            improvement.retiredConfigurationCount <= previousRetired ||
-            improvement.retiredConfigurationCount > m_retiredConfigurationCount)
-          return false;
-        previousRuntime = improvement.runtimeSeconds;
-        previousExecutions = improvement.executionCount;
-        previousRetired = improvement.retiredConfigurationCount;
-        m_bestImprovements.push_back(improvement);
+          cache.value("retired_configuration_count", measuredCount);
+      if (auto const admission = cache.find("admission");
+          admission != cache.end() && admission->is_object()) {
+        m_unseenAcceptedCount = admission->value("unseen_accepted", 0u);
+        m_revisitAcceptedCount = admission->value("revisit_accepted", 0u);
+        m_activeDuplicateRejectedCount =
+            admission->value("active_duplicate_rejected", 0u);
+        m_restrictionRejectedCount =
+            admission->value("restriction_rejected", 0u);
+        m_revisitRejectedCount = admission->value("revisit_rejected", 0u);
+        m_scoreRejectedCount = admission->value("score_rejected", 0u);
       }
-      if (m_retiredConfigurationCount != 0u && m_bestImprovements.empty())
-        return false;
-      if (!m_bestImprovements.empty() &&
-          m_bestImprovements.back().executionCount > storedExecutionCount)
-        return false;
-      m_bestRetiredRuntime = previousRuntime;
+      m_bestImprovements.clear();
     } catch (std::exception const &) {
       return false;
     }
-    m_bestCandidate = best;
+    auto const best = currentBestCandidate();
+    if (!best)
+      return false;
+    m_bestCandidate = *best;
+    m_bestRetiredRuntime = m_histories.at(*best).statistics().estimate();
     m_executionCount = storedExecutionCount;
     m_startedAtUnixSeconds = cache.value("started_at_unix_seconds", 0.0);
-    m_completionReason = completionReason;
-    m_executionBudgetReached =
-        completionReason == TunerCompletionReason::maximumExecutions;
-    m_complete = true;
+    if (m_defaults.mode == TuningMode::offline) {
+      m_complete = true;
+      m_completionReason = TunerCompletionReason::offlineReplay;
+    } else if (m_defaults.mode == TuningMode::onlineFixed &&
+               completionReason != TunerCompletionReason::none) {
+      m_complete = true;
+      m_completionReason = completionReason;
+      m_executionBudgetReached =
+          completionReason == TunerCompletionReason::maximumExecutions;
+    } else {
+      m_complete = false;
+      m_completionReason = TunerCompletionReason::none;
+    }
     m_loadedFromCache = true;
     return true;
 #else
@@ -1740,6 +1886,11 @@ private:
     writeCache();
   }
 
+  /** @brief Update the in-memory JSON snapshot after one measured launch.
+   *
+   * Sparse candidate arrays are updated in place. No filesystem operation is
+   * performed; PersistenceStore flushes the newest snapshot at shutdown.
+   */
   void stageCache(std::size_t candidate, bool schedulingChanged) {
 #if ALPAKA_TUNE_HAS_JSON
     if (!m_stagedCache) {
@@ -1748,19 +1899,25 @@ private:
       auto &cache = *m_stagedCache;
       cache["execution_count"] = m_executionCount;
       cache["retired_configuration_count"] = m_retiredConfigurationCount;
+      if (auto const best = currentBestCandidate())
+        cache["best_candidate_index"] = *best;
       auto samples = nlohmann::json::array();
       for (auto const seconds : m_histories.at(candidate).samples())
         samples.push_back(seconds);
       cache["candidate_samples"][candidate] = std::move(samples);
       if (m_histories.at(candidate).empty())
         cache["candidate_estimates"][candidate] = nullptr;
-      else
+      else {
         cache["candidate_estimates"][candidate] =
             m_histories.at(candidate).statistics().estimate();
+        cache["candidate_configurations"][candidate] =
+            serializedCandidateConfiguration(candidate);
+      }
       if (schedulingChanged)
         cache["rejected_candidates"] = m_rejected;
       if (m_defaults.strategy == StrategyKind::learnedHybrid)
         cache["learning"] = serializedLearningStatus();
+      cache["admission"] = serializedAdmissionStatus();
       while (cache["best_improvements"].size() < m_bestImprovements.size())
         cache["best_improvements"].push_back(serializedImprovement(
             m_bestImprovements.at(cache["best_improvements"].size())));
@@ -1864,24 +2021,31 @@ private:
     result["cached_candidate_count"] = learned->cachedCandidateCount();
     result["candidate_pool_capacity"] = learned->candidatePoolCapacity();
     result["candidate_batch_size"] = learned->candidateBatchSize();
-    result["peak_cached_candidate_count"] =
-        learned->peakCachedCandidateCount();
+    result["peak_cached_candidate_count"] = learned->peakCachedCandidateCount();
     result["scored_candidate_count"] = learned->scoredCandidateCount();
     result["pool_refill_count"] = learned->poolRefillCount();
-    result["candidate_stream_exhausted"] =
-        learned->candidateStreamExhausted();
+    result["candidate_stream_exhausted"] = learned->candidateStreamExhausted();
     result["incorporated_observation_count"] =
         learned->incorporatedObservationCount();
     result["adapter_update_count"] = learned->adapterUpdateCount();
     return result;
   }
 
+  [[nodiscard]] auto serializedAdmissionStatus() const -> nlohmann::json {
+    return {{"unseen_accepted", m_unseenAcceptedCount},
+            {"revisit_accepted", m_revisitAcceptedCount},
+            {"active_duplicate_rejected", m_activeDuplicateRejectedCount},
+            {"restriction_rejected", m_restrictionRejectedCount},
+            {"revisit_rejected", m_revisitRejectedCount},
+            {"score_rejected", m_scoreRejectedCount}};
+  }
+
   [[nodiscard]] auto serializedCache() const -> nlohmann::json {
     nlohmann::json cache;
     cache["fingerprint"] = m_fingerprint;
     cache["candidate_count"] = m_candidateCount;
-    if (m_complete)
-      cache["best_candidate_index"] = m_bestCandidate;
+    if (auto const best = currentBestCandidate())
+      cache["best_candidate_index"] = *best;
     else
       cache["best_candidate_index"] = nullptr;
     cache["execution_count"] = m_executionCount;
@@ -1899,8 +2063,18 @@ private:
         {"kernel", m_kernelName},
         {"device", detail::identityName(m_device)},
         {"launch_specification", m_launchSpecification},
+        {"mode", std::string{tuningModeName(m_defaults.mode)}},
         {"strategy", std::string{strategyName(m_defaults.strategy)}},
         {"model_context", serializedLearnedModelContext()}};
+    cache["policy"] = {
+        {"history_window_size", m_defaults.historyWindowSize},
+        {"warmup_runs", m_defaults.warmupRuns},
+        {"noise_cancellation_window", m_defaults.noiseCancellationWindow},
+        {"max_consecutive_runs", m_defaults.maxConsecutiveRuns},
+        {"revisit_admission_steepness", m_defaults.revisitAdmissionSteepness},
+        {"score_temperature_start", m_defaults.scoreTemperatureStart},
+        {"score_temperature_end", m_defaults.scoreTemperatureEnd}};
+    cache["admission"] = serializedAdmissionStatus();
     if (m_defaults.strategy == StrategyKind::learnedHybrid)
       cache["learning"] = serializedLearningStatus();
     if (m_defaults.maximumExecutions)
@@ -1930,17 +2104,24 @@ private:
       else
         cache["candidate_estimates"].push_back(
             m_histories.at(candidate).statistics().estimate());
-      cache["candidate_configurations"].push_back(
-          serializedCandidateConfiguration(candidate));
+      if (m_histories.at(candidate).empty())
+        cache["candidate_configurations"].push_back(nullptr);
+      else
+        cache["candidate_configurations"].push_back(
+            serializedCandidateConfiguration(candidate));
     }
     return cache;
   }
 #endif
 
-  void writeCache() const {
+  /** @brief Stage a complete snapshot without writing the persistence file. */
+  void writeCache() {
 #if ALPAKA_TUNE_HAS_JSON
-    m_persistence->commitCache(persistenceSchemaVersion, m_fingerprint,
-                               serializedCache());
+    if (!m_stagedCache)
+      m_stagedCache = std::make_shared<nlohmann::json>();
+    *m_stagedCache = serializedCache();
+    m_persistence->stageCache(persistenceSchemaVersion, m_fingerprint,
+                              m_stagedCache);
 #endif
   }
 
@@ -1952,6 +2133,7 @@ private:
   std::vector<std::size_t> m_dimensionSizes;
   std::size_t m_candidateCount{1u};
   std::mt19937_64 m_random;
+  std::uniform_real_distribution<double> m_admissionDistribution{0.0, 1.0};
   std::unique_ptr<ParameterStrategy> m_strategy;
   std::unique_ptr<detail::CandidateQueue> m_queue;
   std::vector<bool> m_scheduled;
@@ -1960,6 +2142,12 @@ private:
   std::size_t m_rejectedCount{};
   std::size_t m_executionCount{};
   std::size_t m_retiredConfigurationCount{};
+  std::size_t m_unseenAcceptedCount{};
+  std::size_t m_revisitAcceptedCount{};
+  std::size_t m_activeDuplicateRejectedCount{};
+  std::size_t m_restrictionRejectedCount{};
+  std::size_t m_revisitRejectedCount{};
+  std::size_t m_scoreRejectedCount{};
   double m_bestRetiredRuntime{std::numeric_limits<double>::infinity()};
   std::vector<detail::BestImprovement> m_bestImprovements;
   std::chrono::steady_clock::time_point m_tuningStarted{};
@@ -1983,6 +2171,15 @@ private:
 #endif
 };
 
+/** @brief Construct a device-bound tuner from an explicit policy.
+ *
+ * @param config Tuner policy, validated before construction.
+ * @param tunables Runtime, compile-time, and launch-shape candidate bundle.
+ * @param device Physical device to which subsequent queues must belong.
+ * @param identityEntries Additional stable workload identity components.
+ *
+ * Identity-entry order does not affect the persistent fingerprint.
+ */
 template <typename TunablesType, typename Device, typename... IdentityEntries>
   requires detail::isTunableBundle<TunablesType>
 [[nodiscard]] auto makeTuner(TunerConfig config, TunablesType tunables,
@@ -1999,6 +2196,7 @@ template <typename TunablesType, typename Device, typename... IdentityEntries>
                                      std::move(names)};
 }
 
+/** @brief Construct a tuner using the process default YAML configuration. */
 template <typename TunablesType, typename Device, typename... IdentityEntries>
   requires detail::isTunableBundle<TunablesType>
 [[nodiscard]] auto makeTuner(TunablesType tunables, Device device,

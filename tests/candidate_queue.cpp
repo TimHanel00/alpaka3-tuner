@@ -19,9 +19,10 @@ auto main() -> int {
   auto const second = queue.next();
   auto const third = queue.next();
   if (!first || !second || !third || first->candidateIndex != 10u ||
-      !first->beginActivation || second->candidateIndex != 10u ||
-      second->beginActivation || third->candidateIndex != 20u ||
-      !third->beginActivation)
+      !first->beginActivation || first->endActivation ||
+      second->candidateIndex != 10u || second->beginActivation ||
+      !second->endActivation || third->candidateIndex != 20u ||
+      !third->beginActivation || third->endActivation)
     return EXIT_FAILURE;
 
   if (!queue.retire(10u) || queue.size() != 1u || !queue.retire(20u) ||

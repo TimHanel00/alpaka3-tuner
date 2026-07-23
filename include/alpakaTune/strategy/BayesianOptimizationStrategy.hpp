@@ -20,21 +20,21 @@ namespace alpakaTune {
  * @brief Gaussian-process-inspired Bayesian optimizer with an RBF surrogate.
  *
  * It retains a bounded observation history and minimizes a lower confidence
- * bound over random normalized candidates. Tuner still prevents duplicate
- * discrete candidates and guarantees that every candidate is measured.
+ * bound over random normalized candidates. The shared tuner decides whether a
+ * proposal is admitted, revisited, or rejected.
  */
 class BayesianOptimizationStrategy final : public ParameterStrategy {
 public:
+  /** @brief Construct a reproducible acquisition-sampling stream. */
   explicit BayesianOptimizationStrategy(std::uint64_t seed) : m_random(seed) {}
 
+  /** @brief Fit the bounded surrogate and minimize its sampled LCB. */
   [[nodiscard]] auto recommend(StrategyContext const &context)
       -> ParameterConfiguration override {
     auto const dimensions = context.parameterSizes();
     auto const observations = measuredObservations(context);
     if (observations.empty()) {
-      auto proposal = randomConfiguration(dimensions.size());
-      m_requested.push_back(proposal);
-      return proposal;
+      return randomConfiguration(dimensions.size());
     }
 
     auto const model = buildModel(observations);
@@ -48,10 +48,17 @@ public:
         bestScore = score;
       }
     }
-    m_requested.push_back(best);
+    return best;
+  }
+
+  /** @brief Retain only tuner-admitted points as future observations. */
+  void recommendationResult(ParameterConfiguration const &configuration,
+                            RecommendationDisposition disposition) override {
+    if (disposition != RecommendationDisposition::scheduled)
+      return;
+    m_requested.push_back(configuration);
     if (m_requested.size() > maximumObservations)
       m_requested.erase(m_requested.begin());
-    return best;
   }
 
 private:
@@ -81,6 +88,7 @@ private:
     return configuration;
   }
 
+  /** @brief Return finished observations only from tuner-admitted proposals. */
   [[nodiscard]] auto measuredObservations(StrategyContext const &context) const
       -> std::vector<Observation> {
     auto observations = std::vector<Observation>{};

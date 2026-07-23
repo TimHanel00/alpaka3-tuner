@@ -4,6 +4,7 @@
  */
 
 #include "BoundaryKernel.hpp"
+#include "ExampleHelper.hpp"
 #include "StencilKernel.hpp"
 #include "alpaka/onHost/FrameSpec.hpp"
 #include "analyticalSolution.hpp"
@@ -32,9 +33,9 @@ using Data = double;
 inline constexpr auto stencilTileExtent =
     ALPAKA_TUNE_TUNABLE("stencilTileExtent");
 
-enum class TuningRunMode { fixedSteps, untilTerminal, untilComplete };
+enum class TuningRunMode { fixedSteps, untilPolicyGoal, untilComplete };
 
-[[nodiscard]] constexpr auto extendsUntilTuningTerminates(TuningRunMode mode)
+[[nodiscard]] constexpr auto extendsForTuningCollection(TuningRunMode mode)
     -> bool {
   return mode != TuningRunMode::fixedSteps;
 }
@@ -203,13 +204,14 @@ int example(auto const deviceSpec, auto const computeExec,
 
   // Tune and execute the two kernels as part of each simulation step. The
   // normal example performs exactly numTimeSteps. Data-collection modes
-  // continue the same safe pair of launches until both tuners reach a terminal
-  // state, without changing the example's default scientific behavior.
+  // continue the same safe pair of launches through the application minimum
+  // and both tuning-policy goals, without changing the example's default
+  // scientific behavior.
   std::size_t completedSteps = 0u;
-  for (uint32_t step = 1;
-       step <= numTimeSteps || (extendsUntilTuningTerminates(tuningRunMode) &&
-                                (!stencilTuning.isTuningComplete() ||
-                                 !boundaryTuning.isTuningComplete()));
+  for (uint32_t step = 1; step <= numTimeSteps ||
+                          (extendsForTuningCollection(tuningRunMode) &&
+                           alpakaTune::example::applicationRunsRemain(
+                               completedSteps, stencilTuning, boundaryTuning));
        ++step) {
     ++completedSteps;
     // Compute next values
@@ -244,20 +246,20 @@ int example(auto const deviceSpec, auto const computeExec,
   std::cout << "Time per time step: "
             << elapsedTime.count() / completedSteps * 1000 << " ms."
             << std::endl;
-  if (extendsUntilTuningTerminates(tuningRunMode)) {
-    auto const stencilInfo = stencilTuning.info();
-    auto const boundaryInfo = boundaryTuning.info();
-    if (!stencilInfo.tuningComplete || !boundaryInfo.tuningComplete) {
-      std::cerr << "Tuning collection stopped before every context reached a "
-                   "terminal state."
+  if (extendsForTuningCollection(tuningRunMode)) {
+    if (alpakaTune::example::applicationRunsRemain(
+            completedSteps, stencilTuning, boundaryTuning)) {
+      std::cerr << "Tuning collection stopped before the application minimum "
+                   "and every tuning-policy goal were reached."
                 << std::endl;
       return EXIT_FAILURE;
     }
 
     auto const fullCoverageComplete =
-        stencilInfo.completionReason ==
+        stencilTuning.isTuningComplete() && boundaryTuning.isTuningComplete() &&
+        stencilTuning.completionReason() ==
             alpakaTune::TunerCompletionReason::allConfigurations &&
-        boundaryInfo.completionReason ==
+        boundaryTuning.completionReason() ==
             alpakaTune::TunerCompletionReason::allConfigurations;
     if (tuningRunMode == TuningRunMode::untilComplete &&
         !fullCoverageComplete) {
@@ -272,14 +274,19 @@ int example(auto const deviceSpec, auto const computeExec,
                 << " time steps and completed every tuning context."
                 << std::endl;
     } else {
-      std::cout
-          << "Terminal-state tuning mode executed " << completedSteps
-          << " time steps and reached a terminal state for every tuning "
-             "context (stencil: "
-          << alpakaTune::completionReasonName(stencilInfo.completionReason)
-          << ", boundary: "
-          << alpakaTune::completionReasonName(boundaryInfo.completionReason)
-          << ")." << std::endl;
+      std::cout << "Tuning-collection mode executed " << completedSteps
+                << " time steps and reached the application minimum plus every "
+                   "tuning-policy goal.";
+      if (stencilTuning.isTuningComplete() && boundaryTuning.isTuningComplete())
+        std::cout << " Terminal reasons: stencil="
+                  << alpakaTune::completionReasonName(
+                         stencilTuning.completionReason())
+                  << ", boundary="
+                  << alpakaTune::completionReasonName(
+                         boundaryTuning.completionReason());
+      else
+        std::cout << " Adaptive horizons reached; tuning remains active";
+      std::cout << "." << std::endl;
     }
     return EXIT_SUCCESS;
   }
@@ -319,13 +326,14 @@ void help(char *argv[]) {
             << std::endl;
   std::cerr << "  -c: disable checking for correct results" << std::endl;
   std::cerr << "  --tune-until-complete: benchmark-only mode; continue safe "
-               "kernel launches until every "
+               "kernel launches for at least 50000 iterations and until every "
                "tuning context exhausts all configurations; fail if a "
                "configured budget stops tuning first"
             << std::endl;
   std::cerr << "  --tune-until-terminal: benchmark-only mode; continue safe "
-               "kernel launches until every tuning context either exhausts "
-               "all configurations or reaches a configured budget"
+               "kernel launches through the 50000-iteration application "
+               "minimum and every "
+               "context's policy goal; the legacy option name is retained"
             << std::endl;
   std::cerr << "  -h: Print this help message" << std::endl;
   std::cerr << std::endl;
@@ -400,7 +408,7 @@ auto main(int argc, char *argv[]) -> int {
       enableCheck = false;
       break;
     case 'T':
-      if (tuningRunMode == TuningRunMode::untilTerminal) {
+      if (tuningRunMode == TuningRunMode::untilPolicyGoal) {
         std::cerr << "Error: --tune-until-complete and "
                      "--tune-until-terminal are mutually exclusive.\n";
         return EXIT_FAILURE;
@@ -413,7 +421,7 @@ auto main(int argc, char *argv[]) -> int {
                      "--tune-until-terminal are mutually exclusive.\n";
         return EXIT_FAILURE;
       }
-      tuningRunMode = TuningRunMode::untilTerminal;
+      tuningRunMode = TuningRunMode::untilPolicyGoal;
       break;
     default:
       help(argv);
