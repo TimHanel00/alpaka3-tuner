@@ -1,11 +1,11 @@
 Strategies
 ==========
 
-The queue and the strategy have separate responsibilities. ``CandidateQueue``
-interleaves active candidates and limits consecutive runs. Each candidate has
-its own record lifecycle: activation warm-up, measurement, confidence or
-maximum-run completion, then retirement. A ``ParameterStrategy`` only
-recommends which new configuration should enter that queue.
+The queue, execution mode, and strategy have separate responsibilities.
+``CandidateQueue`` interleaves active candidates and limits consecutive runs.
+The selected :doc:`execution_modes` policy owns admission, measurement
+lifetime, revisits, and production launches. A ``ParameterStrategy`` only
+recommends a configuration for admission.
 
 Strategy interface
 ------------------
@@ -20,8 +20,9 @@ in ``[0, 1]`` per tuning dimension. A strategy receives a read-only
 
 The strategy object owns all other state. It does not access the Alpaka queue,
 kernel, device, cache, or tuning internals. ``Tuner`` validates the returned
-vector, maps it to the nearest discrete Cartesian candidate, and selects the
-nearest unscheduled candidate if the strategy repeats a point.
+vector, maps it once to the nearest discrete Cartesian candidate, applies the
+shared admission gates, and reports the recommendation disposition. A repeated
+or rejected point is not silently replaced with another configuration.
 
 The observation exposes the robust runtime estimate, raw and accepted sample
 counts, record state, confidence status, and the result of a rank comparison to
@@ -37,7 +38,8 @@ median and mean after MAD-based outlier rejection. The robust median is the
 runtime used to select the winner and reported to strategies, so isolated host
 scheduling spikes do not distort tuning decisions.
 
-Every ``ci_check_interval`` samples, a legacy-compatible 99% non-parametric
+In ``online_fixed``, every ``ci_check_interval`` samples, a legacy-compatible
+99% non-parametric
 median confidence interval is checked. A record completes once the interval is
 within ``ci_relative_width`` and ``minimum_runs_per_candidate`` has been met,
 or at ``runs_per_candidate``. If ``mann_whitney_early_stop`` is enabled, the
@@ -52,6 +54,10 @@ This rank-based retirement is performed before a strategy receives the final
 observation, so random, annealing, and Bayesian strategies all operate on the
 same statistically filtered history without mutable access to it.
 
+``online_adaptive`` instead ends a candidate residency after its configured
+activation burst and maintains a rolling fixed-size sample window. It does not
+apply confidence, maximum-sample, or rank-test retirement inside that burst.
+
 Built-in strategies
 -------------------
 
@@ -62,7 +68,7 @@ points and queries their runtimes to fit a bounded RBF surrogate, selecting a
 lower-confidence-bound proposal.
 
 ``learned_hybrid`` loads a compact offline-trained candidate ranker and scores
-a bounded, deterministically replenished candidate pool in batches. It reserves
+a bounded, deterministically sampled candidate pool in batches. It reserves
 part of its recommendations for diverse or uncertain points. The shared model
 remains frozen while a small residual adapter learns from retired measurements
 in the current context and re-sorts only the active pool. The core tuner still
@@ -81,4 +87,5 @@ Select one in YAML:
 
 Custom strategies derive from ``alpakaTune::ParameterStrategy`` and implement
 ``recommend(StrategyContext const&)``. The only required output is a valid
-normalized vector.
+normalized vector. They may override ``recommendationResult`` when their state
+must react to the shared tuner's admission result.

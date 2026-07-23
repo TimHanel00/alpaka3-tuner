@@ -26,11 +26,29 @@ Minimal example
        VectorAddKernel{}, inputA, inputB, output,
        alpakaTune::markTunable(chunkSize)};
 
-   while (!tuner.isTuningComplete())
+   constexpr std::size_t applicationMinimum = 50'000u;
+   std::size_t launches = 0u;
+   while (launches < applicationMinimum || !tuner.completed()) {
        tuner.enqueue(queue, frameSpec, bundle);
+       ++launches;
+   }
 
 The marker is replaced by the selected value before Alpaka receives the
-bundle. Once tuning completes, later ``tuner.enqueue`` calls replay the winner.
+bundle. The application owns this loop and decides how often the kernel is
+needed. The example above deliberately combines two application choices: run
+at least 50,000 launches, and keep running until the configured tuning-policy
+goal has been reached. A real application may use only its own loop bound and
+ignore ``completed()`` entirely.
+
+In ``online_fixed``, ``completed()`` reports a terminal tuning state and later
+launches replay the winner. In ``online_adaptive``, it reports only that the
+configured admission and cooling horizon has been reached. The tuner remains
+active: later calls still recommend, measure, revisit configurations, and
+update the residual adapter. Therefore ``completed()`` is policy information,
+not an instruction from the library to stop the application.
+``isTuningComplete()`` remains the stricter terminal-state query and stays
+false throughout adaptive mode.
+
 Reuse one ``TunerConfig`` for several tuners when they should share settings
 and a persistence file; every tuner still owns independent runtime state.
 

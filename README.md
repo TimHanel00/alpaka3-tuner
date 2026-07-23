@@ -3,16 +3,21 @@
 alpakaTune is a header-only C++20 tuner for Alpaka3 `KernelBundle` launches.
 A mutable `TunerConfig` creates device-bound `Tuner` objects through
 `makeTuner`; each `tuner.enqueue(queue, frameSpec, prototypeBundle)` call
-performs one noise-cancelled tuning launch, then later calls enqueue the
-persistent winner. Runtime (`RVals`) and compile-time
+performs one queue-controlled launch. The execution mode selects finite tuning,
+continuous adaptation with rolling timing histories, or offline replay of a
+persisted best configuration. Runtime (`RVals`) and compile-time
 (`CVals`) candidates share one named `Tunables` configuration.
 `makeTuner` has exactly two forms: one taking an explicit `TunerConfig`, and
 one using `tunerConfig()`; both require the tunable bundle and device before
 any identity-only names or Alpaka objects.
 
-The full guide, including FetchContent, installed-package, launch-tuning, and
-compile-time-tuning examples, is built with Sphinx for Read the Docs under
+The full guide, including the execution-mode and candidate-admission contract,
+FetchContent, installed-package, launch-tuning, and compile-time-tuning
+examples, is built with Sphinx for Read the Docs under
 [`docs/source`](docs/source/index.rst).
+The executable examples separately document their application-owned 50,000
+launch minimum and the independent 40,000-execution tuner horizon in
+[`example/README.md`](example/README.md).
 
 Large exhaustive datasets, offline model training, evaluation, and HPC job
 orchestration are intentionally maintained in the separate `alpakaTune-ml`

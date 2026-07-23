@@ -3,8 +3,8 @@ alpakaTune
 
 alpakaTune tunes Alpaka3 ``KernelBundle`` launches with a mutable
 ``TunerConfig`` and a device-bound ``Tuner``. A tuner represents one particular
-tuning context: it measures candidates, selects a winner, and replays that
-winner on subsequent enqueues.
+tuning context. Depending on its execution mode, it either performs finite
+tuning, adapts continuously, or replays the best compatible persisted result.
 
 Alpaka3 provides two host-side launch descriptions:
 
@@ -17,6 +17,7 @@ Alpaka3 provides two host-side launch descriptions:
 
    getting_started
    configuration
+   execution_modes
    strategies
    launch_tuning
    compile_time_tuning

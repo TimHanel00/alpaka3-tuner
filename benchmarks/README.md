@@ -1,9 +1,10 @@
 # Tuning strategy benchmark
 
 The benchmark runs every example containing an alpakaTune context with the
-four model-free strategies by default. Each example already invokes its contexts until they finish;
-the runner only supplies an isolated YAML configuration and persistent history
-for each example/strategy pair.
+four model-free strategies by default. The application owns the launch count;
+the examples own their 50000-launch default. The runner independently supplies
+an isolated tuner configuration, policy guards, and persistent history for
+each example/strategy pair.
 
 Build the examples, install the Python dependencies, and start a run:
 
@@ -64,13 +65,18 @@ By default results are written below
 `benchmarks/results/<UTC-run-id>/<example>/<strategy>/`. Every pair contains
 the generated tuner configuration, persistent history, stdout/stderr logs, and `run.json`
 timing/status metadata. The configured launch and retired-configuration limits
-are both 100000; they are safety/inspection limits and can be changed with the
-corresponding command-line options.
+default to 40000 and 100000 respectively; they are tuner-policy limits and can
+be changed with the corresponding command-line options. Separately, the
+example applications default to at least 50000 launches.
 
-For a bounded comparison, add `--tune-until-terminal`. The finite
+For a bounded comparison, add `--tune-until-terminal`. The option name is kept
+for command-line compatibility. The finite
 heatEquation2D and nBody examples then keep executing their safe kernel sequence
-until tuning reaches either the complete space or one of those configured
-limits, rather than stopping after their normal scientific step count:
+through their 50000-launch application minimum and until ``completed()`` reports
+that every tuner policy reached its goal, rather than stopping after their
+normal scientific step count. With ``maximum_executions: 40000``, this records
+a deliberate 10000-launch post-horizon interval. Adaptive tuning stays active
+during it; a fixed tuner replays its current best configuration:
 
 ```bash
 python3 benchmarks/run.py \
@@ -105,11 +111,14 @@ python3 benchmarks/run.py \
   --no-plot
 ```
 
-This mode runs only the exhaustive strategy, removes both tuner-wide completion
-limits from the generated YAML, disables Mann-Whitney early retirement, and
-records exactly three measured launches after one warm-up for each legal
-candidate. It cannot be combined with `--maximum-executions`,
-`--maximum-retired-configurations`, or a non-exhaustive strategy.
+This mode runs only the exhaustive strategy, selects ``online_fixed``, removes
+the retired-configuration limit, uses a tuner safety guard of one million
+launches by default, disables Mann-Whitney early retirement, and records exactly three
+measured launches after one warm-up for each legal
+candidate residency. Override the guard with `--maximum-executions`; if it
+is too short, coverage validation fails cleanly so the collection can be
+resubmitted with a larger value. Full coverage cannot be combined with
+`--maximum-retired-configurations` or a non-exhaustive strategy.
 
 The finite heat-equation and n-body simulations receive the benchmark-only
 `--tune-until-complete` option automatically. They continue their normal safe

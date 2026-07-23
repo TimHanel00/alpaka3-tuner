@@ -9,10 +9,10 @@ selected by ``ALPAKA_TUNE_CONFIG`` when set.
 .. code-block:: cpp
 
    auto config = alpakaTune::TunerConfig::fromYaml("tuning.yaml");
+   config.mode = alpakaTune::TuningMode::onlineAdaptive;
    config.strategy = alpakaTune::StrategyKind::random;
-   config.runsPerCandidate = 10u;
-   config.minimumRunsPerCandidate = 3u;
-   config.maximumExecutions = 100u;
+   config.maximumExecutions = 4'000u; // Adaptive admission horizon.
+   config.historyWindowSize = 10u;
    config.persistenceFile = ".my-tuning-cache/history.json";
 
 The type is an aggregate, so direct construction is also supported:
@@ -20,11 +20,13 @@ The type is an aggregate, so direct construction is also supported:
 .. code-block:: cpp
 
    auto config = alpakaTune::TunerConfig{
+       .mode = alpakaTune::TuningMode::onlineFixed,
        .warmupRuns = 0u,
        .runsPerCandidate = 10u,
        .minimumRunsPerCandidate = 3u,
        .noiseCancellationWindow = 20u,
        .maxConsecutiveRuns = 2u,
+       .maximumExecutions = 100u,
        .strategy = alpakaTune::StrategyKind::exhaustive,
        .persistenceFile = ".alpakaTune/vector-add.json"};
 
@@ -41,6 +43,7 @@ YAML schema version 2 adds the optional learned-model section. Schema version
 
    schema_version: 2
    tuning:
+     mode: online_adaptive
      strategy: exhaustive
      random_seed: 0
      warmup_runs: 1
@@ -55,8 +58,11 @@ YAML schema version 2 adds the optional learned-model section. Schema version
      mann_whitney_alpha: 0.05
      noise_cancellation_window: 50
      max_consecutive_runs: 3
-     maximum_executions: 100000
-     maximum_retired_configurations: 100000
+     maximum_executions: 40000
+     history_window_size: 20
+     revisit_admission_steepness: 16
+     score_temperature_start: 0.25
+     score_temperature_end: 0.05
    persistence:
      file: .alpakaTune/history.json
    learning:
@@ -66,11 +72,23 @@ YAML schema version 2 adds the optional learned-model section. Schema version
      candidate_pool_size: 4096
      candidate_batch_size: 256
 
-Unknown keys and invalid values are rejected. ``runsPerCandidate`` is the hard
-measurement cap. Lowering ``minimumRunsPerCandidate`` enables confidence-
-interval retirement. ``maxConsecutiveRuns`` must exceed ``warmupRuns``.
-``maximumExecutions`` counts warm-up and measured launches, while
-``maximumRetiredConfigurations`` limits completed candidate histories.
+Unknown keys and invalid values are rejected. ``online_adaptive`` is the
+default. In ``online_fixed``, ``runsPerCandidate`` is the hard measurement cap
+and must not exceed ``historyWindowSize``. Lowering
+``minimumRunsPerCandidate`` enables confidence-interval retirement.
+``maxConsecutiveRuns`` must exceed ``warmupRuns``. ``maximumExecutions`` counts
+warm-up and measured launches, while ``maximumRetiredConfigurations`` limits
+completed candidate histories. In ``online_adaptive``, the former is an
+admission horizon rather than a terminal budget and the latter is ignored.
+Set ``maximum_executions: null`` in YAML when a fixed run should use only the
+retired-configuration guard.
+This does not configure the surrounding application's loop. Applications own
+their launch count independently and may optionally inspect
+``tuner.completed()``. In adaptive mode that method reports arrival at the
+admission/cooling horizon without stopping adaptation. See
+:doc:`execution_modes` for the complete lifecycle, ownership boundary, and
+probability definitions.
+
 Selecting ``learned_hybrid`` leaves ``makeTuner`` and ``enqueue`` unchanged.
 If its model is missing, incompatible, or outside its supported feature
 contract, the configured non-learned fallback is used explicitly.
