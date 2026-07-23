@@ -11,7 +11,8 @@ selected by ``ALPAKA_TUNE_CONFIG`` when set.
    auto config = alpakaTune::TunerConfig::fromYaml("tuning.yaml");
    config.mode = alpakaTune::TuningMode::onlineAdaptive;
    config.strategy = alpakaTune::StrategyKind::random;
-   config.maximumExecutions = 4'000u; // Adaptive admission horizon.
+   config.horizon = 4'000u;
+   config.horizonOffsetWithActiveHistory = 0.8;
    config.historyWindowSize = 10u;
    config.persistenceFile = ".my-tuning-cache/history.json";
    config.persistenceRead = true;
@@ -62,11 +63,12 @@ YAML schema version 2 adds the optional learned-model section. Schema version
      mann_whitney_alpha: 0.05
      noise_cancellation_window: 50
      max_consecutive_runs: 3
-     maximum_executions: 40000
+     horizon: 40000
      history_window_size: 20
      revisit_admission_steepness: 16
      score_temperature_start: 0.25
      score_temperature_end: 0.05
+     horizon_offset_with_active_history: 0.8
    persistence:
      file: .alpakaTune/history.json
      read: true
@@ -111,10 +113,16 @@ Unknown keys and invalid values are rejected. ``online_adaptive`` is the
 default. In ``online_fixed``, ``runsPerCandidate`` is the hard measurement cap
 and must not exceed ``historyWindowSize``. Lowering
 ``minimumRunsPerCandidate`` enables confidence-interval retirement.
-``maxConsecutiveRuns`` must exceed ``warmupRuns``. ``maximumExecutions`` counts
-warm-up and measured launches, while ``maximumRetiredConfigurations`` limits
-completed candidate histories. In ``online_adaptive``, the former is an
-admission horizon rather than a terminal budget and the latter is ignored.
+``maxConsecutiveRuns`` must exceed ``warmupRuns``. In ``online_fixed``,
+``maximumExecutions`` counts warm-up and measured launches, while
+``maximumRetiredConfigurations`` limits completed candidate histories. These
+two guards are invalid in the other modes. ``online_adaptive`` instead requires
+``horizon``, which spans the current tuner process run without becoming a
+terminal budget. When compatible measured history is loaded,
+``horizonOffsetWithActiveHistory`` selects the initial point in the normalized
+sigmoid/Boltzmann schedule. It is inclusive in ``[0, 1]`` and defaults to
+``0.8``; the remaining interval is stretched over all
+``horizon`` new launches.
 Set ``maximum_executions: null`` in YAML when a fixed run should use only the
 retired-configuration guard.
 This does not configure the surrounding application's loop. Applications own

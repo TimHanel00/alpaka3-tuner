@@ -95,6 +95,20 @@ struct BestImprovement {
   return start * std::pow(end / start, progress);
 }
 
+/** @brief Stretch one adaptive horizon over a history-aware progress range.
+ *
+ * A fresh tuner keeps the original [0, 1] schedule. A tuner initialized from
+ * compatible measured history maps its new-run progress onto [offset, 1].
+ */
+[[nodiscard]] inline auto
+adaptiveProgressWithActiveHistory(double progress, bool activeHistory,
+                                  double offset) -> double {
+  progress = std::clamp(progress, 0.0, 1.0);
+  if (!activeHistory)
+    return progress;
+  return offset + (1.0 - offset) * progress;
+}
+
 /** @brief Boltzmann admission probability relative to the current best.
  *
  * The best candidate and any equally fast candidate receive probability one.
@@ -310,7 +324,7 @@ public:
    */
   [[nodiscard]] auto completed() const noexcept -> bool {
     if (m_defaults.mode == TuningMode::onlineAdaptive)
-      return executionBudgetReached();
+      return adaptiveHorizonReached();
     return m_complete;
   }
   /** @brief Explain why an actual terminal state was entered.
@@ -377,6 +391,13 @@ public:
         .measuredCandidateCount = measured,
         .retiredConfigurationCount = m_retiredConfigurationCount,
         .executionCount = m_executionCount,
+        .adaptiveHorizonExecutionCount = m_adaptiveHorizonExecutionCount,
+        .adaptiveHorizonProgress =
+            m_defaults.mode == TuningMode::onlineAdaptive ? adaptiveProgress()
+                                                          : 0.0,
+        .horizon = m_defaults.mode == TuningMode::onlineAdaptive
+                       ? std::optional<std::size_t>{m_defaults.horizon}
+                       : std::nullopt,
         .maximumExecutions = m_defaults.maximumExecutions,
         .tuningComplete = m_complete,
         .loadedFromCache = m_loadedFromCache,
@@ -962,9 +983,12 @@ private:
 
   /** @brief Clamped progress through the adaptive schedule horizon. */
   [[nodiscard]] auto adaptiveProgress() const -> double {
-    return std::clamp(static_cast<double>(m_executionCount) /
-                          static_cast<double>(*m_defaults.maximumExecutions),
-                      0.0, 1.0);
+    auto const progress =
+        static_cast<double>(m_adaptiveHorizonExecutionCount) /
+        static_cast<double>(m_defaults.horizon);
+    return detail::adaptiveProgressWithActiveHistory(
+        progress, m_loadedFromCache,
+        m_defaults.horizonOffsetWithActiveHistory);
   }
 
   /** @brief Apply the single shared legality and mode-specific admission path.
@@ -1043,7 +1067,12 @@ private:
             m_defaults.mode == TuningMode::onlineFixed};
   }
 
-  /** @brief Whether the configured execution horizon/guard has been reached. */
+  /** @brief Whether this online-adaptive run reached its schedule horizon. */
+  [[nodiscard]] auto adaptiveHorizonReached() const noexcept -> bool {
+    return m_adaptiveHorizonExecutionCount >= m_defaults.horizon;
+  }
+
+  /** @brief Whether the online-fixed execution guard has been reached. */
   [[nodiscard]] auto executionBudgetReached() const noexcept -> bool {
     return m_defaults.maximumExecutions &&
            m_executionCount >= *m_defaults.maximumExecutions;
@@ -1208,6 +1237,13 @@ private:
       m_strategy =
           makeParameterStrategy(m_defaults.strategy, m_defaults.randomSeed,
                                 &context, m_defaults.learnedModelFile, options);
+      if (m_loadedLearnedAdapterState) {
+        if (auto *learned =
+                dynamic_cast<LearnedHybridStrategy *>(m_strategy.get()))
+          static_cast<void>(learned->restoreResidualAdapterState(
+              std::move(*m_loadedLearnedAdapterState)));
+        m_loadedLearnedAdapterState.reset();
+      }
     } else {
       m_strategy =
           makeParameterStrategy(m_defaults.strategy, m_defaults.randomSeed);
@@ -1534,6 +1570,8 @@ private:
     };
 
     ++m_executionCount;
+    if (m_defaults.mode == TuningMode::onlineAdaptive)
+      ++m_adaptiveHorizonExecutionCount;
     if (!measure) {
       launch();
       return;
@@ -1829,6 +1867,7 @@ private:
     m_bestRetiredRuntime = m_histories.at(*best).statistics().estimate();
     m_executionCount = storedExecutionCount;
     m_startedAtUnixSeconds = cache.value("started_at_unix_seconds", 0.0);
+    loadSerializedLearnedAdapter(cache);
     if (m_defaults.mode == TuningMode::offline) {
       m_complete = true;
       m_completionReason = TunerCompletionReason::offlineReplay;
@@ -1901,6 +1940,8 @@ private:
     } else {
       auto &cache = *m_stagedCache;
       cache["execution_count"] = m_executionCount;
+      cache["adaptive_horizon_execution_count"] =
+          m_adaptiveHorizonExecutionCount;
       cache["retired_configuration_count"] = m_retiredConfigurationCount;
       if (auto const best = currentBestCandidate())
         cache["best_candidate_index"] = *best;
@@ -1918,7 +1959,8 @@ private:
       }
       if (schedulingChanged)
         cache["rejected_candidates"] = m_rejected;
-      if (m_defaults.strategy == StrategyKind::learnedHybrid)
+      if (m_defaults.strategy == StrategyKind::learnedHybrid &&
+          schedulingChanged)
         cache["learning"] = serializedLearningStatus();
       cache["admission"] = serializedAdmissionStatus();
       while (cache["best_improvements"].size() < m_bestImprovements.size())
@@ -2005,6 +2047,38 @@ private:
     return result;
   }
 
+  void loadSerializedLearnedAdapter(nlohmann::json const &cache) {
+    m_loadedLearnedAdapterState.reset();
+    if (m_defaults.strategy != StrategyKind::learnedHybrid)
+      return;
+    try {
+      auto const &learning = cache.at("learning");
+      if (learning.value("model_digest", std::string{}) !=
+          detail::fileFingerprint(m_defaults.learnedModelFile))
+        return;
+      auto const &adapter = learning.at("residual_adapter");
+      if (adapter.value("state_version", 0) != 1)
+        return;
+      auto state = LearnedResidualAdapterState{
+          .coefficients =
+              adapter.at("coefficients").get<std::vector<double>>(),
+          .observationsSinceUpdate =
+              adapter.value("observations_since_update", std::size_t{}),
+          .updateCount = adapter.value("update_count", std::size_t{})};
+      for (auto const &observation : adapter.at("observations"))
+        state.observations.push_back(
+            {.rawIndex =
+                 observation.at("raw_candidate_index").get<std::size_t>(),
+             .features =
+                 observation.at("features").get<std::vector<float>>(),
+             .residual = observation.at("residual").get<double>()});
+      m_loadedLearnedAdapterState = std::move(state);
+    } catch (std::exception const &) {
+      // Timing history remains useful when optional adapter state is absent or
+      // malformed.
+    }
+  }
+
   [[nodiscard]] auto serializedLearningStatus() const -> nlohmann::json {
     auto result = nlohmann::json{
         {"requested_strategy", std::string{strategyName(m_defaults.strategy)}},
@@ -2031,6 +2105,19 @@ private:
     result["incorporated_observation_count"] =
         learned->incorporatedObservationCount();
     result["adapter_update_count"] = learned->adapterUpdateCount();
+    auto const state = learned->residualAdapterState();
+    auto adapter = nlohmann::json{
+        {"state_version", 1},
+        {"coefficients", state.coefficients},
+        {"observations_since_update", state.observationsSinceUpdate},
+        {"update_count", state.updateCount},
+        {"observations", nlohmann::json::array()}};
+    for (auto const &observation : state.observations)
+      adapter["observations"].push_back(
+          {{"raw_candidate_index", observation.rawIndex},
+           {"features", observation.features},
+           {"residual", observation.residual}});
+    result["residual_adapter"] = std::move(adapter);
     return result;
   }
 
@@ -2052,6 +2139,8 @@ private:
     else
       cache["best_candidate_index"] = nullptr;
     cache["execution_count"] = m_executionCount;
+    cache["adaptive_horizon_execution_count"] =
+        m_adaptiveHorizonExecutionCount;
     cache["retired_configuration_count"] = m_retiredConfigurationCount;
     cache["execution_budget_reached"] = m_executionBudgetReached;
     cache["completion_reason"] = completionReasonName(m_completionReason);
@@ -2073,22 +2162,32 @@ private:
         {"history_window_size", m_defaults.historyWindowSize},
         {"warmup_runs", m_defaults.warmupRuns},
         {"noise_cancellation_window", m_defaults.noiseCancellationWindow},
-        {"max_consecutive_runs", m_defaults.maxConsecutiveRuns},
-        {"revisit_admission_steepness", m_defaults.revisitAdmissionSteepness},
-        {"score_temperature_start", m_defaults.scoreTemperatureStart},
-        {"score_temperature_end", m_defaults.scoreTemperatureEnd}};
+        {"max_consecutive_runs", m_defaults.maxConsecutiveRuns}};
+    if (m_defaults.mode == TuningMode::onlineAdaptive) {
+      cache["policy"]["horizon"] = m_defaults.horizon;
+      cache["policy"]["revisit_admission_steepness"] =
+          m_defaults.revisitAdmissionSteepness;
+      cache["policy"]["score_temperature_start"] =
+          m_defaults.scoreTemperatureStart;
+      cache["policy"]["score_temperature_end"] =
+          m_defaults.scoreTemperatureEnd;
+      cache["policy"]["horizon_offset_with_active_history"] =
+          m_defaults.horizonOffsetWithActiveHistory;
+    }
     cache["admission"] = serializedAdmissionStatus();
     if (m_defaults.strategy == StrategyKind::learnedHybrid)
       cache["learning"] = serializedLearningStatus();
-    if (m_defaults.maximumExecutions)
-      cache["limits"]["maximum_executions"] = *m_defaults.maximumExecutions;
-    else
-      cache["limits"]["maximum_executions"] = nullptr;
-    if (m_defaults.maximumRetiredConfigurations)
-      cache["limits"]["maximum_retired_configurations"] =
-          *m_defaults.maximumRetiredConfigurations;
-    else
-      cache["limits"]["maximum_retired_configurations"] = nullptr;
+    if (m_defaults.mode == TuningMode::onlineFixed) {
+      if (m_defaults.maximumExecutions)
+        cache["limits"]["maximum_executions"] = *m_defaults.maximumExecutions;
+      else
+        cache["limits"]["maximum_executions"] = nullptr;
+      if (m_defaults.maximumRetiredConfigurations)
+        cache["limits"]["maximum_retired_configurations"] =
+            *m_defaults.maximumRetiredConfigurations;
+      else
+        cache["limits"]["maximum_retired_configurations"] = nullptr;
+    }
     cache["best_improvements"] = nlohmann::json::array();
     for (auto const &improvement : m_bestImprovements)
       cache["best_improvements"].push_back(serializedImprovement(improvement));
@@ -2138,12 +2237,15 @@ private:
   std::mt19937_64 m_random;
   std::uniform_real_distribution<double> m_admissionDistribution{0.0, 1.0};
   std::unique_ptr<ParameterStrategy> m_strategy;
+  std::optional<LearnedResidualAdapterState> m_loadedLearnedAdapterState;
   std::unique_ptr<detail::CandidateQueue> m_queue;
   std::vector<bool> m_scheduled;
   std::vector<bool> m_rejected;
   std::size_t m_scheduledCount{};
   std::size_t m_rejectedCount{};
   std::size_t m_executionCount{};
+  /** Executions in this adaptive process run; intentionally not restored. */
+  std::size_t m_adaptiveHorizonExecutionCount{};
   std::size_t m_retiredConfigurationCount{};
   std::size_t m_unseenAcceptedCount{};
   std::size_t m_revisitAcceptedCount{};

@@ -81,6 +81,21 @@ struct LearnedHybridOptions {
   std::size_t candidateBatchSize{256u};
 };
 
+/** One measured residual retained by the lightweight learned adapter. */
+struct LearnedResidualObservation {
+  std::size_t rawIndex{};
+  std::vector<float> features;
+  double residual{};
+};
+
+/** Portable state required to resume the learned residual adapter. */
+struct LearnedResidualAdapterState {
+  std::vector<double> coefficients;
+  std::vector<LearnedResidualObservation> observations;
+  std::size_t observationsSinceUpdate{};
+  std::size_t updateCount{};
+};
+
 /**
  * A frozen offline DeepSets ensemble with a small online residual adapter.
  *
@@ -235,6 +250,66 @@ public:
   /** @brief Number of completed residual-adapter fits. */
   [[nodiscard]] auto adapterUpdateCount() const noexcept -> std::size_t {
     return m_adapterUpdateCount;
+  }
+  /** @brief Snapshot coefficients and retained fit observations. */
+  [[nodiscard]] auto residualAdapterState() const
+      -> LearnedResidualAdapterState {
+    auto state = LearnedResidualAdapterState{
+        .coefficients = m_adapter,
+        .observationsSinceUpdate = m_observationsSinceUpdate,
+        .updateCount = m_adapterUpdateCount};
+    state.observations.reserve(m_observations.size());
+    for (auto const &observation : m_observations)
+      state.observations.push_back(
+          {.rawIndex = observation.rawIndex,
+           .features = observation.features,
+           .residual = observation.residual});
+    return state;
+  }
+
+  /** @brief Restore a compatible adapter before candidate-pool preparation.
+   *
+   * @return false when the active artifact or serialized dimensions do not
+   * match. Invalid state is ignored without disabling the base model.
+   */
+  auto restoreResidualAdapterState(LearnedResidualAdapterState state) -> bool {
+    if (m_initialised || m_status != LearnedHybridStatus::active || !m_model)
+      return false;
+    auto const featureCount = m_model->artifact().adapterFeatureCount();
+    if ((!state.coefficients.empty() &&
+         state.coefficients.size() != featureCount + 1u) ||
+        state.observationsSinceUpdate >= m_options.adapterBatchSize ||
+        !std::ranges::all_of(state.coefficients,
+                             [](double value) { return std::isfinite(value); }))
+      return false;
+    auto const candidateCount =
+        detail::candidateCount(m_descriptor.dimensions);
+    auto indices = std::vector<std::size_t>{};
+    indices.reserve(state.observations.size());
+    for (auto const &observation : state.observations) {
+      if (observation.rawIndex >= candidateCount ||
+          observation.features.size() != featureCount ||
+          !std::isfinite(observation.residual) ||
+          !std::ranges::all_of(observation.features, [](float value) {
+            return std::isfinite(value);
+          }))
+        return false;
+      indices.push_back(observation.rawIndex);
+    }
+    std::ranges::sort(indices);
+    if (std::ranges::adjacent_find(indices) != indices.end())
+      return false;
+    m_adapter = std::move(state.coefficients);
+    m_observations.clear();
+    m_observations.reserve(state.observations.size());
+    for (auto &observation : state.observations)
+      m_observations.push_back(
+          {.rawIndex = observation.rawIndex,
+           .features = std::move(observation.features),
+           .residual = observation.residual});
+    m_observationsSinceUpdate = state.observationsSinceUpdate;
+    m_adapterUpdateCount = state.updateCount;
+    return true;
   }
 
   /** @brief Initialize the bounded candidate pool outside a timed recommend.

@@ -12,12 +12,12 @@ Application lifetime
 
 The application owns the number of kernel launches. It can use a fixed loop,
 simulation time steps, convergence of its own result, a wall-time limit, or any
-other application-level condition. ``maximum_executions`` belongs to tuner
-policy and does not impose an application lifetime.
+other application-level condition. Tuner limits and horizons do not impose an
+application lifetime.
 
 ``Tuner::completed()`` is optional policy information an application may
 consult. In ``online_fixed`` and ``offline`` it identifies a terminal tuner
-state. In ``online_adaptive`` it becomes true at ``maximum_executions`` only to
+state. In ``online_adaptive`` it becomes true at ``horizon`` only to
 indicate that the admission sigmoid and cooling schedule reached their final
 state. It does not stop adaptation, measurement, revisits, or residual-adapter
 updates.
@@ -57,6 +57,7 @@ the queue configuration exactly. For example:
 
    tuning:
      mode: online_adaptive
+     horizon: 40000
      warmup_runs: 1
      max_consecutive_runs: 4
 
@@ -76,7 +77,15 @@ have been rejected:
 
 .. math::
 
-   x = \operatorname{clamp}\left(\frac{n}{H}, 0, 1\right)
+   q = \operatorname{clamp}\left(\frac{n}{H}, 0, 1\right)
+
+.. math::
+
+   x =
+   \begin{cases}
+     q, & \text{without active history}\\
+     h + (1-h)q, & \text{with active history}
+   \end{cases}
 
 .. math::
 
@@ -84,11 +93,22 @@ have been rejected:
    \frac{\sigma(k(x-\tfrac12))-\sigma(-k/2)}
         {\sigma(k/2)-\sigma(-k/2)}
 
-Here, ``n`` is the total launch count, ``H`` is
-``maximum_executions``, and ``k`` is
-``revisit_admission_steepness`` (16 by default). The normalization makes the
-probability exactly zero at launch zero and exactly one at and after the
-horizon.
+Here, ``n`` is the launch count in the current tuner process run, ``H`` is
+``horizon``, ``h`` is
+``horizon_offset_with_active_history`` (0.8 by default), and ``k`` is
+``revisit_admission_steepness`` (16 by default). Active history means that a
+compatible cache containing at least one measured configuration initialized
+the tuner. Merely configuring a file or finding an empty context does not
+activate the offset.
+
+Without active history, the normalized revisit probability still starts
+exactly at zero. With active history, the same unmodified sigmoid and
+Boltzmann-temperature functions start at ``h``. The interval from ``h`` to one
+is stretched over all ``H`` new launches, so loading a large cumulative
+``execution_count`` does not prematurely finish the new run's horizon.
+``TunerInfo::executionCount`` remains cumulative, while
+``adaptiveHorizonExecutionCount`` and ``adaptiveHorizonProgress`` expose the
+current process run's horizon state directly.
 
 The second gate prefers candidates close to the current best robust runtime:
 
@@ -105,12 +125,12 @@ The second gate prefers candidates close to the current best robust runtime:
 0.05. The current best therefore always passes the score gate, while slower
 configurations become less likely as the temperature cools.
 
-In this mode ``maximum_executions`` is only the admission and temperature
-horizon inside the tuner. At that point ``completed()`` becomes true as a
-diagnostic, but the adaptive tuner does not enter its internal terminal state.
-``maximum_retired_configurations`` is accepted for configuration compatibility
-but ignored in adaptive mode; it is a completion guard only in
-``online_fixed``. If a refill pass admits nothing, the tuner launches the
+In this mode ``horizon`` is the admission and temperature schedule inside the
+tuner. After that many launches in the current tuner process run,
+``completed()`` becomes true as a diagnostic, but the adaptive tuner does not
+enter its internal terminal state. ``maximum_executions`` and
+``maximum_retired_configurations`` are rejected because they belong exclusively
+to ``online_fixed``. If a refill pass admits nothing, the tuner launches the
 current best without measuring it and asks the strategy for another proposal
 on the next ``enqueue`` call. Rejection never causes a synchronous
 recommendation loop.

@@ -128,6 +128,18 @@ auto main() -> int {
                0.25) > 1.0e-12 ||
       std::abs(alpakaTune::detail::adaptiveScoreTemperature(1.0, 0.25, 0.05) -
                0.05) > 1.0e-12 ||
+      std::abs(alpakaTune::detail::adaptiveProgressWithActiveHistory(
+                   0.0, true, 0.8) -
+               0.8) > 1.0e-12 ||
+      std::abs(alpakaTune::detail::adaptiveProgressWithActiveHistory(
+                   0.5, true, 0.8) -
+               0.9) > 1.0e-12 ||
+      std::abs(alpakaTune::detail::adaptiveProgressWithActiveHistory(
+                   1.0, true, 0.8) -
+               1.0) > 1.0e-12 ||
+      std::abs(alpakaTune::detail::adaptiveProgressWithActiveHistory(
+                   0.5, false, 0.8) -
+               0.5) > 1.0e-12 ||
       std::abs(alpakaTune::detail::relativeScoreAdmission(1.0, 1.0, 0.1) -
                1.0) > 1.0e-12 ||
       !(alpakaTune::detail::relativeScoreAdmission(2.0, 1.0, 0.1) < 1.0))
@@ -447,8 +459,9 @@ auto main() -> int {
   // timing window: 4 consecutive launches - 1 warm-up = 3 samples.
   auto adaptiveConfig = oneRunConfig();
   adaptiveConfig.mode = alpakaTune::TuningMode::onlineAdaptive;
-  adaptiveConfig.maximumExecutions = 4u;
-  adaptiveConfig.maximumRetiredConfigurations = 1u;
+  adaptiveConfig.maximumExecutions.reset();
+  adaptiveConfig.maximumRetiredConfigurations.reset();
+  adaptiveConfig.horizon = 4u;
   adaptiveConfig.warmupRuns = 1u;
   adaptiveConfig.maxConsecutiveRuns = 4u;
   adaptiveConfig.noiseCancellationWindow = 1u;
@@ -476,7 +489,7 @@ auto main() -> int {
   if (!adaptiveReasonRejected)
     return EXIT_FAILURE;
 
-  // maximumExecutions is an admission horizon in adaptive mode, not a stop.
+  // horizon is an adaptive schedule, not a stop.
   // At and after the horizon the single current-best candidate passes both
   // admission gates with probability one and may be visited indefinitely.
   for (std::size_t launch = 0u; launch < 4u; ++launch)
@@ -487,6 +500,24 @@ auto main() -> int {
       secondAdaptiveInfo.retiredConfigurationCount != 2u ||
       secondAdaptiveInfo.revisitAcceptedCount == 0u ||
       adaptiveTuner.candidateRuntimeSamples(0u).size() != 3u)
+    return EXIT_FAILURE;
+
+  // A compatible adaptive history starts the sigmoid/Boltzmann schedule at
+  // the configured offset, but still receives a complete new-run horizon.
+  auto resumedAdaptiveTuner = alpakaTune::makeTuner(
+      adaptiveConfig, adaptiveTunables, device, "adaptive-burst-test");
+  for (std::size_t launch = 0u; launch < 3u; ++launch) {
+    resumedAdaptiveTuner.enqueue(queue, frameSpec, bundle);
+    if (resumedAdaptiveTuner.completed())
+      return EXIT_FAILURE;
+  }
+  resumedAdaptiveTuner.enqueue(queue, frameSpec, bundle);
+  if (!resumedAdaptiveTuner.loadedFromCache() ||
+      !resumedAdaptiveTuner.completed() ||
+      resumedAdaptiveTuner.info().executionCount != 12u ||
+      resumedAdaptiveTuner.info().adaptiveHorizonExecutionCount != 4u ||
+      std::abs(resumedAdaptiveTuner.info().adaptiveHorizonProgress - 1.0) >
+          1.0e-12)
     return EXIT_FAILURE;
 
 #if ALPAKA_TUNE_HAS_JSON

@@ -71,9 +71,12 @@ lower-confidence-bound proposal.
 a bounded, deterministically sampled candidate pool in batches. It reserves
 part of its recommendations for diverse or uncertain points. The shared model
 remains frozen while a small residual adapter learns from retired measurements
-in the current context and re-sorts only the active pool. The core tuner still
-stores its full legality and runtime-history bookkeeping; the pool specifically
-bounds learned inference and learned candidate metadata. Model
+in the current context and re-sorts only the active pool. Its coefficients,
+retained residual observations, partial-batch count, and fit count are stored
+with compatible history and restored only for the exact same model artifact.
+The core tuner still stores its full legality and runtime-history bookkeeping;
+the pool specifically bounds learned inference and learned candidate metadata.
+Model
 training and campaign data live in the separate ``alpakaTune-ml`` repository;
 only a promoted deployment artifact may be bundled here.
 

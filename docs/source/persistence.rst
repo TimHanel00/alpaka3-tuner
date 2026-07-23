@@ -40,7 +40,10 @@ best loaded or in-process-staged configuration without timing or
 synchronization.
 ``online_fixed`` resumes an incomplete record or replays a completed winner.
 ``online_adaptive`` resumes either kind of compatible measured history and
-continues adapting.
+continues adapting. Its cumulative execution count is retained for provenance,
+but each new tuner process receives a full new adaptive horizon. The
+history-aware horizon offset controls only the initial normalized
+sigmoid/Boltzmann progress.
 
 An adaptive or interrupted record normally has ``completion_reason`` set to
 ``none`` and is still valid input to ``offline`` and ``online_adaptive``. A
@@ -58,7 +61,12 @@ tuning dimensions, concrete numeric values where representable, and automatic
 numeric/hash features for the kernel, launch, context, and device. Offline
 tooling uses this structured record instead of parsing printable configuration
 strings. Learned runs additionally record artifact loading/fallback status,
-artifact digest, bounded-pool diagnostics, and online-adapter progress.
+artifact digest, bounded-pool diagnostics, and the complete lightweight
+residual-adapter state: fitted coefficients, retained residual observations,
+pending batch progress, and fit count. A later learned run restores that state
+only when the model artifact digest and tuner fingerprint remain compatible.
+Missing, malformed, or model-incompatible adapter state is ignored without
+discarding otherwise valid timing history.
 
 The persistence fingerprint includes the kernel bundle type, physical device
 name, additional tuner identity entries, launch prototype, marker layout,

@@ -20,7 +20,7 @@ normal alpakaTune user must structure an application this way. An application
 that needs exactly `N` kernel launches should use its own `N`-iteration loop
 and may ignore `completed()` completely.
 
-The default tuner configuration uses `maximum_executions: 40000`. The two
+The default tuner configuration uses `horizon: 40000`. The two
 numbers are intentionally independent:
 
 - During the first 40,000 adaptive launches, revisit admission and temperature

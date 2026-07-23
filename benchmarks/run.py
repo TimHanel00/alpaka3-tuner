@@ -179,6 +179,8 @@ def benchmark_configuration(
     # users inherit online_adaptive unless they make the same explicit choice.
     tuning["mode"] = "online_fixed"
     tuning["strategy"] = strategy
+    tuning.pop("horizon", None)
+    tuning.pop("horizon_offset_with_active_history", None)
     if full_coverage:
         tuning.update(FULL_COVERAGE_TUNING)
         tuning["maximum_executions"] = (

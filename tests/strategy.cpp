@@ -83,10 +83,34 @@ auto main() -> int {
   auto defaultConfig = alpakaTune::TunerConfig{};
   defaultConfig.validate();
   if (defaultConfig.mode != alpakaTune::TuningMode::onlineAdaptive ||
-      defaultConfig.maximumExecutions != 40'000u ||
+      defaultConfig.maximumExecutions ||
       defaultConfig.maximumRetiredConfigurations ||
+      defaultConfig.horizon != 40'000u ||
       defaultConfig.persistenceFile || !defaultConfig.persistenceRead ||
-      !defaultConfig.persistenceWrite)
+      !defaultConfig.persistenceWrite ||
+      std::abs(defaultConfig.horizonOffsetWithActiveHistory - 0.8) > 1.0e-12)
+    return EXIT_FAILURE;
+  for (auto const invalidOffset : {-0.01, 1.01}) {
+    auto invalidConfig = defaultConfig;
+    invalidConfig.horizonOffsetWithActiveHistory = invalidOffset;
+    auto rejected = false;
+    try {
+      invalidConfig.validate();
+    } catch (std::invalid_argument const &) {
+      rejected = true;
+    }
+    if (!rejected)
+      return EXIT_FAILURE;
+  }
+  auto mixedAdaptiveConfig = defaultConfig;
+  mixedAdaptiveConfig.maximumExecutions = 10u;
+  auto mixedAdaptiveConfigRejected = false;
+  try {
+    mixedAdaptiveConfig.validate();
+  } catch (std::invalid_argument const &) {
+    mixedAdaptiveConfigRejected = true;
+  }
+  if (!mixedAdaptiveConfigRejected)
     return EXIT_FAILURE;
 
   for (auto const strategyKind :
@@ -208,7 +232,8 @@ auto main() -> int {
                 "  warmup_runs: 0\n"
                 "  runs_per_candidate: 1\n"
                 "  noise_cancellation_window: 1\n"
-                "  max_consecutive_runs: 1\n";
+                "  max_consecutive_runs: 1\n"
+                "  horizon: 100\n";
   memoryYaml.close();
   auto const memoryDefaults =
       alpakaTune::TunerConfig::fromYaml(memoryConfiguration);
@@ -227,6 +252,7 @@ auto main() -> int {
                       "  runs_per_candidate: 1\n"
                       "  noise_cancellation_window: 1\n"
                       "  max_consecutive_runs: 1\n"
+                      "  horizon: 100\n"
                       "persistence:\n"
                       "  read: false\n"
                       "  write: false\n";
@@ -271,6 +297,7 @@ auto main() -> int {
                    "  runs_per_candidate: 1\n"
                    "  noise_cancellation_window: 1\n"
                    "  max_consecutive_runs: 1\n"
+                   "  maximum_executions: 100\n"
                    "persistence:\n"
                    "  file: fresh-history.json\n"
                    "  read: false\n"
@@ -321,24 +348,75 @@ auto main() -> int {
                   "  runs_per_candidate: 1\n"
                   "  noise_cancellation_window: 2\n"
                   "  max_consecutive_runs: 4\n"
-                  "  maximum_executions: 4000\n"
-                  "  maximum_retired_configurations: 1\n"
+                  "  horizon: 4000\n"
                   "  history_window_size: 10\n"
                   "  revisit_admission_steepness: 16\n"
                   "  score_temperature_start: 0.25\n"
                   "  score_temperature_end: 0.05\n"
+                  "  horizon_offset_with_active_history: 0.7\n"
                   "persistence:\n"
                   "  file: adaptive-history.json\n";
   adaptiveYaml.close();
   auto const adaptiveDefaults =
       alpakaTune::TunerConfig::fromYaml(adaptiveConfiguration);
   if (adaptiveDefaults.mode != alpakaTune::TuningMode::onlineAdaptive ||
-      adaptiveDefaults.maximumExecutions != 4000u ||
-      adaptiveDefaults.maximumRetiredConfigurations != 1u ||
+      adaptiveDefaults.horizon != 4000u ||
+      adaptiveDefaults.maximumExecutions ||
+      adaptiveDefaults.maximumRetiredConfigurations ||
       adaptiveDefaults.historyWindowSize != 10u ||
       std::abs(adaptiveDefaults.revisitAdmissionSteepness - 16.0) > 1.0e-12 ||
       std::abs(adaptiveDefaults.scoreTemperatureStart - 0.25) > 1.0e-12 ||
-      std::abs(adaptiveDefaults.scoreTemperatureEnd - 0.05) > 1.0e-12)
+      std::abs(adaptiveDefaults.scoreTemperatureEnd - 0.05) > 1.0e-12 ||
+      std::abs(adaptiveDefaults.horizonOffsetWithActiveHistory - 0.7) >
+          1.0e-12)
+    return EXIT_FAILURE;
+
+  auto const mixedAdaptiveConfiguration =
+      configurationDirectory / "mixed-adaptive-v2.yaml";
+  auto mixedAdaptiveYaml = std::ofstream{mixedAdaptiveConfiguration};
+  mixedAdaptiveYaml << "schema_version: 2\n"
+                       "tuning:\n"
+                       "  mode: online_adaptive\n"
+                       "  strategy: random\n"
+                       "  warmup_runs: 0\n"
+                       "  runs_per_candidate: 1\n"
+                       "  noise_cancellation_window: 1\n"
+                       "  max_consecutive_runs: 1\n"
+                       "  horizon: 100\n"
+                       "  maximum_executions: 100\n";
+  mixedAdaptiveYaml.close();
+  auto mixedAdaptiveRejected = false;
+  try {
+    static_cast<void>(
+        alpakaTune::TunerConfig::fromYaml(mixedAdaptiveConfiguration));
+  } catch (std::runtime_error const &) {
+    mixedAdaptiveRejected = true;
+  }
+  if (!mixedAdaptiveRejected)
+    return EXIT_FAILURE;
+
+  auto const mixedFixedConfiguration =
+      configurationDirectory / "mixed-fixed-v2.yaml";
+  auto mixedFixedYaml = std::ofstream{mixedFixedConfiguration};
+  mixedFixedYaml << "schema_version: 2\n"
+                    "tuning:\n"
+                    "  mode: online_fixed\n"
+                    "  strategy: random\n"
+                    "  warmup_runs: 0\n"
+                    "  runs_per_candidate: 1\n"
+                    "  noise_cancellation_window: 1\n"
+                    "  max_consecutive_runs: 1\n"
+                    "  horizon: 100\n"
+                    "  maximum_executions: 100\n";
+  mixedFixedYaml.close();
+  auto mixedFixedRejected = false;
+  try {
+    static_cast<void>(
+        alpakaTune::TunerConfig::fromYaml(mixedFixedConfiguration));
+  } catch (std::runtime_error const &) {
+    mixedFixedRejected = true;
+  }
+  if (!mixedFixedRejected)
     return EXIT_FAILURE;
 
   auto const retiredOnlyConfiguration =

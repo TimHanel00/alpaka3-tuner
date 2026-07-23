@@ -54,7 +54,13 @@ struct TunerInfo {
   std::size_t retiredConfigurationCount{};
   /** Total kernel launches, including warm-ups and production replays. */
   std::size_t executionCount{};
-  /** Configured schedule horizon or fixed completion guard, if present. */
+  /** Launches counted toward this process run's adaptive horizon. */
+  std::size_t adaptiveHorizonExecutionCount{};
+  /** History-aware sigmoid/Boltzmann progress in the inclusive [0, 1] range. */
+  double adaptiveHorizonProgress{};
+  /** Configured online-adaptive new-run horizon, when active. */
+  std::optional<std::size_t> horizon;
+  /** Configured online-fixed execution guard, if present. */
   std::optional<std::size_t> maximumExecutions;
   /** True only when the tuner entered an actual terminal state. */
   bool tuningComplete{};

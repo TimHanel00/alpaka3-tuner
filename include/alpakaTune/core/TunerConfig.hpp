@@ -89,10 +89,12 @@ struct TunerConfig {
   std::size_t noiseCancellationWindow{50u};
   /** Launches in one queue activation, including warm-up launches. */
   std::size_t maxConsecutiveRuns{3u};
-  /** Adaptive schedule horizon; also a completion guard in online-fixed. */
-  std::optional<std::size_t> maximumExecutions{40'000u};
-  /** Alternative online-fixed completion guard; ignored in adaptive mode. */
+  /** Online-fixed completion guard on total launches. */
+  std::optional<std::size_t> maximumExecutions;
+  /** Alternative online-fixed completion guard on retired configurations. */
   std::optional<std::size_t> maximumRetiredConfigurations;
+  /** New-run launch horizon used exclusively by online-adaptive mode. */
+  std::size_t horizon{40'000u};
   /** Maximum number of newest timing records retained per configuration. */
   std::size_t historyWindowSize{10u};
   /** Shape of the normalized-logistic adaptive revisit-admission ramp. */
@@ -101,6 +103,8 @@ struct TunerConfig {
   double scoreTemperatureStart{0.25};
   /** Relative-Boltzmann temperature at the adaptive execution horizon. */
   double scoreTemperatureEnd{0.05};
+  /** Initial adaptive progress when compatible measured history is active. */
+  double horizonOffsetWithActiveHistory{0.8};
   /** Parameter-proposal algorithm; admission remains tuner-owned. */
   StrategyKind strategy{StrategyKind::exhaustive};
   /** Reproducible seed shared by strategy and tuner admission randomness. */
@@ -175,6 +179,17 @@ inline auto optionalProbability(YAML::Node const &node, char const *key,
   return value;
 }
 
+inline auto optionalUnitInterval(YAML::Node const &node, char const *key,
+                                 double fallback) -> double {
+  if (!node[key])
+    return fallback;
+  auto const value = node[key].as<double>();
+  if (!std::isfinite(value) || value < 0.0 || value > 1.0)
+    throw std::runtime_error{
+        std::string{"YAML key must be finite and in [0, 1]: "} + key};
+  return value;
+}
+
 inline void rejectUnknown(YAML::Node const &node,
                           std::initializer_list<std::string_view> allowed,
                           std::string_view section) {
@@ -235,12 +250,14 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
                  "mann_whitney_alpha",
                  "noise_cancellation_window",
                  "max_consecutive_runs",
+                 "horizon",
                  "maximum_executions",
                  "maximum_retired_configurations",
                  "history_window_size",
                  "revisit_admission_steepness",
                  "score_temperature_start",
-                 "score_temperature_end"},
+                 "score_temperature_end",
+                 "horizon_offset_with_active_history"},
                 "tuning");
   if (persistence)
     rejectUnknown(persistence, {"file", "directory", "read", "write"},
@@ -300,6 +317,26 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
       defaults.maximumRetiredConfigurations =
           requirePositive(tuning, "maximum_retired_configurations");
   }
+  if (defaults.mode == TuningMode::onlineAdaptive) {
+    if (tuning["maximum_executions"].IsDefined() ||
+        tuning["maximum_retired_configurations"].IsDefined())
+      throw std::runtime_error{
+          "YAML online_adaptive accepts horizon, not maximum_executions or "
+          "maximum_retired_configurations."};
+    defaults.horizon = requirePositive(tuning, "horizon");
+  } else {
+    if (tuning["horizon"].IsDefined() ||
+        tuning["horizon_offset_with_active_history"].IsDefined())
+      throw std::runtime_error{
+          "YAML horizon and horizon_offset_with_active_history are exclusive "
+          "to online_adaptive mode."};
+    if (defaults.mode == TuningMode::offline &&
+        (tuning["maximum_executions"].IsDefined() ||
+         tuning["maximum_retired_configurations"].IsDefined()))
+      throw std::runtime_error{
+          "YAML maximum_executions and maximum_retired_configurations are "
+          "exclusive to online_fixed mode."};
+  }
   defaults.historyWindowSize = optionalPositive(tuning, "history_window_size",
                                                 defaults.historyWindowSize);
   defaults.revisitAdmissionSteepness =
@@ -309,6 +346,9 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
       tuning, "score_temperature_start", defaults.scoreTemperatureStart);
   defaults.scoreTemperatureEnd = optionalPositiveFinite(
       tuning, "score_temperature_end", defaults.scoreTemperatureEnd);
+  defaults.horizonOffsetWithActiveHistory = optionalUnitInterval(
+      tuning, "horizon_offset_with_active_history",
+      defaults.horizonOffsetWithActiveHistory);
   if (defaults.maxConsecutiveRuns <= defaults.warmupRuns)
     throw std::runtime_error{"YAML max_consecutive_runs must exceed "
                              "warmup_runs so every activation is measured."};
@@ -408,6 +448,12 @@ inline void TunerConfig::validate() const {
                  "TunerConfig::revisitAdmissionSteepness");
   positiveFinite(scoreTemperatureStart, "TunerConfig::scoreTemperatureStart");
   positiveFinite(scoreTemperatureEnd, "TunerConfig::scoreTemperatureEnd");
+  if (!std::isfinite(horizonOffsetWithActiveHistory) ||
+      horizonOffsetWithActiveHistory < 0.0 ||
+      horizonOffsetWithActiveHistory > 1.0)
+    throw std::invalid_argument{
+        "TunerConfig::horizonOffsetWithActiveHistory must be finite and in "
+        "[0, 1]."};
   if (scoreTemperatureEnd > scoreTemperatureStart)
     throw std::invalid_argument{
         "TunerConfig::scoreTemperatureEnd must not exceed "
@@ -426,10 +472,17 @@ inline void TunerConfig::validate() const {
         "TunerConfig::onlineFixed requires maximumExecutions or "
         "maximumRetiredConfigurations."};
   if (mode == TuningMode::onlineAdaptive) {
-    if (!maximumExecutions)
+    positive(horizon, "TunerConfig::horizon");
+    if (maximumExecutions || maximumRetiredConfigurations)
       throw std::invalid_argument{
-          "TunerConfig::onlineAdaptive requires maximumExecutions as its "
-          "admission horizon."};
+          "TunerConfig::onlineAdaptive uses horizon and does not accept "
+          "online-fixed completion guards."};
+  }
+  if (mode == TuningMode::offline &&
+      (maximumExecutions || maximumRetiredConfigurations)) {
+    throw std::invalid_argument{
+        "TunerConfig::maximumExecutions and "
+        "maximumRetiredConfigurations are exclusive to online-fixed mode."};
   }
   if (mode == TuningMode::onlineFixed && runsPerCandidate > historyWindowSize)
     throw std::invalid_argument{

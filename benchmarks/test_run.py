@@ -184,6 +184,8 @@ class FullCoverageConfigurationTest(unittest.TestCase):
                 "minimum_runs_per_candidate": 1,
                 "mann_whitney_early_stop": True,
                 "max_consecutive_runs": 10,
+                "horizon": 40_000,
+                "horizon_offset_with_active_history": 0.8,
                 "maximum_executions": 4000,
                 "maximum_retired_configurations": 2000,
             },
@@ -207,8 +209,13 @@ class FullCoverageConfigurationTest(unittest.TestCase):
             250_000,
         )
         self.assertNotIn("maximum_retired_configurations", generated["tuning"])
+        self.assertNotIn("horizon", generated["tuning"])
+        self.assertNotIn(
+            "horizon_offset_with_active_history", generated["tuning"]
+        )
         self.assertEqual(generated["persistence"]["file"], "history.json")
         self.assertIn("maximum_executions", base["tuning"])
+        self.assertIn("horizon", base["tuning"])
 
     def test_resume_requires_a_verified_full_coverage_run(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

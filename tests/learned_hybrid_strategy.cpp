@@ -236,6 +236,25 @@ auto main() -> int {
     return EXIT_FAILURE;
   }
 
+  auto const adapterState = strategy.residualAdapterState();
+  if (adapterState.coefficients.empty() ||
+      adapterState.observations.size() !=
+          strategy.incorporatedObservationCount() ||
+      adapterState.updateCount != strategy.adapterUpdateCount())
+    return EXIT_FAILURE;
+  auto restoredStrategy = alpakaTune::LearnedHybridStrategy{
+      loaded.artifact, descriptor(), 19u, options};
+  if (!restoredStrategy.restoreResidualAdapterState(adapterState))
+    return EXIT_FAILURE;
+  restoredStrategy.prepare(context);
+  auto const restoredState = restoredStrategy.residualAdapterState();
+  if (restoredState.coefficients != adapterState.coefficients ||
+      restoredState.observations.size() != adapterState.observations.size() ||
+      restoredState.observationsSinceUpdate !=
+          adapterState.observationsSinceUpdate ||
+      restoredState.updateCount != adapterState.updateCount)
+    return EXIT_FAILURE;
+
   auto boundedOptions = options;
   boundedOptions.candidatePoolSize = 4u;
   boundedOptions.candidateBatchSize = 2u;

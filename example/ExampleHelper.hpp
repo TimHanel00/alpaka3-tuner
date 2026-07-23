@@ -19,7 +19,7 @@ namespace alpakaTune::example {
  *
  * This is not part of the alpakaTune interface and applications do not need to
  * use it. Each application remains responsible for its own launch count. The
- * examples choose 50,000 independently of TunerConfig::maximumExecutions so
+ * examples choose 50,000 independently of TunerConfig::horizon so
  * that the default 40,000-execution horizon leaves a 10,000-launch diagnostic
  * tail.
  */
