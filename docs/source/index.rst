@@ -17,6 +17,7 @@ Alpaka3 provides two host-side launch descriptions:
 
    getting_started
    configuration
+   history_workflows
    execution_modes
    strategies
    launch_tuning

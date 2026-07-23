@@ -107,7 +107,8 @@ The complete persistence access matrix is:
 Both flags default to ``true`` for backward compatibility when ``file`` is
 present. The entire ``persistence`` map, or just its ``file`` key, may be
 omitted. Without a file the flags have no filesystem effect and history stays
-process-local.
+process-local. See :doc:`history_workflows` for complete fresh-collection,
+read-only adaptive continuation, and offline-replay configurations.
 
 Unknown keys and invalid values are rejected. ``online_adaptive`` is the
 default. In ``online_fixed``, ``runsPerCandidate`` is the hard measurement cap

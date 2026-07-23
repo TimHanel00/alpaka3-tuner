@@ -15,7 +15,8 @@ shutdown write starts a fresh file and replaces the old one instead of merging
 it. ``persistenceRead = true`` with ``persistenceWrite = false`` loads history
 for ``offline`` replay or ``onlineAdaptive`` context while leaving the file
 byte-for-byte unchanged. Omitting ``persistenceFile`` provides only the shared
-in-process store and never touches the filesystem.
+in-process store and never touches the filesystem. Complete two-run examples
+are collected in :doc:`history_workflows`.
 
 The record contains the current best candidate, rolling candidate timings,
 robust per-candidate estimates, readable values for measured tuning-parameter
