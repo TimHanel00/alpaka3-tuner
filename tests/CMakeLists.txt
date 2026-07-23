@@ -34,11 +34,14 @@ if(alpakaTune_ENABLE_PERSISTENCE)
     alpaka_finalize(alpakaTune_persistence_shutdown_tests)
     set(_alpakaTune_partial_history "${CMAKE_CURRENT_BINARY_DIR}/partial-history.json")
     set(_alpakaTune_completed_history "${CMAKE_CURRENT_BINARY_DIR}/completed-history.json")
+    set(_alpakaTune_write_only_history "${CMAKE_CURRENT_BINARY_DIR}/write-only-history.json")
+    set(_alpakaTune_read_only_history "${CMAKE_CURRENT_BINARY_DIR}/read-only-history.json")
     add_test(
         NAME alpakaTune_persistence_shutdown_stage
         COMMAND
             alpakaTune_persistence_shutdown_tests stage "${_alpakaTune_partial_history}"
-            "${_alpakaTune_completed_history}"
+            "${_alpakaTune_completed_history}" "${_alpakaTune_write_only_history}"
+            "${_alpakaTune_read_only_history}"
     )
     set_tests_properties(
         alpakaTune_persistence_shutdown_stage
@@ -48,7 +51,8 @@ if(alpakaTune_ENABLE_PERSISTENCE)
         NAME alpakaTune_persistence_shutdown_verify
         COMMAND
             alpakaTune_persistence_shutdown_tests verify "${_alpakaTune_partial_history}"
-            "${_alpakaTune_completed_history}"
+            "${_alpakaTune_completed_history}" "${_alpakaTune_write_only_history}"
+            "${_alpakaTune_read_only_history}"
     )
     set_tests_properties(
         alpakaTune_persistence_shutdown_verify

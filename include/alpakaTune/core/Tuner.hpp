@@ -1736,10 +1736,13 @@ private:
     auto store = nlohmann::json{};
     auto const *cachePointer = staged.get();
     if (cachePointer == nullptr) {
-      std::lock_guard lock{m_persistence->mutex};
-      if (!std::filesystem::exists(m_persistence->file))
+      if (!m_persistence->file || !m_persistence->readFile)
         return false;
-      std::ifstream input{m_persistence->file};
+      std::lock_guard lock{m_persistence->mutex};
+      auto const &path = *m_persistence->file;
+      if (!std::filesystem::exists(path))
+        return false;
+      std::ifstream input{path};
       if (!(input >> store) || !store.contains("contexts") ||
           !store["contexts"].is_object())
         throw std::runtime_error{
@@ -2190,7 +2193,9 @@ template <typename TunablesType, typename Device, typename... IdentityEntries>
       (detail::typeName<std::remove_cvref_t<IdentityEntries>>() + "=" +
        detail::identityName(identityEntries))...};
   std::sort(names.begin(), names.end());
-  auto persistence = detail::persistenceStore(config.persistenceFile);
+  auto persistence =
+      detail::persistenceStore(config.persistenceFile, config.persistenceRead,
+                               config.persistenceWrite);
   return Tuner<TunablesType, Device>{std::move(config), std::move(persistence),
                                      std::move(tunables), std::move(device),
                                      std::move(names)};

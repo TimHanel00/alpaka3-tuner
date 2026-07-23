@@ -50,7 +50,7 @@ not an instruction from the library to stop the application.
 false throughout adaptive mode.
 
 Reuse one ``TunerConfig`` for several tuners when they should share settings
-and a persistence file; every tuner still owns independent runtime state.
+and optional history access; every tuner still owns independent runtime state.
 
 Launch-shape tuning
 -------------------

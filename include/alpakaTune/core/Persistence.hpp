@@ -7,6 +7,7 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -18,16 +19,18 @@
 
 namespace alpakaTune::detail {
 
-/** @brief Process-shared, shutdown-flushed persistence state for one file.
+/** @brief Process-shared, optionally shutdown-flushed persistence state.
  *
  * Tuners stage complete JSON snapshots in memory. The final shared-store
- * destructor merges only the newest snapshot per fingerprint and performs one
- * atomic file replacement. No launch opens or appends to the history file.
+ * destructor optionally merges only the newest snapshot per fingerprint and
+ * performs one atomic file replacement. No launch opens or appends to the
+ * history file.
  */
 struct PersistenceStore {
-  /** @brief Bind the store to one normalized persistence path. */
-  explicit PersistenceStore(std::filesystem::path value)
-      : file(std::move(value)) {}
+  /** @brief Bind the store to optional file-read and shutdown-write policy. */
+  PersistenceStore(std::optional<std::filesystem::path> value,
+                   bool readValue, bool writeValue)
+      : file(std::move(value)), readFile(readValue), writeFile(writeValue) {}
 
   /** @brief Flush pending snapshots during normal process shutdown.
    *
@@ -38,7 +41,7 @@ struct PersistenceStore {
 #if ALPAKA_TUNE_HAS_JSON
     try {
       std::lock_guard lock{mutex};
-      if (!pendingCaches.empty()) {
+      if (file && writeFile && !pendingCaches.empty()) {
         auto caches = std::unordered_map<std::string, nlohmann::json>{};
         caches.reserve(pendingCaches.size());
         for (auto const &[fingerprint, cache] : pendingCaches)
@@ -89,8 +92,12 @@ struct PersistenceStore {
   }
 #endif
 
-  /** Absolute normalized output path shared by all matching tuners. */
-  std::filesystem::path file;
+  /** Optional absolute normalized path shared by all matching tuners. */
+  std::optional<std::filesystem::path> file;
+  /** Whether a cache miss may load an existing history file. */
+  bool readFile;
+  /** Whether staged snapshots are written once during normal shutdown. */
+  bool writeFile;
   /** Protects schema selection and the pending snapshot map. */
   std::mutex mutex;
 
@@ -108,12 +115,13 @@ private:
   void mergeAndWrite(
       int version,
       std::unordered_map<std::string, nlohmann::json> const &caches) const {
-    auto const parent = file.parent_path();
+    auto const &path = *file;
+    auto const parent = path.parent_path();
     if (!parent.empty())
       std::filesystem::create_directories(parent);
     auto store = nlohmann::json::object();
-    if (std::filesystem::exists(file)) {
-      std::ifstream input{file};
+    if (readFile && std::filesystem::exists(path)) {
+      std::ifstream input{path};
       if (!(input >> store) || store.value("schema_version", 0) != version ||
           !store.contains("contexts") || !store["contexts"].is_object())
         throw std::runtime_error{"The alpakaTune persistent tuning file is "
@@ -125,7 +133,7 @@ private:
     for (auto const &[fingerprint, cache] : caches) {
       store["contexts"][fingerprint] = cache;
     }
-    auto temporary = file;
+    auto temporary = path;
     temporary += ".tmp";
     std::ofstream output{temporary};
     if (!output)
@@ -133,7 +141,7 @@ private:
           "Unable to write the alpakaTune persistent tuning cache."};
     output << store.dump(2) << '\n';
     output.close();
-    std::filesystem::rename(temporary, file);
+    std::filesystem::rename(temporary, path);
   }
 
   int schemaVersion{};
@@ -144,18 +152,23 @@ private:
 
 class PersistenceRegistry {
 public:
-  /** @brief Return the process-wide shared store for a normalized path. */
-  [[nodiscard]] auto get(std::filesystem::path file)
+  /** @brief Return the process-wide shared store for one access policy. */
+  [[nodiscard]] auto get(std::optional<std::filesystem::path> file,
+                         bool readFile, bool writeFile)
       -> std::shared_ptr<PersistenceStore> {
-    if (file.empty())
+    if (file && file->empty())
       throw std::invalid_argument{"The persistence file must not be empty."};
-    auto absolute =
-        std::filesystem::absolute(std::move(file)).lexically_normal();
-    auto const key = absolute.string();
+    if (file)
+      file = std::filesystem::absolute(std::move(*file)).lexically_normal();
+    auto const key =
+        file ? file->string() + "\nread=" + (readFile ? "1" : "0") +
+                   "\nwrite=" + (writeFile ? "1" : "0")
+             : std::string{"<memory>"};
     std::lock_guard lock{mutex};
     auto &store = stores[key];
     if (!store)
-      store = std::make_shared<PersistenceStore>(std::move(absolute));
+      store = std::make_shared<PersistenceStore>(
+          std::move(file), readFile, writeFile);
     return store;
   }
 
@@ -165,10 +178,12 @@ private:
 };
 
 /** @brief Access the process-wide persistence registry. */
-inline auto persistenceStore(std::filesystem::path file)
+inline auto persistenceStore(
+    std::optional<std::filesystem::path> file = std::nullopt,
+    bool readFile = true, bool writeFile = true)
     -> std::shared_ptr<PersistenceStore> {
   static PersistenceRegistry registry;
-  return registry.get(std::move(file));
+  return registry.get(std::move(file), readFile, writeFile);
 }
 
 } // namespace alpakaTune::detail

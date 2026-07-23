@@ -105,8 +105,12 @@ struct TunerConfig {
   StrategyKind strategy{StrategyKind::exhaustive};
   /** Reproducible seed shared by strategy and tuner admission randomness. */
   std::uint64_t randomSeed{0u};
-  /** Process-shared JSON history written during normal shutdown. */
-  std::filesystem::path persistenceFile{".alpakaTune/history.json"};
+  /** Optional process-shared JSON history file. */
+  std::optional<std::filesystem::path> persistenceFile;
+  /** Load compatible contexts from persistenceFile when it exists. */
+  bool persistenceRead{true};
+  /** Replace or update persistenceFile during normal process shutdown. */
+  bool persistenceWrite{true};
   /** Optional override for the model used by the learned-hybrid strategy. */
   std::filesystem::path learnedModelFile{
 #ifdef ALPAKA_TUNE_DEFAULT_MODEL
@@ -204,8 +208,8 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
         "Unsupported alpakaTune YAML schema_version; expected 1 or 2."};
   if (!root["tuning"] || !root["tuning"].IsMap())
     throw std::runtime_error{"Missing YAML map: tuning"};
-  if (!root["persistence"] || !root["persistence"].IsMap())
-    throw std::runtime_error{"Missing YAML map: persistence"};
+  if (root["persistence"] && !root["persistence"].IsMap())
+    throw std::runtime_error{"YAML persistence must contain a map."};
 
   auto const tuning = root["tuning"];
   auto const persistence = root["persistence"];
@@ -238,7 +242,9 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
                  "score_temperature_start",
                  "score_temperature_end"},
                 "tuning");
-  rejectUnknown(persistence, {"file", "directory"}, "persistence");
+  if (persistence)
+    rejectUnknown(persistence, {"file", "directory", "read", "write"},
+                  "persistence");
   if (learning)
     rejectUnknown(
         learning,
@@ -306,23 +312,25 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
   if (defaults.maxConsecutiveRuns <= defaults.warmupRuns)
     throw std::runtime_error{"YAML max_consecutive_runs must exceed "
                              "warmup_runs so every activation is measured."};
-  if (persistence["file"] && persistence["directory"])
+  if (persistence && persistence["file"] && persistence["directory"])
     throw std::runtime_error{
         "YAML persistence must define either file or directory, not both."};
-  if (persistence["file"]) {
+  if (persistence && persistence["file"]) {
     auto const file = persistence["file"].as<std::string>();
     if (file.empty())
       throw std::runtime_error{"YAML persistence.file must not be empty."};
     defaults.persistenceFile = file;
-  } else if (persistence["directory"]) {
+  } else if (persistence && persistence["directory"]) {
     auto const directory = persistence["directory"].as<std::string>();
     if (directory.empty())
       throw std::runtime_error{"YAML persistence.directory must not be empty."};
     defaults.persistenceFile =
         std::filesystem::path{directory} / "history.json";
-  } else {
-    throw std::runtime_error{"YAML persistence.file is required."};
   }
+  if (persistence && persistence["read"])
+    defaults.persistenceRead = persistence["read"].as<bool>();
+  if (persistence && persistence["write"])
+    defaults.persistenceWrite = persistence["write"].as<bool>();
   if (learning && learning["model"]) {
     auto const model = learning["model"].as<std::string>();
     if (model.empty())
@@ -427,9 +435,9 @@ inline void TunerConfig::validate() const {
     throw std::invalid_argument{
         "TunerConfig::runsPerCandidate must not exceed historyWindowSize in "
         "online-fixed mode."};
-  if (persistenceFile.empty())
+  if (persistenceFile && persistenceFile->empty())
     throw std::invalid_argument{
-        "TunerConfig::persistenceFile must not be empty."};
+        "TunerConfig::persistenceFile must contain a non-empty path."};
   if (learnedFallback != StrategyKind::random)
     throw std::invalid_argument{"TunerConfig::learnedFallback currently "
                                 "supports only StrategyKind::random."};

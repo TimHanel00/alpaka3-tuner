@@ -41,6 +41,8 @@ tuning:
   score_temperature_end: 0.05
 persistence:
   file: .alpakaTune/history.json
+  read: true
+  write: true
 learning:
   # learned_hybrid uses the bundled model when model is omitted.
   fallback: random

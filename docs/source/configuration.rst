@@ -14,6 +14,8 @@ selected by ``ALPAKA_TUNE_CONFIG`` when set.
    config.maximumExecutions = 4'000u; // Adaptive admission horizon.
    config.historyWindowSize = 10u;
    config.persistenceFile = ".my-tuning-cache/history.json";
+   config.persistenceRead = true;
+   config.persistenceWrite = false; // Reuse history without changing it.
 
 The type is an aggregate, so direct construction is also supported:
 
@@ -33,8 +35,10 @@ The type is an aggregate, so direct construction is also supported:
 ``makeTuner`` snapshots its configuration. Later mutations affect only tuners
 created afterward. The same ``TunerConfig`` can create multiple tuners. They
 keep independent candidates, measurements, and winners; when
-``persistenceFile`` is equal, they share the internal persistence store and
-their fingerprinted records coexist in that file.
+``persistenceFile`` and its access policy are equal, they share the internal
+persistence store and their fingerprinted records coexist in that file. With
+no ``persistenceFile``, compatible tuners in the same process still share
+staged records in memory, but perform no filesystem I/O.
 
 YAML schema version 2 adds the optional learned-model section. Schema version
 1 remains accepted for existing non-learned configurations:
@@ -65,12 +69,43 @@ YAML schema version 2 adds the optional learned-model section. Schema version
      score_temperature_end: 0.05
    persistence:
      file: .alpakaTune/history.json
+     read: true
+     write: true
    learning:
      # Omit model to use the bundled artifact when one was installed.
      model: /path/to/alternative-model.atml
      fallback: random
      candidate_pool_size: 4096
      candidate_batch_size: 256
+
+The complete persistence access matrix is:
+
+.. list-table::
+   :header-rows: 1
+
+   * - ``read``
+     - ``write``
+     - Behaviour
+   * - ``false``
+     - ``true``
+     - Ignore any old file and replace it once at normal shutdown with only
+       the histories staged by this run.
+   * - ``true``
+     - ``false``
+     - Load compatible history, but leave the file unchanged. This is the
+       direct offline-replay or adaptive-with-context mode.
+   * - ``true``
+     - ``true``
+     - Load compatible history and merge the newest staged contexts once at
+       normal shutdown. This preserves the previous behaviour.
+   * - ``false``
+     - ``false``
+     - Use only process-local staged history.
+
+Both flags default to ``true`` for backward compatibility when ``file`` is
+present. The entire ``persistence`` map, or just its ``file`` key, may be
+omitted. Without a file the flags have no filesystem effect and history stays
+process-local.
 
 Unknown keys and invalid values are rejected. ``online_adaptive`` is the
 default. In ``online_fixed``, ``runsPerCandidate`` is the hard measurement cap

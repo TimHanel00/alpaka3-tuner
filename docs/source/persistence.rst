@@ -1,11 +1,21 @@
 Persistent tuner cache
 ======================
 
-alpakaTune stages a versioned JSON record in memory. The process-wide
-persistence-store destructor writes the newest staged records to
-``TunerConfig::persistenceFile`` during normal process shutdown. There is no
-per-launch file open, JSON serialization, or append. ``std::exit`` also runs
-the static destructor; abnormal process termination cannot guarantee a flush.
+alpakaTune always stages versioned records in memory. A persistence file is
+optional. When ``TunerConfig::persistenceWrite`` is enabled and
+``TunerConfig::persistenceFile`` is set, the process-wide persistence-store
+destructor writes the newest staged records once during normal process
+shutdown. There is no per-launch file open, JSON serialization, or append.
+``std::exit`` also runs the static destructor; abnormal process termination
+cannot guarantee a flush.
+
+Reading and writing are independent. ``persistenceRead = false`` prevents any
+existing file from being loaded. If writing is enabled at the same time, the
+shutdown write starts a fresh file and replaces the old one instead of merging
+it. ``persistenceRead = true`` with ``persistenceWrite = false`` loads history
+for ``offline`` replay or ``onlineAdaptive`` context while leaving the file
+byte-for-byte unchanged. Omitting ``persistenceFile`` provides only the shared
+in-process store and never touches the filesystem.
 
 The record contains the current best candidate, rolling candidate timings,
 robust per-candidate estimates, readable values for measured tuning-parameter
@@ -26,7 +36,8 @@ Mode-specific reuse
 -------------------
 
 A later ``offline`` tuner with the same fingerprint immediately enqueues the
-best persisted configuration without timing or synchronization.
+best loaded or in-process-staged configuration without timing or
+synchronization.
 ``online_fixed`` resumes an incomplete record or replays a completed winner.
 ``online_adaptive`` resumes either kind of compatible measured history and
 continues adapting.
