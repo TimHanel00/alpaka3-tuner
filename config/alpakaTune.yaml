@@ -28,6 +28,9 @@ tuning:
   noise_cancellation_window: 50
   # how many times in the row does the same config run (warning: this has to be higher than warmup_runs)
   max_consecutive_runs: 2
+  # Stop online tuning when an empty scheduler cannot admit a strategy proposal
+  # after this many consecutive retries.
+  maximum_consecutive_strategy_retries: 20
   # online_adaptive-only revisit-probability and temperature horizon. It does
   # not terminate tuning. The surrounding application owns its run count.
   horizon: 40000

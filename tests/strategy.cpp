@@ -85,9 +85,9 @@ auto main() -> int {
   if (defaultConfig.mode != alpakaTune::TuningMode::onlineAdaptive ||
       defaultConfig.maximumExecutions ||
       defaultConfig.maximumRetiredConfigurations ||
-      defaultConfig.horizon != 40'000u ||
-      defaultConfig.persistenceFile || !defaultConfig.persistenceRead ||
-      !defaultConfig.persistenceWrite ||
+      defaultConfig.maximumConsecutiveStrategyRetries != 20u ||
+      defaultConfig.horizon != 40'000u || defaultConfig.persistenceFile ||
+      !defaultConfig.persistenceRead || !defaultConfig.persistenceWrite ||
       std::abs(defaultConfig.horizonOffsetWithActiveHistory - 0.8) > 1.0e-12)
     return EXIT_FAILURE;
   for (auto const invalidOffset : {-0.01, 1.01}) {
@@ -111,6 +111,16 @@ auto main() -> int {
     mixedAdaptiveConfigRejected = true;
   }
   if (!mixedAdaptiveConfigRejected)
+    return EXIT_FAILURE;
+  auto invalidRetryConfig = defaultConfig;
+  invalidRetryConfig.maximumConsecutiveStrategyRetries = 0u;
+  auto invalidRetryConfigRejected = false;
+  try {
+    invalidRetryConfig.validate();
+  } catch (std::invalid_argument const &) {
+    invalidRetryConfigRejected = true;
+  }
+  if (!invalidRetryConfigRejected)
     return EXIT_FAILURE;
 
   for (auto const strategyKind :
@@ -348,6 +358,7 @@ auto main() -> int {
                   "  runs_per_candidate: 1\n"
                   "  noise_cancellation_window: 2\n"
                   "  max_consecutive_runs: 4\n"
+                  "  maximum_consecutive_strategy_retries: 7\n"
                   "  horizon: 4000\n"
                   "  history_window_size: 10\n"
                   "  revisit_admission_steepness: 16\n"
@@ -360,15 +371,14 @@ auto main() -> int {
   auto const adaptiveDefaults =
       alpakaTune::TunerConfig::fromYaml(adaptiveConfiguration);
   if (adaptiveDefaults.mode != alpakaTune::TuningMode::onlineAdaptive ||
-      adaptiveDefaults.horizon != 4000u ||
-      adaptiveDefaults.maximumExecutions ||
+      adaptiveDefaults.horizon != 4000u || adaptiveDefaults.maximumExecutions ||
       adaptiveDefaults.maximumRetiredConfigurations ||
+      adaptiveDefaults.maximumConsecutiveStrategyRetries != 7u ||
       adaptiveDefaults.historyWindowSize != 10u ||
       std::abs(adaptiveDefaults.revisitAdmissionSteepness - 16.0) > 1.0e-12 ||
       std::abs(adaptiveDefaults.scoreTemperatureStart - 0.25) > 1.0e-12 ||
       std::abs(adaptiveDefaults.scoreTemperatureEnd - 0.05) > 1.0e-12 ||
-      std::abs(adaptiveDefaults.horizonOffsetWithActiveHistory - 0.7) >
-          1.0e-12)
+      std::abs(adaptiveDefaults.horizonOffsetWithActiveHistory - 0.7) > 1.0e-12)
     return EXIT_FAILURE;
 
   auto const mixedAdaptiveConfiguration =

@@ -128,17 +128,17 @@ auto main() -> int {
                0.25) > 1.0e-12 ||
       std::abs(alpakaTune::detail::adaptiveScoreTemperature(1.0, 0.25, 0.05) -
                0.05) > 1.0e-12 ||
-      std::abs(alpakaTune::detail::adaptiveProgressWithActiveHistory(
-                   0.0, true, 0.8) -
+      std::abs(alpakaTune::detail::adaptiveProgressWithActiveHistory(0.0, true,
+                                                                     0.8) -
                0.8) > 1.0e-12 ||
-      std::abs(alpakaTune::detail::adaptiveProgressWithActiveHistory(
-                   0.5, true, 0.8) -
+      std::abs(alpakaTune::detail::adaptiveProgressWithActiveHistory(0.5, true,
+                                                                     0.8) -
                0.9) > 1.0e-12 ||
-      std::abs(alpakaTune::detail::adaptiveProgressWithActiveHistory(
-                   1.0, true, 0.8) -
+      std::abs(alpakaTune::detail::adaptiveProgressWithActiveHistory(1.0, true,
+                                                                     0.8) -
                1.0) > 1.0e-12 ||
-      std::abs(alpakaTune::detail::adaptiveProgressWithActiveHistory(
-                   0.5, false, 0.8) -
+      std::abs(alpakaTune::detail::adaptiveProgressWithActiveHistory(0.5, false,
+                                                                     0.8) -
                0.5) > 1.0e-12 ||
       std::abs(alpakaTune::detail::relativeScoreAdmission(1.0, 1.0, 0.1) -
                1.0) > 1.0e-12 ||
@@ -414,6 +414,65 @@ auto main() -> int {
   if (!lazyInfo.tuningComplete || lazyInfo.candidateCount != 9u ||
       lazyInfo.rejectedCandidateCount != 3u ||
       lazyInfo.measuredCandidateCount != 6u || restrictionCalls.load() != 9u)
+    return EXIT_FAILURE;
+
+  auto retryLimitConfig = oneRunConfig();
+  retryLimitConfig.mode = alpakaTune::TuningMode::onlineAdaptive;
+  retryLimitConfig.maximumExecutions.reset();
+  retryLimitConfig.maximumRetiredConfigurations.reset();
+  retryLimitConfig.maximumConsecutiveStrategyRetries = 3u;
+  retryLimitConfig.noiseCancellationWindow = 1u;
+  retryLimitConfig.horizon = 1000u;
+  retryLimitConfig.persistenceFile.reset();
+  retryLimitConfig.persistenceRead = false;
+  retryLimitConfig.persistenceWrite = false;
+  auto const rejectedTunables = alpakaTune::constrain(
+      alpakaTune::TunableBundle{
+          alpakaTune::named(runtimeValue, alpakaTune::RVals{1, 2, 3, 4, 5, 6})},
+      alpakaTune::restrict(
+          runtimeValue,
+          [](alpaka::concepts::VectorOrScalar auto const &) { return false; }));
+  auto retryLimitTuner = alpakaTune::makeTuner(
+      retryLimitConfig, rejectedTunables, device, "strategy-retry-limit-test");
+  auto retryLimitThrew = false;
+  try {
+    retryLimitTuner.enqueue(queue, frameSpec, bundle);
+  } catch (std::invalid_argument const &) {
+    retryLimitThrew = true;
+  }
+  auto const retryLimitInfo = retryLimitTuner.info();
+  if (!retryLimitThrew || !retryLimitTuner.isTuningComplete() ||
+      !retryLimitTuner.completed() ||
+      retryLimitTuner.completionReason() !=
+          alpakaTune::TunerCompletionReason::
+              maximumConsecutiveStrategyRetries ||
+      retryLimitInfo.maximumConsecutiveStrategyRetries != 3u ||
+      retryLimitInfo.consecutiveStrategyRetries != 3u ||
+      retryLimitInfo.restrictionRejectedCount != 3u ||
+      retryLimitInfo.bestCandidateIndex || !retryLimitInfo.completionReason ||
+      *retryLimitInfo.completionReason !=
+          alpakaTune::TunerCompletionReason::maximumConsecutiveStrategyRetries)
+    return EXIT_FAILURE;
+
+  auto terminalReplayConfig = retryLimitConfig;
+  terminalReplayConfig.maximumConsecutiveStrategyRetries = 1u;
+  terminalReplayConfig.horizon = std::numeric_limits<std::size_t>::max();
+  auto const singleCandidateTunables = alpakaTune::TunableBundle{
+      alpakaTune::named(runtimeValue, alpakaTune::RVals{7})};
+  auto terminalReplayTuner =
+      alpakaTune::makeTuner(terminalReplayConfig, singleCandidateTunables,
+                            device, "strategy-retry-terminal-replay-test");
+  auto const measuredBeforeRetryLimit =
+      terminalReplayTuner.enqueueObserved(queue, frameSpec, bundle);
+  if (!measuredBeforeRetryLimit.measured ||
+      !measuredBeforeRetryLimit.tuningComplete ||
+      terminalReplayTuner.completionReason() !=
+          alpakaTune::TunerCompletionReason::maximumConsecutiveStrategyRetries)
+    return EXIT_FAILURE;
+  auto const terminalReplay =
+      terminalReplayTuner.enqueueObserved(queue, frameSpec, bundle);
+  if (terminalReplay.measured || terminalReplay.runtimeSeconds ||
+      terminalReplay.candidateIndex != measuredBeforeRetryLimit.candidateIndex)
     return EXIT_FAILURE;
 
   auto budgetConfig = oneRunConfig();

@@ -89,6 +89,8 @@ struct TunerConfig {
   std::size_t noiseCancellationWindow{50u};
   /** Launches in one queue activation, including warm-up launches. */
   std::size_t maxConsecutiveRuns{3u};
+  /** Consecutive rejected strategy proposals before tuning terminates. */
+  std::size_t maximumConsecutiveStrategyRetries{20u};
   /** Online-fixed completion guard on total launches. */
   std::optional<std::size_t> maximumExecutions;
   /** Alternative online-fixed completion guard on retired configurations. */
@@ -250,6 +252,7 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
                  "mann_whitney_alpha",
                  "noise_cancellation_window",
                  "max_consecutive_runs",
+                 "maximum_consecutive_strategy_retries",
                  "horizon",
                  "maximum_executions",
                  "maximum_retired_configurations",
@@ -302,6 +305,9 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
   defaults.noiseCancellationWindow =
       requirePositive(tuning, "noise_cancellation_window");
   defaults.maxConsecutiveRuns = requirePositive(tuning, "max_consecutive_runs");
+  defaults.maximumConsecutiveStrategyRetries =
+      optionalPositive(tuning, "maximum_consecutive_strategy_retries",
+                       defaults.maximumConsecutiveStrategyRetries);
   if (auto const limit = tuning["maximum_executions"]; limit.IsDefined()) {
     if (limit.IsNull())
       defaults.maximumExecutions.reset();
@@ -346,9 +352,9 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
       tuning, "score_temperature_start", defaults.scoreTemperatureStart);
   defaults.scoreTemperatureEnd = optionalPositiveFinite(
       tuning, "score_temperature_end", defaults.scoreTemperatureEnd);
-  defaults.horizonOffsetWithActiveHistory = optionalUnitInterval(
-      tuning, "horizon_offset_with_active_history",
-      defaults.horizonOffsetWithActiveHistory);
+  defaults.horizonOffsetWithActiveHistory =
+      optionalUnitInterval(tuning, "horizon_offset_with_active_history",
+                           defaults.horizonOffsetWithActiveHistory);
   if (defaults.maxConsecutiveRuns <= defaults.warmupRuns)
     throw std::runtime_error{"YAML max_consecutive_runs must exceed "
                              "warmup_runs so every activation is measured."};
@@ -443,6 +449,8 @@ inline void TunerConfig::validate() const {
         "TunerConfig::mannWhitneyAlpha must be finite and in (0, 1)."};
   positive(noiseCancellationWindow, "TunerConfig::noiseCancellationWindow");
   positive(maxConsecutiveRuns, "TunerConfig::maxConsecutiveRuns");
+  positive(maximumConsecutiveStrategyRetries,
+           "TunerConfig::maximumConsecutiveStrategyRetries");
   positive(historyWindowSize, "TunerConfig::historyWindowSize");
   positiveFinite(revisitAdmissionSteepness,
                  "TunerConfig::revisitAdmissionSteepness");

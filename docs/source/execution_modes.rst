@@ -28,7 +28,8 @@ The examples demonstrate an application-owned combined condition: at least
 Those numbers are independent. Applications that require exactly N launches
 should simply execute exactly N launches and need not inspect ``completed()``.
 The stricter ``isTuningComplete()`` query reports only an actual terminal
-tuner state and therefore remains false in adaptive mode.
+tuner state. It remains false when adaptive mode merely reaches its horizon,
+but becomes true if the shared strategy-retry termination condition is reached.
 
 ``online_fixed``
 ----------------
@@ -127,13 +128,24 @@ configurations become less likely as the temperature cools.
 
 In this mode ``horizon`` is the admission and temperature schedule inside the
 tuner. After that many launches in the current tuner process run,
-``completed()`` becomes true as a diagnostic, but the adaptive tuner does not
-enter its internal terminal state. ``maximum_executions`` and
+``completed()`` becomes true as a diagnostic, but the horizon itself does not
+enter an internal terminal state. ``maximum_executions`` and
 ``maximum_retired_configurations`` are rejected because they belong exclusively
-to ``online_fixed``. If a refill pass admits nothing, the tuner launches the
-current best without measuring it and asks the strategy for another proposal
-on the next ``enqueue`` call. Rejection never causes a synchronous
-recommendation loop.
+to ``online_fixed``.
+
+Rejected recommendations are retried synchronously. This includes active
+duplicates, restrictions, the adaptive revisit gate, and the relative-score
+gate. ``maximum_consecutive_strategy_retries`` defaults to 20 and bounds that
+work in both online modes. Admission resets the streak. When active queue
+entries remain, reaching the limit pauses refill until an activation completes
+and changes the scheduler context. If the queue is empty and no recommendation
+is accepted within the limit, the tuner enters a real terminal state with
+``TunerCompletionReason::maximumConsecutiveStrategyRetries``. Later calls
+replay the best measured configuration without instrumentation. If no
+configuration has ever been accepted and measured, the triggering call throws
+an explicit error because no legal production configuration is available;
+``isTuningComplete()``, ``completionReason()``, and ``info()`` still expose the
+terminal cause.
 
 ``offline``
 -----------
@@ -151,8 +163,9 @@ Strategy and queue boundary
 Every strategy recommendation is mapped once to the exact nearest discrete
 candidate. The shared tuner admission policy then reports one disposition back
 to the strategy: scheduled, active duplicate, restriction rejection, revisit
-rejection, or score rejection. The tuner does not search synchronously for a
-nearby unscheduled substitute.
+rejection, or score rejection. A rejection requests an entirely new proposal
+from the strategy; the tuner does not mutate it or search locally for a nearby
+substitute.
 
 Strategies may deliberately recommend previously measured points. They must
 not hide duplicate ownership inside their own candidate bookkeeping. Regression

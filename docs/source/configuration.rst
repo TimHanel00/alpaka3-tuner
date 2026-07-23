@@ -13,6 +13,7 @@ selected by ``ALPAKA_TUNE_CONFIG`` when set.
    config.strategy = alpakaTune::StrategyKind::random;
    config.horizon = 4'000u;
    config.horizonOffsetWithActiveHistory = 0.8;
+   config.maximumConsecutiveStrategyRetries = 20u;
    config.historyWindowSize = 10u;
    config.persistenceFile = ".my-tuning-cache/history.json";
    config.persistenceRead = true;
@@ -29,6 +30,7 @@ The type is an aggregate, so direct construction is also supported:
        .minimumRunsPerCandidate = 3u,
        .noiseCancellationWindow = 20u,
        .maxConsecutiveRuns = 2u,
+       .maximumConsecutiveStrategyRetries = 20u,
        .maximumExecutions = 100u,
        .strategy = alpakaTune::StrategyKind::exhaustive,
        .persistenceFile = ".alpakaTune/vector-add.json"};
@@ -63,6 +65,7 @@ YAML schema version 2 adds the optional learned-model section. Schema version
      mann_whitney_alpha: 0.05
      noise_cancellation_window: 50
      max_consecutive_runs: 3
+     maximum_consecutive_strategy_retries: 20
      horizon: 40000
      history_window_size: 20
      revisit_admission_steepness: 16
@@ -124,6 +127,15 @@ terminal budget. When compatible measured history is loaded,
 sigmoid/Boltzmann schedule. It is inclusive in ``[0, 1]`` and defaults to
 ``0.8``; the remaining interval is stretched over all
 ``horizon`` new launches.
+``maximumConsecutiveStrategyRetries`` applies to both online modes and defaults
+to ``20``. Its YAML spelling is
+``maximum_consecutive_strategy_retries``. A rejected strategy proposal is
+immediately replaced by a fresh strategy call. An accepted proposal resets the
+retry streak. If active queue entries still exist, reaching the limit pauses
+refill until a completed activation changes the admission context. Reaching
+the limit with an empty queue enters a terminal state with completion reason
+``maximum_consecutive_strategy_retries``. ``TunerInfo`` exposes both the
+configured maximum and the current ``consecutiveStrategyRetries`` value.
 Set ``maximum_executions: null`` in YAML when a fixed run should use only the
 retired-configuration guard.
 This does not configure the surrounding application's loop. Applications own

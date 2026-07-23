@@ -100,9 +100,10 @@ struct BestImprovement {
  * A fresh tuner keeps the original [0, 1] schedule. A tuner initialized from
  * compatible measured history maps its new-run progress onto [offset, 1].
  */
-[[nodiscard]] inline auto
-adaptiveProgressWithActiveHistory(double progress, bool activeHistory,
-                                  double offset) -> double {
+[[nodiscard]] inline auto adaptiveProgressWithActiveHistory(double progress,
+                                                            bool activeHistory,
+                                                            double offset)
+    -> double {
   progress = std::clamp(progress, 0.0, 1.0);
   if (!activeHistory)
     return progress;
@@ -310,21 +311,22 @@ public:
 
   /** Whether tuning entered an actual terminal state.
    *
-   * This remains false in online-adaptive mode. Use completed() only when the
-   * application also wants the adaptive schedule-horizon diagnostic.
+   * Adaptive horizon completion alone is not terminal. Exhausted consecutive
+   * strategy retries can terminate either online mode.
    */
   [[nodiscard]] auto isTuningComplete() const noexcept -> bool {
     return m_complete;
   }
   /** Whether the configured tuning-policy goal has been reached.
    *
-   * In online-fixed and offline mode this is a terminal state. In
-   * online-adaptive mode it only reports that the admission/cooling horizon
-   * has been reached; enqueue() continues adapting normally afterward.
+   * In online-fixed and offline mode this reports a terminal state. In
+   * online-adaptive mode it reports either terminal strategy-retry exhaustion
+   * or arrival at the admission/cooling horizon. Horizon completion alone
+   * continues adapting normally afterward.
    */
   [[nodiscard]] auto completed() const noexcept -> bool {
     if (m_defaults.mode == TuningMode::onlineAdaptive)
-      return adaptiveHorizonReached();
+      return m_complete || adaptiveHorizonReached();
     return m_complete;
   }
   /** @brief Explain why an actual terminal state was entered.
@@ -351,11 +353,12 @@ public:
     return m_defaults.strategy;
   }
   /** @brief Return the terminal winner's Cartesian index.
-   * @throws std::logic_error before fixed/offline terminal completion.
+   * @throws std::logic_error before completion or after winnerless termination.
    */
   [[nodiscard]] auto bestCandidateIndex() const -> std::size_t {
-    if (!m_complete)
-      throw std::logic_error{"The tuner has not selected a winner yet."};
+    if (!m_complete ||
+        m_bestCandidate == std::numeric_limits<std::size_t>::max())
+      throw std::logic_error{"The tuner has no measured winner."};
     return m_bestCandidate;
   }
   /** @brief Return the terminal winner's normalized parameter vector. */
@@ -392,14 +395,21 @@ public:
         .retiredConfigurationCount = m_retiredConfigurationCount,
         .executionCount = m_executionCount,
         .adaptiveHorizonExecutionCount = m_adaptiveHorizonExecutionCount,
-        .adaptiveHorizonProgress =
-            m_defaults.mode == TuningMode::onlineAdaptive ? adaptiveProgress()
-                                                          : 0.0,
+        .adaptiveHorizonProgress = m_defaults.mode == TuningMode::onlineAdaptive
+                                       ? adaptiveProgress()
+                                       : 0.0,
         .horizon = m_defaults.mode == TuningMode::onlineAdaptive
                        ? std::optional<std::size_t>{m_defaults.horizon}
                        : std::nullopt,
         .maximumExecutions = m_defaults.maximumExecutions,
+        .maximumConsecutiveStrategyRetries =
+            m_defaults.maximumConsecutiveStrategyRetries,
+        .consecutiveStrategyRetries = m_consecutiveStrategyRetries,
         .tuningComplete = m_complete,
+        .completionReason =
+            m_complete
+                ? std::optional<TunerCompletionReason>{m_completionReason}
+                : std::nullopt,
         .loadedFromCache = m_loadedFromCache,
         .executionBudgetReached = m_executionBudgetReached,
         .bestCandidateIndex = std::nullopt,
@@ -474,6 +484,10 @@ public:
             typename std::remove_cvref_t<decltype(prototype)>::KernelFn>(),
         launchDescription(frameSpec));
     initialiseScheduling();
+    if (m_complete &&
+        m_bestCandidate == std::numeric_limits<std::size_t>::max())
+      throw std::logic_error{
+          "The tuner terminated without a measured candidate to launch."};
 
     if (m_defaults.mode == TuningMode::onlineFixed && !m_complete &&
         executionBudgetReached())
@@ -983,12 +997,10 @@ private:
 
   /** @brief Clamped progress through the adaptive schedule horizon. */
   [[nodiscard]] auto adaptiveProgress() const -> double {
-    auto const progress =
-        static_cast<double>(m_adaptiveHorizonExecutionCount) /
-        static_cast<double>(m_defaults.horizon);
+    auto const progress = static_cast<double>(m_adaptiveHorizonExecutionCount) /
+                          static_cast<double>(m_defaults.horizon);
     return detail::adaptiveProgressWithActiveHistory(
-        progress, m_loadedFromCache,
-        m_defaults.horizonOffsetWithActiveHistory);
+        progress, m_loadedFromCache, m_defaults.horizonOffsetWithActiveHistory);
   }
 
   /** @brief Apply the single shared legality and mode-specific admission path.
@@ -1182,11 +1194,7 @@ private:
     Tuner const &m_tuner;
   };
 
-  /** @brief Request and process exactly one strategy recommendation.
-   *
-   * Rejection returns no candidate; callers never synchronously retry the
-   * strategy to replace the rejected point.
-   */
+  /** @brief Request and process exactly one strategy recommendation. */
   [[nodiscard]] auto recommendCandidate() -> std::optional<std::size_t> {
     if (m_defaults.mode == TuningMode::onlineFixed &&
         m_scheduledCount + m_rejectedCount == m_candidateCount)
@@ -1252,38 +1260,62 @@ private:
         m_defaults.noiseCancellationWindow, m_defaults.maxConsecutiveRuns,
         false, m_random);
     refillQueue();
-    if (m_queue->empty())
+    if (m_complete && !currentBestCandidate())
+      throw std::invalid_argument{
+          "The strategy retry limit was reached before any candidate was "
+          "accepted and measured."};
+    if (!m_complete && m_queue->empty())
       throw std::invalid_argument{
           "The tuning-space restrictions rejected every candidate."};
   }
 
-  /** @brief Make at most one recommendation attempt per vacant queue slot. */
+  /** @brief Refill vacancies, retrying rejected strategy recommendations.
+   *
+   * An accepted recommendation resets the retry streak. If active candidates
+   * still exist, reaching the limit pauses refill until scheduler progress
+   * changes the admission context. Reaching it with an empty queue terminates
+   * tuning explicitly.
+   */
   void refillQueue() {
-    auto const attempts = m_defaults.noiseCancellationWindow - m_queue->size();
-    for (std::size_t attempt = 0u; attempt < attempts && !m_queue->full();
-         ++attempt) {
+    if (!m_queue || m_complete)
+      return;
+    while (!m_queue->full()) {
+      if (m_defaults.mode == TuningMode::onlineFixed &&
+          m_scheduledCount + m_rejectedCount == m_candidateCount)
+        return;
+      if (m_consecutiveStrategyRetries >=
+          m_defaults.maximumConsecutiveStrategyRetries) {
+        if (m_queue->empty())
+          finishTuningAtStrategyRetryLimit();
+        return;
+      }
       auto const candidate = recommendCandidate();
-      if (candidate)
-        m_queue->insert(*candidate);
+      if (!candidate) {
+        ++m_consecutiveStrategyRetries;
+        continue;
+      }
+      m_consecutiveStrategyRetries = 0u;
+      if (!m_queue->insert(*candidate))
+        throw std::logic_error{
+            "An admitted candidate could not enter the active queue."};
     }
   }
 
-  /** @brief Select an admitted candidate or replay the current best.
-   *
-   * An empty queue after rejected refill attempts does not terminate adaptive
-   * tuning. The best measured candidate is launched without measurement and a
-   * new admission attempt occurs on the following application call.
-   */
+  /** @brief Select an admitted candidate or a terminal winner replay. */
   [[nodiscard]] auto nextCandidate() -> detail::CandidateQueue::Selection {
     refillQueue();
+    if (m_complete) {
+      if (m_bestCandidate == std::numeric_limits<std::size_t>::max())
+        throw std::logic_error{
+            "The strategy retry limit was reached without a measured "
+            "candidate to replay."};
+      return detail::CandidateQueue::Selection{m_bestCandidate, false, false,
+                                               false};
+    }
     auto const selected = m_queue->next();
     if (selected)
       return *selected;
-    if (auto const best = currentBestCandidate())
-      return detail::CandidateQueue::Selection{*best, false, false, false};
-    throw std::logic_error{
-        "The tuning scheduler has neither an admitted nor a measured "
-        "candidate."};
+    throw std::logic_error{"The tuning scheduler has no admitted candidate."};
   }
 
   template <typename Queue, typename FrameSpec, typename Bundle>
@@ -1609,8 +1641,10 @@ private:
       finishTuningAtBudget(TunerCompletionReason::maximumRetiredConfigurations);
       return;
     }
-    if (history.isFinished())
+    if (history.isFinished()) {
+      m_consecutiveStrategyRetries = 0u;
       refillQueue();
+    }
     stageCache(candidate, history.isFinished());
   }
 
@@ -1764,6 +1798,8 @@ private:
       return TunerCompletionReason::maximumExecutions;
     if (name == "maximum_retired_configurations")
       return TunerCompletionReason::maximumRetiredConfigurations;
+    if (name == "maximum_consecutive_strategy_retries")
+      return TunerCompletionReason::maximumConsecutiveStrategyRetries;
     return TunerCompletionReason::none;
   }
 
@@ -1928,6 +1964,16 @@ private:
     writeCache();
   }
 
+  void finishTuningAtStrategyRetryLimit() {
+    if (auto const best = currentBestCandidate())
+      m_bestCandidate = *best;
+    m_complete = true;
+    m_completionReason =
+        TunerCompletionReason::maximumConsecutiveStrategyRetries;
+    m_queue.reset();
+    writeCache();
+  }
+
   /** @brief Update the in-memory JSON snapshot after one measured launch.
    *
    * Sparse candidate arrays are updated in place. No filesystem operation is
@@ -2060,8 +2106,7 @@ private:
       if (adapter.value("state_version", 0) != 1)
         return;
       auto state = LearnedResidualAdapterState{
-          .coefficients =
-              adapter.at("coefficients").get<std::vector<double>>(),
+          .coefficients = adapter.at("coefficients").get<std::vector<double>>(),
           .observationsSinceUpdate =
               adapter.value("observations_since_update", std::size_t{}),
           .updateCount = adapter.value("update_count", std::size_t{})};
@@ -2069,8 +2114,7 @@ private:
         state.observations.push_back(
             {.rawIndex =
                  observation.at("raw_candidate_index").get<std::size_t>(),
-             .features =
-                 observation.at("features").get<std::vector<float>>(),
+             .features = observation.at("features").get<std::vector<float>>(),
              .residual = observation.at("residual").get<double>()});
       m_loadedLearnedAdapterState = std::move(state);
     } catch (std::exception const &) {
@@ -2127,7 +2171,8 @@ private:
             {"active_duplicate_rejected", m_activeDuplicateRejectedCount},
             {"restriction_rejected", m_restrictionRejectedCount},
             {"revisit_rejected", m_revisitRejectedCount},
-            {"score_rejected", m_scoreRejectedCount}};
+            {"score_rejected", m_scoreRejectedCount},
+            {"consecutive_strategy_retries", m_consecutiveStrategyRetries}};
   }
 
   [[nodiscard]] auto serializedCache() const -> nlohmann::json {
@@ -2139,8 +2184,7 @@ private:
     else
       cache["best_candidate_index"] = nullptr;
     cache["execution_count"] = m_executionCount;
-    cache["adaptive_horizon_execution_count"] =
-        m_adaptiveHorizonExecutionCount;
+    cache["adaptive_horizon_execution_count"] = m_adaptiveHorizonExecutionCount;
     cache["retired_configuration_count"] = m_retiredConfigurationCount;
     cache["execution_budget_reached"] = m_executionBudgetReached;
     cache["completion_reason"] = completionReasonName(m_completionReason);
@@ -2162,15 +2206,16 @@ private:
         {"history_window_size", m_defaults.historyWindowSize},
         {"warmup_runs", m_defaults.warmupRuns},
         {"noise_cancellation_window", m_defaults.noiseCancellationWindow},
-        {"max_consecutive_runs", m_defaults.maxConsecutiveRuns}};
+        {"max_consecutive_runs", m_defaults.maxConsecutiveRuns},
+        {"maximum_consecutive_strategy_retries",
+         m_defaults.maximumConsecutiveStrategyRetries}};
     if (m_defaults.mode == TuningMode::onlineAdaptive) {
       cache["policy"]["horizon"] = m_defaults.horizon;
       cache["policy"]["revisit_admission_steepness"] =
           m_defaults.revisitAdmissionSteepness;
       cache["policy"]["score_temperature_start"] =
           m_defaults.scoreTemperatureStart;
-      cache["policy"]["score_temperature_end"] =
-          m_defaults.scoreTemperatureEnd;
+      cache["policy"]["score_temperature_end"] = m_defaults.scoreTemperatureEnd;
       cache["policy"]["horizon_offset_with_active_history"] =
           m_defaults.horizonOffsetWithActiveHistory;
     }
@@ -2253,6 +2298,7 @@ private:
   std::size_t m_restrictionRejectedCount{};
   std::size_t m_revisitRejectedCount{};
   std::size_t m_scoreRejectedCount{};
+  std::size_t m_consecutiveStrategyRetries{};
   double m_bestRetiredRuntime{std::numeric_limits<double>::infinity()};
   std::vector<detail::BestImprovement> m_bestImprovements;
   std::chrono::steady_clock::time_point m_tuningStarted{};
@@ -2295,9 +2341,8 @@ template <typename TunablesType, typename Device, typename... IdentityEntries>
       (detail::typeName<std::remove_cvref_t<IdentityEntries>>() + "=" +
        detail::identityName(identityEntries))...};
   std::sort(names.begin(), names.end());
-  auto persistence =
-      detail::persistenceStore(config.persistenceFile, config.persistenceRead,
-                               config.persistenceWrite);
+  auto persistence = detail::persistenceStore(
+      config.persistenceFile, config.persistenceRead, config.persistenceWrite);
   return Tuner<TunablesType, Device>{std::move(config), std::move(persistence),
                                      std::move(tunables), std::move(device),
                                      std::move(names)};

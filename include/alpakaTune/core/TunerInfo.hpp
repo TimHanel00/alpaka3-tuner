@@ -11,13 +11,15 @@
 
 namespace alpakaTune {
 
-/** @brief Terminal reason recorded by fixed and offline tuner policies. */
+/** @brief Terminal reason recorded by tuner policies. */
 enum class TunerCompletionReason {
   none,                         ///< No terminal state has been entered.
   offlineReplay,                ///< Offline mode loaded a persisted winner.
   allConfigurations,            ///< Every legal candidate was retired.
   maximumExecutions,            ///< Fixed-mode launch guard was reached.
   maximumRetiredConfigurations, ///< Fixed-mode retirement guard was reached.
+  /** Shared admission could not accept repeated strategy proposals. */
+  maximumConsecutiveStrategyRetries,
 };
 
 /** @brief Return the stable persistence spelling of a completion reason. */
@@ -34,6 +36,8 @@ completionReasonName(TunerCompletionReason reason) noexcept -> char const * {
     return "maximum_executions";
   case TunerCompletionReason::maximumRetiredConfigurations:
     return "maximum_retired_configurations";
+  case TunerCompletionReason::maximumConsecutiveStrategyRetries:
+    return "maximum_consecutive_strategy_retries";
   }
   return "none";
 }
@@ -62,8 +66,14 @@ struct TunerInfo {
   std::optional<std::size_t> horizon;
   /** Configured online-fixed execution guard, if present. */
   std::optional<std::size_t> maximumExecutions;
+  /** Rejection streak which terminates either online tuning mode. */
+  std::size_t maximumConsecutiveStrategyRetries{};
+  /** Current number of strategy proposals rejected since the last admission. */
+  std::size_t consecutiveStrategyRetries{};
   /** True only when the tuner entered an actual terminal state. */
   bool tuningComplete{};
+  /** Terminal reason when tuningComplete is true. */
+  std::optional<TunerCompletionReason> completionReason;
   /** Whether compatible persistent state initialized this tuner. */
   bool loadedFromCache{};
   /** Whether fixed mode terminated specifically at the execution guard. */
