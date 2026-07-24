@@ -66,5 +66,21 @@ auto main() -> int {
   if (warmed.statistics().sampleCount != 1u)
     return EXIT_FAILURE;
 
+  auto resumed = RuntimeHistory{
+      RuntimeHistoryOptions{0u, 2u, 2u, 1u, 2.576, 0.05, 3.5, 5u}};
+  resumed.restoreSummary(2.0, 5u);
+  resumed.resetForNewRun();
+  if (resumed.isFinished() ||
+      resumed.state() != ConfigurationState::unmeasured ||
+      resumed.currentRunSampleCount() != 0u ||
+      resumed.statistics().sampleCount != 5u)
+    return EXIT_FAILURE;
+  if (resumed.record(1.9) || resumed.currentRunSampleCount() != 1u ||
+      resumed.statistics().sampleCount != 5u)
+    return EXIT_FAILURE;
+  if (!resumed.record(1.8) || resumed.currentRunSampleCount() != 2u ||
+      resumed.statistics().sampleCount != 5u)
+    return EXIT_FAILURE;
+
   return EXIT_SUCCESS;
 }

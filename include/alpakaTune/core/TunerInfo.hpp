@@ -18,7 +18,7 @@ enum class TunerCompletionReason {
   allConfigurations,            ///< Every legal candidate was retired.
   maximumExecutions,            ///< Fixed-mode launch guard was reached.
   maximumRetiredConfigurations, ///< Fixed-mode retirement guard was reached.
-  /** Shared admission could not accept repeated strategy proposals. */
+  /** Fixed-mode admission could not accept repeated strategy proposals. */
   maximumConsecutiveStrategyRetries,
 };
 
@@ -67,9 +67,9 @@ struct TunerInfo {
   std::size_t scheduledCandidateCount{};
   /** Non-rejected candidates with at least one retained timing sample. */
   std::size_t measuredCandidateCount{};
-  /** Completed fixed records or completed adaptive activation visits. */
+  /** Records or adaptive visits retired in the current online run. */
   std::size_t retiredConfigurationCount{};
-  /** Total kernel launches, including warm-ups and production replays. */
+  /** Current-run kernel launches, including warm-ups and production replays. */
   std::size_t executionCount{};
   /** Launches counted toward this process run's adaptive horizon. */
   std::size_t adaptiveHorizonExecutionCount{};
@@ -79,13 +79,17 @@ struct TunerInfo {
   std::optional<std::size_t> horizon;
   /** Configured online-fixed execution guard, if present. */
   std::optional<std::size_t> maximumExecutions;
-  /** Rejection streak which terminates either online tuning mode. */
+  /** Rejected proposals allowed in one bounded refill attempt. */
   std::size_t maximumConsecutiveStrategyRetries{};
   /** Current number of strategy proposals rejected since the last admission. */
   std::size_t consecutiveStrategyRetries{};
-  /** True only when the tuner entered an actual terminal state. */
+  /** Bounded refill attempts which reached the configured retry limit. */
+  std::size_t strategyRetryLimitReachedCount{};
+  /** Measured adaptive fallbacks after bounded refill attempts were exhausted. */
+  std::size_t adaptiveRetryFallbackCount{};
+  /** Policy completion; adaptive mode remains active after its horizon. */
   bool tuningComplete{};
-  /** Terminal reason when tuningComplete is true. */
+  /** Terminal reason when one exists; absent for an adaptive horizon. */
   std::optional<TunerCompletionReason> completionReason;
   /** Whether compatible persistent state initialized this tuner. */
   bool loadedFromCache{};
@@ -127,7 +131,7 @@ struct LaunchObservation {
   double recommendationSeconds{};
   /** Whether this call synchronized and produced runtimeSeconds. */
   bool measured{};
-  /** Actual terminal-state snapshot after the launch. */
+  /** Policy-completion snapshot; adaptive mode still measures afterward. */
   bool tuningComplete{};
   /** Whether this tuner was restored from compatible persistence. */
   bool loadedFromCache{};

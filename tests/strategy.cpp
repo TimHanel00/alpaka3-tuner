@@ -86,8 +86,11 @@ auto main() -> int {
       defaultConfig.maximumExecutions ||
       defaultConfig.maximumRetiredConfigurations ||
       defaultConfig.maximumConsecutiveStrategyRetries != 20u ||
-      defaultConfig.horizon != 40'000u || defaultConfig.persistenceFile ||
-      !defaultConfig.persistenceRead || !defaultConfig.persistenceWrite ||
+      defaultConfig.horizon != 40'000u || defaultConfig.history.file ||
+      !defaultConfig.history.read || !defaultConfig.history.write ||
+      defaultConfig.history.sampleCount || defaultConfig.completeHistory.file ||
+      !defaultConfig.completeHistory.read ||
+      !defaultConfig.completeHistory.write ||
       std::abs(defaultConfig.horizonOffsetWithActiveHistory - 0.8) > 1.0e-12)
     return EXIT_FAILURE;
   for (auto const invalidOffset : {-0.01, 1.01}) {
@@ -192,7 +195,7 @@ auto main() -> int {
     auto const configuration =
         configurationDirectory / (std::string{name} + ".yaml");
     auto yaml = std::ofstream{configuration};
-    yaml << "schema_version: 1\n"
+    yaml << "schema_version: 3\n"
             "tuning:\n"
             "  mode: online_fixed\n"
             "  strategy: "
@@ -213,13 +216,19 @@ auto main() -> int {
             "  max_consecutive_runs: 1\n"
             "  maximum_executions: 100000\n"
             "  maximum_retired_configurations: 90000\n"
-            "persistence:\n"
-            "  file: .alpakaTune/history.json\n";
+            "history:\n"
+            "  file: .alpakaTune/history.json\n"
+            "  sample_count: 7\n"
+            "complete_history:\n"
+            "  file: .alpakaTune/complete-history.json\n";
     yaml.close();
     auto const defaults = alpakaTune::TunerConfig::fromYaml(configuration);
     if (defaults.strategy != expected ||
-        defaults.persistenceFile != ".alpakaTune/history.json" ||
-        !defaults.persistenceRead || !defaults.persistenceWrite ||
+        defaults.history.file != ".alpakaTune/history.json" ||
+        defaults.history.sampleCount != 7u ||
+        defaults.completeHistory.file != ".alpakaTune/complete-history.json" ||
+        !defaults.history.read || !defaults.history.write ||
+        !defaults.completeHistory.read || !defaults.completeHistory.write ||
         defaults.minimumRunsPerCandidate != 1u ||
         defaults.ciCheckInterval != 2u ||
         std::abs(defaults.ciZScore - 1.96) > 1.0e-12 ||
@@ -247,14 +256,16 @@ auto main() -> int {
   memoryYaml.close();
   auto const memoryDefaults =
       alpakaTune::TunerConfig::fromYaml(memoryConfiguration);
-  if (memoryDefaults.persistenceFile || !memoryDefaults.persistenceRead ||
-      !memoryDefaults.persistenceWrite)
+  if (memoryDefaults.history.file || !memoryDefaults.history.read ||
+      !memoryDefaults.history.write || memoryDefaults.completeHistory.file ||
+      !memoryDefaults.completeHistory.read ||
+      !memoryDefaults.completeHistory.write)
     return EXIT_FAILURE;
 
   auto const processLocalConfiguration =
       configurationDirectory / "process-local.yaml";
   auto processLocalYaml = std::ofstream{processLocalConfiguration};
-  processLocalYaml << "schema_version: 2\n"
+  processLocalYaml << "schema_version: 3\n"
                       "tuning:\n"
                       "  mode: online_adaptive\n"
                       "  strategy: random\n"
@@ -263,21 +274,26 @@ auto main() -> int {
                       "  noise_cancellation_window: 1\n"
                       "  max_consecutive_runs: 1\n"
                       "  horizon: 100\n"
-                      "persistence:\n"
+                      "history:\n"
+                      "  read: false\n"
+                      "  write: false\n"
+                      "complete_history:\n"
                       "  read: false\n"
                       "  write: false\n";
   processLocalYaml.close();
   auto const processLocalDefaults =
       alpakaTune::TunerConfig::fromYaml(processLocalConfiguration);
-  if (processLocalDefaults.persistenceFile ||
-      processLocalDefaults.persistenceRead ||
-      processLocalDefaults.persistenceWrite)
+  if (processLocalDefaults.history.file || processLocalDefaults.history.read ||
+      processLocalDefaults.history.write ||
+      processLocalDefaults.completeHistory.file ||
+      processLocalDefaults.completeHistory.read ||
+      processLocalDefaults.completeHistory.write)
     return EXIT_FAILURE;
 
   auto const accessConfiguration =
       configurationDirectory / "history-access.yaml";
   auto accessYaml = std::ofstream{accessConfiguration};
-  accessYaml << "schema_version: 2\n"
+  accessYaml << "schema_version: 3\n"
                 "tuning:\n"
                 "  mode: offline\n"
                 "  strategy: random\n"
@@ -285,21 +301,30 @@ auto main() -> int {
                 "  runs_per_candidate: 1\n"
                 "  noise_cancellation_window: 1\n"
                 "  max_consecutive_runs: 1\n"
-                "persistence:\n"
+                "history:\n"
                 "  file: read-only-history.json\n"
                 "  read: true\n"
-                "  write: false\n";
+                "  write: false\n"
+                "  sample_count: 5\n"
+                "complete_history:\n"
+                "  file: complete.json\n"
+                "  read: false\n"
+                "  write: true\n";
   accessYaml.close();
   auto const accessDefaults =
       alpakaTune::TunerConfig::fromYaml(accessConfiguration);
-  if (accessDefaults.persistenceFile != "read-only-history.json" ||
-      !accessDefaults.persistenceRead || accessDefaults.persistenceWrite)
+  if (accessDefaults.history.file != "read-only-history.json" ||
+      !accessDefaults.history.read || accessDefaults.history.write ||
+      accessDefaults.history.sampleCount != 5u ||
+      accessDefaults.completeHistory.file != "complete.json" ||
+      accessDefaults.completeHistory.read ||
+      !accessDefaults.completeHistory.write)
     return EXIT_FAILURE;
 
   auto const writeOnlyConfiguration =
       configurationDirectory / "write-only-history.yaml";
   auto writeOnlyYaml = std::ofstream{writeOnlyConfiguration};
-  writeOnlyYaml << "schema_version: 2\n"
+  writeOnlyYaml << "schema_version: 3\n"
                    "tuning:\n"
                    "  mode: online_fixed\n"
                    "  strategy: random\n"
@@ -308,20 +333,21 @@ auto main() -> int {
                    "  noise_cancellation_window: 1\n"
                    "  max_consecutive_runs: 1\n"
                    "  maximum_executions: 100\n"
-                   "persistence:\n"
-                   "  file: fresh-history.json\n"
+                   "complete_history:\n"
+                   "  file: fresh-complete-history.json\n"
                    "  read: false\n"
                    "  write: true\n";
   writeOnlyYaml.close();
   auto const writeOnlyDefaults =
       alpakaTune::TunerConfig::fromYaml(writeOnlyConfiguration);
-  if (writeOnlyDefaults.persistenceFile != "fresh-history.json" ||
-      writeOnlyDefaults.persistenceRead || !writeOnlyDefaults.persistenceWrite)
+  if (writeOnlyDefaults.completeHistory.file != "fresh-complete-history.json" ||
+      writeOnlyDefaults.completeHistory.read ||
+      !writeOnlyDefaults.completeHistory.write)
     return EXIT_FAILURE;
 
-  auto const learnedConfiguration = configurationDirectory / "learned-v2.yaml";
+  auto const learnedConfiguration = configurationDirectory / "learned-v3.yaml";
   auto learnedYaml = std::ofstream{learnedConfiguration};
-  learnedYaml << "schema_version: 2\n"
+  learnedYaml << "schema_version: 3\n"
                  "tuning:\n"
                  "  mode: online_fixed\n"
                  "  strategy: learned_hybrid\n"
@@ -330,7 +356,7 @@ auto main() -> int {
                  "  noise_cancellation_window: 1\n"
                  "  max_consecutive_runs: 1\n"
                  "  maximum_executions: 100000\n"
-                 "persistence:\n"
+                 "history:\n"
                  "  file: learned-history.json\n"
                  "learning:\n"
                  "  model: alternate.atml\n"
@@ -348,9 +374,9 @@ auto main() -> int {
     return EXIT_FAILURE;
 
   auto const adaptiveConfiguration =
-      configurationDirectory / "adaptive-v2.yaml";
+      configurationDirectory / "adaptive-v3.yaml";
   auto adaptiveYaml = std::ofstream{adaptiveConfiguration};
-  adaptiveYaml << "schema_version: 2\n"
+  adaptiveYaml << "schema_version: 3\n"
                   "tuning:\n"
                   "  mode: online_adaptive\n"
                   "  strategy: random\n"
@@ -365,7 +391,7 @@ auto main() -> int {
                   "  score_temperature_start: 0.25\n"
                   "  score_temperature_end: 0.05\n"
                   "  horizon_offset_with_active_history: 0.7\n"
-                  "persistence:\n"
+                  "history:\n"
                   "  file: adaptive-history.json\n";
   adaptiveYaml.close();
   auto const adaptiveDefaults =
@@ -430,9 +456,9 @@ auto main() -> int {
     return EXIT_FAILURE;
 
   auto const retiredOnlyConfiguration =
-      configurationDirectory / "retired-only-v2.yaml";
+      configurationDirectory / "retired-only-v3.yaml";
   auto retiredOnlyYaml = std::ofstream{retiredOnlyConfiguration};
-  retiredOnlyYaml << "schema_version: 2\n"
+  retiredOnlyYaml << "schema_version: 3\n"
                      "tuning:\n"
                      "  mode: online_fixed\n"
                      "  strategy: random\n"
@@ -442,7 +468,7 @@ auto main() -> int {
                      "  max_consecutive_runs: 1\n"
                      "  maximum_executions: null\n"
                      "  maximum_retired_configurations: 7\n"
-                     "persistence:\n"
+                     "complete_history:\n"
                      "  file: retired-only-history.json\n";
   retiredOnlyYaml.close();
   auto const retiredOnlyDefaults =
@@ -450,6 +476,52 @@ auto main() -> int {
   if (retiredOnlyDefaults.mode != alpakaTune::TuningMode::onlineFixed ||
       retiredOnlyDefaults.maximumExecutions ||
       retiredOnlyDefaults.maximumRetiredConfigurations != 7u)
+    return EXIT_FAILURE;
+
+  auto sameFile = defaultConfig;
+  sameFile.history.file = "shared.json";
+  sameFile.completeHistory.file = "shared.json";
+  auto sameFileRejected = false;
+  try {
+    sameFile.validate();
+  } catch (std::invalid_argument const &) {
+    sameFileRejected = true;
+  }
+  if (!sameFileRejected)
+    return EXIT_FAILURE;
+
+  auto zeroSampleCount = defaultConfig;
+  zeroSampleCount.history.sampleCount = 0u;
+  auto zeroSampleCountRejected = false;
+  try {
+    zeroSampleCount.validate();
+  } catch (std::invalid_argument const &) {
+    zeroSampleCountRejected = true;
+  }
+  if (!zeroSampleCountRejected)
+    return EXIT_FAILURE;
+
+  auto const legacyConfiguration = configurationDirectory / "legacy.yaml";
+  auto legacyYaml = std::ofstream{legacyConfiguration};
+  legacyYaml << "schema_version: 2\n"
+                "tuning:\n"
+                "  mode: online_adaptive\n"
+                "  strategy: random\n"
+                "  warmup_runs: 0\n"
+                "  runs_per_candidate: 1\n"
+                "  noise_cancellation_window: 1\n"
+                "  max_consecutive_runs: 1\n"
+                "  horizon: 100\n"
+                "persistence:\n"
+                "  file: legacy.json\n";
+  legacyYaml.close();
+  auto legacyRejected = false;
+  try {
+    static_cast<void>(alpakaTune::TunerConfig::fromYaml(legacyConfiguration));
+  } catch (std::runtime_error const &) {
+    legacyRejected = true;
+  }
+  if (!legacyRejected)
     return EXIT_FAILURE;
 
   std::filesystem::remove_all(configurationDirectory);

@@ -68,10 +68,12 @@ public:
     config.strategy = strategy;
     config.noiseCancellationWindow = queueWindow;
     config.maxConsecutiveRuns = consecutiveRuns;
-    config.persistenceFile =
-        m_directory / (std::string{alpakaTune::strategyName(strategy)} + "-" +
-                       std::to_string(queueWindow) + "-" +
-                       std::to_string(consecutiveRuns) + ".json");
+    auto const name = std::string{alpakaTune::strategyName(strategy)} + "-" +
+                      std::to_string(queueWindow) + "-" +
+                      std::to_string(consecutiveRuns);
+    config.history.file = m_directory / (name + "-history.json");
+    config.completeHistory.file =
+        m_directory / (name + "-complete-history.json");
     auto tuner = alpakaTune::makeTuner(
         config, m_tunables, m_device, alpaka::deviceKind::cpu,
         alpaka::api::host, alpaka::exec::cpuSerial, "vector-add/inner");
@@ -150,16 +152,16 @@ auto main() -> int {
                          "alpakaTune-tune-the-tuner-example";
   std::filesystem::remove_all(directory);
   std::filesystem::create_directories(directory);
-  auto const innerConfig =
-      alpakaTune::TunerConfig{.mode = alpakaTune::TuningMode::onlineFixed,
-                              .warmupRuns = 0u,
-                              .runsPerCandidate = 10u,
-                              .minimumRunsPerCandidate = 1u,
-                              .noiseCancellationWindow = 1u,
-                              .maxConsecutiveRuns = 1u,
-                              .maximumExecutions = NumberOfInsideSteps,
-                              .strategy = alpakaTune::StrategyKind::exhaustive,
-                              .persistenceFile = directory / "inner.json"};
+  auto const innerConfig = alpakaTune::TunerConfig{
+      .mode = alpakaTune::TuningMode::onlineFixed,
+      .warmupRuns = 0u,
+      .runsPerCandidate = 10u,
+      .minimumRunsPerCandidate = 1u,
+      .noiseCancellationWindow = 1u,
+      .maxConsecutiveRuns = 1u,
+      .maximumExecutions = NumberOfInsideSteps,
+      .strategy = alpakaTune::StrategyKind::exhaustive,
+      .completeHistory = {.file = directory / "inner.json"}};
 
   auto const outerTunables = alpakaTune::TunableBundle{
       innerStrategy(alpakaTune::RVals<alpakaTune::StrategyKind>{
@@ -170,7 +172,8 @@ auto main() -> int {
   auto outerConfig = innerConfig;
   outerConfig.runsPerCandidate = 1u;
   outerConfig.maximumExecutions = NumberOfOutsideSteps;
-  outerConfig.persistenceFile = directory / "outer.json";
+  outerConfig.history.file = directory / "outer-history.json";
+  outerConfig.completeHistory.file = directory / "outer-complete-history.json";
   auto outerTuner = alpakaTune::makeTuner(
       outerConfig, outerTunables, device, alpaka::deviceKind::cpu,
       alpaka::api::host, alpaka::exec::cpuSerial, "tune-the-tuner/outer");

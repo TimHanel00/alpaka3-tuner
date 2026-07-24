@@ -99,7 +99,7 @@ auto writeConfiguration() -> std::filesystem::path {
   std::filesystem::create_directories(directory);
   auto const configuration = directory / "tuning.yaml";
   std::ofstream output{configuration};
-  output << R"(schema_version: 1
+  output << R"(schema_version: 3
 tuning:
   mode: online_fixed
   strategy: exhaustive
@@ -109,9 +109,9 @@ tuning:
   noise_cancellation_window: 3
   max_consecutive_runs: 1
   maximum_executions: 100000
-persistence:
+complete_history:
   file: )"
-         << (directory / "history.json").string() << '\n';
+         << (directory / "complete-history.json").string() << '\n';
   return configuration;
 }
 
@@ -142,6 +142,8 @@ auto main() -> int {
                0.5) > 1.0e-12 ||
       std::abs(alpakaTune::detail::relativeScoreAdmission(1.0, 1.0, 0.1) -
                1.0) > 1.0e-12 ||
+      std::abs(alpakaTune::detail::relativeScoreAdmission(1.02, 1.0, 0.05) -
+               std::exp(-0.4)) > 1.0e-12 ||
       !(alpakaTune::detail::relativeScoreAdmission(2.0, 1.0, 0.1) < 1.0))
     return EXIT_FAILURE;
 
@@ -214,9 +216,15 @@ auto main() -> int {
       alpaka::deviceKind::cpu, alpaka::api::host, executor, "tuner-test");
   auto const cachedObservation =
       cached.enqueueObserved(queue, frameSpec, bundle);
-  if (cachedObservation.measured || cachedObservation.runtimeSeconds ||
-      !cachedObservation.loadedFromCache)
+  if (!cachedObservation.measured || !cachedObservation.runtimeSeconds ||
+      cachedObservation.tuningComplete || !cachedObservation.loadedFromCache ||
+      cached.info().executionCount != 1u ||
+      cached.info().measuredCandidateCount != 3u ||
+      cached.candidateRuntimeSamples(cachedObservation.candidateIndex).size() !=
+          3u)
     return EXIT_FAILURE;
+  for (std::size_t launch = 1u; launch < 6u; ++launch)
+    cached.enqueue(queue, frameSpec, bundle);
   alpaka::onHost::wait(queue);
   if (!cached.loadedFromCache() || !cached.isTuningComplete())
     return EXIT_FAILURE;
@@ -252,12 +260,14 @@ auto main() -> int {
   auto reloadedRuntime = alpakaTune::makeTuner(
       alpakaTune::TunerConfig::fromYaml(configuration), tunables, device,
       alpaka::deviceKind::cpu, alpaka::api::host, executor, "tuner-test");
-  reloadedRuntime.enqueue(queue, frameSpec, bundle);
+  for (std::size_t launch = 0u; launch < 6u; ++launch)
+    reloadedRuntime.enqueue(queue, frameSpec, bundle);
   auto reloadedCompile =
       alpakaTune::makeTuner(alpakaTune::TunerConfig::fromYaml(configuration),
                             compileTunables, device, alpaka::deviceKind::cpu,
                             alpaka::api::host, executor, "compile-tuner-test");
-  reloadedCompile.enqueue(queue, frameSpec, compileBundle);
+  for (std::size_t launch = 0u; launch < 8u; ++launch)
+    reloadedCompile.enqueue(queue, frameSpec, compileBundle);
   alpaka::onHost::wait(queue);
   if (!reloadedRuntime.loadedFromCache() ||
       !reloadedRuntime.isTuningComplete() ||
@@ -296,7 +306,8 @@ auto main() -> int {
   auto reloadedFrame = alpakaTune::makeTuner(
       alpakaTune::TunerConfig::fromYaml(configuration), frameTunables, device,
       alpaka::deviceKind::cpu, alpaka::api::host, executor, "frame-tuner-test");
-  reloadedFrame.enqueue(queue, frameSpec, frameBundle);
+  for (std::size_t launch = 0u; launch < 4u; ++launch)
+    reloadedFrame.enqueue(queue, frameSpec, frameBundle);
   if (!reloadedFrame.loadedFromCache() || !reloadedFrame.isTuningComplete())
     return EXIT_FAILURE;
 #endif
@@ -434,15 +445,14 @@ auto main() -> int {
     return EXIT_FAILURE;
 
   auto retryLimitConfig = oneRunConfig();
-  retryLimitConfig.mode = alpakaTune::TuningMode::onlineAdaptive;
-  retryLimitConfig.maximumExecutions.reset();
-  retryLimitConfig.maximumRetiredConfigurations.reset();
   retryLimitConfig.maximumConsecutiveStrategyRetries = 3u;
   retryLimitConfig.noiseCancellationWindow = 1u;
-  retryLimitConfig.horizon = 1000u;
-  retryLimitConfig.persistenceFile.reset();
-  retryLimitConfig.persistenceRead = false;
-  retryLimitConfig.persistenceWrite = false;
+  retryLimitConfig.history.file.reset();
+  retryLimitConfig.history.read = false;
+  retryLimitConfig.history.write = false;
+  retryLimitConfig.completeHistory.file.reset();
+  retryLimitConfig.completeHistory.read = false;
+  retryLimitConfig.completeHistory.write = false;
   auto const rejectedTunables = alpakaTune::constrain(
       alpakaTune::TunableBundle{
           alpakaTune::named(runtimeValue, alpakaTune::RVals{1, 2, 3, 4, 5, 6})},
@@ -465,40 +475,78 @@ auto main() -> int {
               maximumConsecutiveStrategyRetries ||
       retryLimitInfo.maximumConsecutiveStrategyRetries != 3u ||
       retryLimitInfo.consecutiveStrategyRetries != 3u ||
+      retryLimitInfo.strategyRetryLimitReachedCount != 1u ||
+      retryLimitInfo.adaptiveRetryFallbackCount != 0u ||
       retryLimitInfo.restrictionRejectedCount != 3u ||
       retryLimitInfo.bestCandidateIndex || !retryLimitInfo.completionReason ||
       *retryLimitInfo.completionReason !=
           alpakaTune::TunerCompletionReason::maximumConsecutiveStrategyRetries)
     return EXIT_FAILURE;
 
-  auto terminalReplayConfig = retryLimitConfig;
-  terminalReplayConfig.maximumConsecutiveStrategyRetries = 1u;
-  terminalReplayConfig.horizon = std::numeric_limits<std::size_t>::max();
+  auto adaptiveRetryConfig = retryLimitConfig;
+  adaptiveRetryConfig.mode = alpakaTune::TuningMode::onlineAdaptive;
+  adaptiveRetryConfig.maximumExecutions.reset();
+  adaptiveRetryConfig.maximumRetiredConfigurations.reset();
+  adaptiveRetryConfig.maximumConsecutiveStrategyRetries = 1u;
+  adaptiveRetryConfig.horizon = std::numeric_limits<std::size_t>::max();
+  auto emptyAdaptiveRetryTuner = alpakaTune::makeTuner(
+      adaptiveRetryConfig, rejectedTunables, device,
+      "strategy-retry-empty-adaptive-test");
+  auto emptyAdaptiveRetryThrew = false;
+  try {
+    emptyAdaptiveRetryTuner.enqueue(queue, frameSpec, bundle);
+  } catch (std::invalid_argument const &) {
+    emptyAdaptiveRetryThrew = true;
+  }
+  if (!emptyAdaptiveRetryThrew ||
+      emptyAdaptiveRetryTuner.isTuningComplete() ||
+      emptyAdaptiveRetryTuner.completed() ||
+      emptyAdaptiveRetryTuner.info().strategyRetryLimitReachedCount != 1u ||
+      emptyAdaptiveRetryTuner.info().adaptiveRetryFallbackCount != 0u ||
+      emptyAdaptiveRetryTuner.info().bestCandidateIndex)
+    return EXIT_FAILURE;
+
   auto const singleCandidateTunables = alpakaTune::TunableBundle{
       alpakaTune::named(runtimeValue, alpakaTune::RVals{7})};
-  auto terminalReplayTuner =
-      alpakaTune::makeTuner(terminalReplayConfig, singleCandidateTunables,
-                            device, "strategy-retry-terminal-replay-test");
-  auto const measuredBeforeRetryLimit =
-      terminalReplayTuner.enqueueObserved(queue, frameSpec, bundle);
-  if (!measuredBeforeRetryLimit.measured ||
-      !measuredBeforeRetryLimit.tuningComplete ||
-      terminalReplayTuner.completionReason() !=
-          alpakaTune::TunerCompletionReason::maximumConsecutiveStrategyRetries)
+  auto adaptiveRetryTuner =
+      alpakaTune::makeTuner(adaptiveRetryConfig, singleCandidateTunables,
+                            device, "strategy-retry-adaptive-fallback-test");
+  auto const firstAdaptiveRetry =
+      adaptiveRetryTuner.enqueueObserved(queue, frameSpec, bundle);
+  if (!firstAdaptiveRetry.measured || firstAdaptiveRetry.tuningComplete ||
+      adaptiveRetryTuner.isTuningComplete() ||
+      adaptiveRetryTuner.info().strategyRetryLimitReachedCount != 1u ||
+      adaptiveRetryTuner.info().adaptiveRetryFallbackCount != 1u)
     return EXIT_FAILURE;
-  auto const terminalReplay =
-      terminalReplayTuner.enqueueObserved(queue, frameSpec, bundle);
-  if (terminalReplay.measured || terminalReplay.runtimeSeconds ||
-      terminalReplay.candidateIndex != measuredBeforeRetryLimit.candidateIndex)
+  auto const secondAdaptiveRetry =
+      adaptiveRetryTuner.enqueueObserved(queue, frameSpec, bundle);
+  if (!secondAdaptiveRetry.measured || !secondAdaptiveRetry.runtimeSeconds ||
+      secondAdaptiveRetry.tuningComplete ||
+      secondAdaptiveRetry.candidateIndex !=
+          firstAdaptiveRetry.candidateIndex ||
+      adaptiveRetryTuner.isTuningComplete() ||
+      adaptiveRetryTuner.info().strategyRetryLimitReachedCount != 2u ||
+      adaptiveRetryTuner.info().adaptiveRetryFallbackCount != 2u ||
+      adaptiveRetryTuner.candidateRuntimeSamples(0u).size() != 2u)
+    return EXIT_FAILURE;
+  auto adaptiveRetryReasonRejected = false;
+  try {
+    static_cast<void>(adaptiveRetryTuner.completionReason());
+  } catch (std::logic_error const &) {
+    adaptiveRetryReasonRejected = true;
+  }
+  if (!adaptiveRetryReasonRejected)
     return EXIT_FAILURE;
 
   auto budgetConfig = oneRunConfig();
   budgetConfig.maximumExecutions = 1u;
   auto budgetTuner = alpakaTune::makeTuner(budgetConfig, tunables, device,
                                            "execution-budget-test");
-  budgetTuner.enqueue(queue, frameSpec, bundle);
+  auto const budgetObservation =
+      budgetTuner.enqueueObserved(queue, frameSpec, bundle);
   auto const budgetInfo = budgetTuner.info();
-  if (!budgetInfo.tuningComplete || !budgetTuner.completed() ||
+  if (!budgetObservation.tuningComplete || !budgetInfo.tuningComplete ||
+      !budgetTuner.isTuningComplete() || !budgetTuner.completed() ||
       !budgetInfo.executionBudgetReached || budgetInfo.executionCount != 1u ||
       !budgetInfo.bestCandidateIndex ||
       budgetTuner.completionReason() !=
@@ -551,7 +599,8 @@ auto main() -> int {
   for (std::size_t launch = 0u; launch < 4u; ++launch)
     adaptiveTuner.enqueue(queue, frameSpec, bundle);
   auto const firstAdaptiveInfo = adaptiveTuner.info();
-  if (firstAdaptiveInfo.tuningComplete || !adaptiveTuner.completed() ||
+  if (!firstAdaptiveInfo.tuningComplete || !adaptiveTuner.completed() ||
+      !adaptiveTuner.isTuningComplete() ||
       firstAdaptiveInfo.executionCount != 4u ||
       firstAdaptiveInfo.retiredConfigurationCount != 1u ||
       adaptiveTuner.candidateRuntimeSamples(0u).size() != 3u)
@@ -568,10 +617,17 @@ auto main() -> int {
   // horizon is an adaptive schedule, not a stop.
   // At and after the horizon the single current-best candidate passes both
   // admission gates with probability one and may be visited indefinitely.
-  for (std::size_t launch = 0u; launch < 4u; ++launch)
+  auto const postHorizonObservation =
+      adaptiveTuner.enqueueObserved(queue, frameSpec, bundle);
+  if (!postHorizonObservation.measured ||
+      !postHorizonObservation.runtimeSeconds ||
+      !postHorizonObservation.tuningComplete)
+    return EXIT_FAILURE;
+  for (std::size_t launch = 1u; launch < 4u; ++launch)
     adaptiveTuner.enqueue(queue, frameSpec, bundle);
   auto const secondAdaptiveInfo = adaptiveTuner.info();
-  if (secondAdaptiveInfo.tuningComplete || !adaptiveTuner.completed() ||
+  if (!secondAdaptiveInfo.tuningComplete || !adaptiveTuner.completed() ||
+      !adaptiveTuner.isTuningComplete() ||
       secondAdaptiveInfo.executionCount != 8u ||
       secondAdaptiveInfo.retiredConfigurationCount != 2u ||
       secondAdaptiveInfo.revisitAcceptedCount == 0u ||
@@ -590,7 +646,7 @@ auto main() -> int {
   resumedAdaptiveTuner.enqueue(queue, frameSpec, bundle);
   if (!resumedAdaptiveTuner.loadedFromCache() ||
       !resumedAdaptiveTuner.completed() ||
-      resumedAdaptiveTuner.info().executionCount != 12u ||
+      resumedAdaptiveTuner.info().executionCount != 4u ||
       resumedAdaptiveTuner.info().adaptiveHorizonExecutionCount != 4u ||
       std::abs(resumedAdaptiveTuner.info().adaptiveHorizonProgress - 1.0) >
           1.0e-12)
@@ -610,6 +666,8 @@ auto main() -> int {
       !offlineTuner.completed() ||
       offlineTuner.completionReason() !=
           alpakaTune::TunerCompletionReason::offlineReplay ||
+      !offlineObservation.tuningComplete ||
+      !offlineTuner.info().tuningComplete ||
       offlineObservation.measured || offlineObservation.runtimeSeconds ||
       offlineTuner.info().mode != alpakaTune::TuningMode::offline ||
       offlineTuner.candidateRuntimeSamples(0u).size() != 3u)
@@ -621,7 +679,7 @@ auto main() -> int {
     output << R"({"schema_version":10,"contexts":{}})";
   }
   auto oldHistoryConfig = offlineConfig;
-  oldHistoryConfig.persistenceFile = oldHistoryPath;
+  oldHistoryConfig.completeHistory.file = oldHistoryPath;
   auto oldHistoryRejected = false;
   try {
     auto oldHistoryTuner = alpakaTune::makeTuner(
@@ -637,13 +695,14 @@ auto main() -> int {
 
 #if ALPAKA_TUNE_HAS_JSON
   {
-    auto const historyPath = configuration.parent_path() / "history.json";
+    auto const historyPath =
+        configuration.parent_path() / "complete-history.json";
     if (std::filesystem::exists(historyPath))
       return EXIT_FAILURE;
     auto const contexts =
-        alpakaTune::detail::persistenceStore(historyPath)
+        alpakaTune::detail::completeHistoryStore(historyPath)
             ->stagedCaches(
-                decltype(retiredBudgetTuner)::persistenceSchemaVersion);
+                decltype(retiredBudgetTuner)::completeHistorySchemaVersion);
     auto found = false;
     for (auto const &[fingerprint, cache] : contexts) {
       static_cast<void>(fingerprint);
@@ -684,8 +743,10 @@ auto main() -> int {
 
   auto reloadedRetiredBudget = alpakaTune::makeTuner(
       retiredBudgetConfig, tunables, device, "retired-budget-test");
-  reloadedRetiredBudget.enqueue(queue, frameSpec, bundle);
+  while (!reloadedRetiredBudget.completed())
+    reloadedRetiredBudget.enqueue(queue, frameSpec, bundle);
   if (!reloadedRetiredBudget.loadedFromCache() ||
+      reloadedRetiredBudget.info().executionCount != 2u ||
       reloadedRetiredBudget.completionReason() !=
           alpakaTune::TunerCompletionReason::maximumRetiredConfigurations)
     return EXIT_FAILURE;
@@ -719,6 +780,17 @@ auto main() -> int {
   }
   if (!runtimeVectorTuner.isTuningComplete() || runtimeResults.size() != 2000u)
     return EXIT_FAILURE;
+  auto runtimeVectorOfflineConfig = oneRunConfig();
+  runtimeVectorOfflineConfig.mode = alpakaTune::TuningMode::offline;
+  runtimeVectorOfflineConfig.maximumExecutions.reset();
+  runtimeVectorOfflineConfig.maximumRetiredConfigurations.reset();
+  auto runtimeVectorOffline =
+      alpakaTune::makeTuner(runtimeVectorOfflineConfig, runtimeVectorTunables,
+                            device, "runtime-vector-dimensions-test");
+  runtimeVectorOffline.enqueue(queue, frameSpec, runtimeVectorBundle);
+  if (!runtimeVectorOffline.loadedFromCache() ||
+      !runtimeVectorOffline.isTuningComplete())
+    return EXIT_FAILURE;
 
   using CompileVectorA = alpaka::CVec<std::size_t, 1u, 10u>;
   using CompileVectorB = std::integer_sequence<std::size_t, 2u, 20u>;
@@ -741,6 +813,17 @@ auto main() -> int {
     compileResults.insert(host[0u]);
   }
   if (!compileVectorTuner.isTuningComplete() || compileResults.size() != 2000u)
+    return EXIT_FAILURE;
+  auto compileVectorOfflineConfig = oneRunConfig();
+  compileVectorOfflineConfig.mode = alpakaTune::TuningMode::offline;
+  compileVectorOfflineConfig.maximumExecutions.reset();
+  compileVectorOfflineConfig.maximumRetiredConfigurations.reset();
+  auto compileVectorOffline =
+      alpakaTune::makeTuner(compileVectorOfflineConfig, compileVectorTunables,
+                            device, "compile-vector-dimensions-test");
+  compileVectorOffline.enqueue(queue, frameSpec, compileVectorBundle);
+  if (!compileVectorOffline.loadedFromCache() ||
+      !compileVectorOffline.isTuningComplete())
     return EXIT_FAILURE;
 
   std::filesystem::remove_all(configuration.parent_path());

@@ -3,15 +3,21 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
 #if ALPAKA_TUNE_HAS_JSON
 #include <nlohmann/json.hpp>
@@ -26,10 +32,10 @@ namespace alpakaTune::detail {
  * performs one atomic file replacement. No launch opens or appends to the
  * history file.
  */
-struct PersistenceStore {
+struct CompleteHistoryStore {
   /** @brief Bind the store to optional file-read and shutdown-write policy. */
-  PersistenceStore(std::optional<std::filesystem::path> value,
-                   bool readValue, bool writeValue)
+  CompleteHistoryStore(std::optional<std::filesystem::path> value,
+                       bool readValue, bool writeValue)
       : file(std::move(value)), readFile(readValue), writeFile(writeValue) {}
 
   /** @brief Flush pending snapshots during normal process shutdown.
@@ -37,7 +43,7 @@ struct PersistenceStore {
    * Destructors cannot surface I/O failures, so abnormal or failed shutdown
    * does not guarantee persistence.
    */
-  ~PersistenceStore() noexcept {
+  ~CompleteHistoryStore() noexcept {
 #if ALPAKA_TUNE_HAS_JSON
     try {
       std::lock_guard lock{mutex};
@@ -150,39 +156,240 @@ private:
 #endif
 };
 
-class PersistenceRegistry {
+/** On-disk schema of the compact sampled history. */
+inline constexpr int historySchemaVersion = 1;
+
+#if ALPAKA_TUNE_HAS_JSON
+/** @brief Convert one complete staged summary into its compact file context. */
+[[nodiscard]] inline auto sampledHistoryContext(nlohmann::json const &cache)
+    -> nlohmann::json {
+  auto records = std::vector<nlohmann::json>{};
+  auto seenConfigurations = std::unordered_set<std::string>{};
+  if (auto const found = cache.find("records");
+      found != cache.end() && found->is_object()) {
+    auto byCandidate = std::vector<nlohmann::json>{};
+    byCandidate.reserve(found->size());
+    for (auto const &[candidate, record] : found->items()) {
+      static_cast<void>(candidate);
+      byCandidate.push_back(record);
+    }
+    std::ranges::sort(byCandidate, [](auto const &left, auto const &right) {
+      return left.at("candidate_index").template get<std::size_t>() <
+             right.at("candidate_index").template get<std::size_t>();
+    });
+    records.reserve(byCandidate.size());
+    for (auto &record : byCandidate) {
+      auto const key = record.at("configuration").dump();
+      if (seenConfigurations.insert(key).second)
+        records.push_back(std::move(record));
+    }
+  }
+  std::ranges::sort(records, [](auto const &left, auto const &right) {
+    auto const leftRuntime =
+        left.at("median_runtime_seconds").template get<double>();
+    auto const rightRuntime =
+        right.at("median_runtime_seconds").template get<double>();
+    if (leftRuntime != rightRuntime)
+      return leftRuntime < rightRuntime;
+    return left.at("configuration").dump() < right.at("configuration").dump();
+  });
+
+  auto selected = std::vector<bool>(records.size(), false);
+  auto selectedCount = records.size();
+  if (auto const count = cache.find("sample_count");
+      count != cache.end() && !count->is_null())
+    selectedCount = std::min(count->get<std::size_t>(), records.size());
+  if (selectedCount == records.size()) {
+    std::fill(selected.begin(), selected.end(), true);
+  } else {
+    auto const forced = std::min<std::size_t>(3u, selectedCount);
+    for (std::size_t rank = 0u; rank < forced; ++rank)
+      selected.at(rank) = true;
+    auto weights = std::vector<double>(records.size(), 0.0);
+    for (std::size_t rank = forced; rank < records.size(); ++rank)
+      weights.at(rank) = records.size() > 1u
+                             ? static_cast<double>(records.size() - 1u - rank)
+                             : 0.0;
+    auto random =
+        std::mt19937_64{cache.value("sampling_seed", std::uint64_t{0u})};
+    for (std::size_t slot = forced; slot < selectedCount; ++slot) {
+      auto distribution = std::discrete_distribution<std::size_t>{
+          weights.begin(), weights.end()};
+      auto const rank = distribution(random);
+      selected.at(rank) = true;
+      weights.at(rank) = 0.0;
+    }
+  }
+
+  auto result = nlohmann::json{{"configurations", nlohmann::json::array()}};
+  for (std::size_t rank = 0u; rank < records.size(); ++rank) {
+    if (!selected.at(rank))
+      continue;
+    auto record = records.at(rank);
+    record.erase("candidate_index");
+    result["configurations"].push_back(std::move(record));
+  }
+  if (auto const adapter = cache.find("adapter");
+      adapter != cache.end() && adapter->is_object())
+    result["adapter"] = *adapter;
+  return result;
+}
+#endif
+
+/** @brief Process-shared compact-history state sampled only at file write. */
+struct HistoryStore {
+  HistoryStore(std::optional<std::filesystem::path> value, bool readValue,
+               bool writeValue)
+      : file(std::move(value)), readFile(readValue), writeFile(writeValue) {}
+
+  ~HistoryStore() noexcept {
+#if ALPAKA_TUNE_HAS_JSON
+    try {
+      std::lock_guard lock{mutex};
+      if (file && writeFile && !pendingCaches.empty()) {
+        auto contexts = std::unordered_map<std::string, nlohmann::json>{};
+        contexts.reserve(pendingCaches.size());
+        for (auto const &[fingerprint, cache] : pendingCaches)
+          contexts.emplace(fingerprint, sampledHistoryContext(*cache));
+        mergeAndWrite(contexts);
+        pendingCaches.clear();
+      }
+    } catch (...) {
+      // Static destruction cannot report persistence failures to the caller.
+    }
+#endif
+  }
+
+#if ALPAKA_TUNE_HAS_JSON
+  /** @brief Stage all summaries; sampling is deliberately deferred. */
+  void stageCache(std::string const &fingerprint,
+                  std::shared_ptr<nlohmann::json> cache) {
+    if (!cache)
+      throw std::invalid_argument{"A staged history cache must not be null."};
+    std::lock_guard lock{mutex};
+    pendingCaches[fingerprint] = std::move(cache);
+  }
+
+  /** @brief Return the unsampled same-process cache for one fingerprint. */
+  [[nodiscard]] auto stagedCache(std::string const &fingerprint)
+      -> std::shared_ptr<nlohmann::json const> {
+    std::lock_guard lock{mutex};
+    auto const found = pendingCaches.find(fingerprint);
+    return found == pendingCaches.end() ? nullptr : found->second;
+  }
+#endif
+
+  std::optional<std::filesystem::path> file;
+  bool readFile;
+  bool writeFile;
+  std::mutex mutex;
+
+private:
+#if ALPAKA_TUNE_HAS_JSON
+  void mergeAndWrite(
+      std::unordered_map<std::string, nlohmann::json> const &contexts) const {
+    auto const &path = *file;
+    auto const parent = path.parent_path();
+    if (!parent.empty())
+      std::filesystem::create_directories(parent);
+    auto store = nlohmann::json::object();
+    if (readFile && std::filesystem::exists(path)) {
+      std::ifstream input{path};
+      if (!(input >> store) ||
+          store.value("schema_version", 0) != historySchemaVersion ||
+          !store.contains("contexts") || !store["contexts"].is_object())
+        throw std::runtime_error{
+            "The alpakaTune compact history is invalid or incompatible."};
+    } else {
+      store["schema_version"] = historySchemaVersion;
+      store["contexts"] = nlohmann::json::object();
+    }
+    for (auto const &[fingerprint, context] : contexts)
+      store["contexts"][fingerprint] = context;
+    auto temporary = path;
+    temporary += ".tmp";
+    std::ofstream output{temporary};
+    if (!output)
+      throw std::runtime_error{
+          "Unable to write the alpakaTune compact history."};
+    output << store.dump(2) << '\n';
+    output.close();
+    std::filesystem::rename(temporary, path);
+  }
+
+  std::unordered_map<std::string, std::shared_ptr<nlohmann::json>>
+      pendingCaches;
+#endif
+};
+
+class CompleteHistoryRegistry {
 public:
   /** @brief Return the process-wide shared store for one access policy. */
   [[nodiscard]] auto get(std::optional<std::filesystem::path> file,
                          bool readFile, bool writeFile)
-      -> std::shared_ptr<PersistenceStore> {
+      -> std::shared_ptr<CompleteHistoryStore> {
     if (file && file->empty())
       throw std::invalid_argument{"The persistence file must not be empty."};
     if (file)
       file = std::filesystem::absolute(std::move(*file)).lexically_normal();
-    auto const key =
-        file ? file->string() + "\nread=" + (readFile ? "1" : "0") +
-                   "\nwrite=" + (writeFile ? "1" : "0")
-             : std::string{"<memory>"};
+    auto const key = file
+                         ? file->string() + "\nread=" + (readFile ? "1" : "0") +
+                               "\nwrite=" + (writeFile ? "1" : "0")
+                         : std::string{"<memory>"};
     std::lock_guard lock{mutex};
     auto &store = stores[key];
     if (!store)
-      store = std::make_shared<PersistenceStore>(
-          std::move(file), readFile, writeFile);
+      store = std::make_shared<CompleteHistoryStore>(std::move(file), readFile,
+                                                     writeFile);
     return store;
   }
 
 private:
   std::mutex mutex;
-  std::unordered_map<std::string, std::shared_ptr<PersistenceStore>> stores;
+  std::unordered_map<std::string, std::shared_ptr<CompleteHistoryStore>> stores;
 };
 
-/** @brief Access the process-wide persistence registry. */
-inline auto persistenceStore(
-    std::optional<std::filesystem::path> file = std::nullopt,
-    bool readFile = true, bool writeFile = true)
-    -> std::shared_ptr<PersistenceStore> {
-  static PersistenceRegistry registry;
+/** @brief Access the process-wide complete-history registry. */
+inline auto
+completeHistoryStore(std::optional<std::filesystem::path> file = std::nullopt,
+                     bool readFile = true, bool writeFile = true)
+    -> std::shared_ptr<CompleteHistoryStore> {
+  static CompleteHistoryRegistry registry;
+  return registry.get(std::move(file), readFile, writeFile);
+}
+
+class HistoryRegistry {
+public:
+  [[nodiscard]] auto get(std::optional<std::filesystem::path> file,
+                         bool readFile, bool writeFile)
+      -> std::shared_ptr<HistoryStore> {
+    if (file && file->empty())
+      throw std::invalid_argument{"The history file must not be empty."};
+    if (file)
+      file = std::filesystem::absolute(std::move(*file)).lexically_normal();
+    auto const key = file
+                         ? file->string() + "\nread=" + (readFile ? "1" : "0") +
+                               "\nwrite=" + (writeFile ? "1" : "0")
+                         : std::string{"<memory>"};
+    std::lock_guard lock{mutex};
+    auto &store = stores[key];
+    if (!store)
+      store =
+          std::make_shared<HistoryStore>(std::move(file), readFile, writeFile);
+    return store;
+  }
+
+private:
+  std::mutex mutex;
+  std::unordered_map<std::string, std::shared_ptr<HistoryStore>> stores;
+};
+
+/** @brief Access the process-wide compact-history registry. */
+inline auto
+historyStore(std::optional<std::filesystem::path> file = std::nullopt,
+             bool readFile = true, bool writeFile = true)
+    -> std::shared_ptr<HistoryStore> {
+  static HistoryRegistry registry;
   return registry.get(std::move(file), readFile, writeFile);
 }
 

@@ -57,21 +57,21 @@ void writeCompletedHistory(std::filesystem::path const &path) {
 
   auto partialCache =
       std::make_shared<nlohmann::json>(cache(fingerprint, "none", 3));
-  alpakaTune::detail::persistenceStore(partialPath)
+  alpakaTune::detail::completeHistoryStore(partialPath)
       ->stageCache(schemaVersion, fingerprint, partialCache);
   (*partialCache)["execution_count"] = 7;
-  alpakaTune::detail::persistenceStore(completedPath)
-      ->stageCache(schemaVersion, fingerprint,
-                   std::make_shared<nlohmann::json>(
-                       cache(fingerprint, "none", 4)));
-  alpakaTune::detail::persistenceStore(writeOnlyPath, false, true)
-      ->stageCache(schemaVersion, freshFingerprint,
-                   std::make_shared<nlohmann::json>(
-                       cache(freshFingerprint, "none", 5)));
-  alpakaTune::detail::persistenceStore(readOnlyPath, true, false)
-      ->stageCache(schemaVersion, freshFingerprint,
-                   std::make_shared<nlohmann::json>(
-                       cache(freshFingerprint, "none", 6)));
+  alpakaTune::detail::completeHistoryStore(completedPath)
+      ->stageCache(
+          schemaVersion, fingerprint,
+          std::make_shared<nlohmann::json>(cache(fingerprint, "none", 4)));
+  alpakaTune::detail::completeHistoryStore(writeOnlyPath, false, true)
+      ->stageCache(
+          schemaVersion, freshFingerprint,
+          std::make_shared<nlohmann::json>(cache(freshFingerprint, "none", 5)));
+  alpakaTune::detail::completeHistoryStore(readOnlyPath, true, false)
+      ->stageCache(
+          schemaVersion, freshFingerprint,
+          std::make_shared<nlohmann::json>(cache(freshFingerprint, "none", 6)));
   std::exit(EXIT_SUCCESS);
 }
 
@@ -134,7 +134,8 @@ auto main(int argc, char **argv) -> int {
   auto const writeOnlyPath = std::filesystem::path{argv[4]};
   auto const readOnlyPath = std::filesystem::path{argv[5]};
   if (std::string{argv[1]} == "stage")
-    return stageAndExit(partialPath, completedPath, writeOnlyPath, readOnlyPath);
+    return stageAndExit(partialPath, completedPath, writeOnlyPath,
+                        readOnlyPath);
   if (std::string{argv[1]} == "verify")
     return verify(partialPath, completedPath, writeOnlyPath, readOnlyPath);
   return EXIT_FAILURE;

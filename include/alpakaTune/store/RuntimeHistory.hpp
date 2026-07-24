@@ -123,14 +123,15 @@ public:
     m_samples.push_back(seconds);
     if (m_samples.size() > m_options.historyWindowSize)
       m_samples.erase(m_samples.begin());
+    ++m_currentRunSampleCount;
     rebuildAcceptedSamples();
     auto const current = statistics();
     if (!m_options.automaticRetirement)
       return false;
-    if (m_samples.size() >= m_options.maximumMeasuredRuns) {
+    if (m_currentRunSampleCount >= m_options.maximumMeasuredRuns) {
       retire(RuntimeCompletion::maximumSamples);
-    } else if (m_samples.size() >= m_options.minimumMeasuredRuns &&
-               m_samples.size() % m_options.ciCheckInterval == 0u &&
+    } else if (m_currentRunSampleCount >= m_options.minimumMeasuredRuns &&
+               m_currentRunSampleCount % m_options.ciCheckInterval == 0u &&
                current.confidenceReached) {
       retire(RuntimeCompletion::confidenceInterval);
     }
@@ -153,6 +154,14 @@ public:
     m_state = ConfigurationState::unmeasured;
   }
 
+  /** @brief Start a new online run without discarding retained timings. */
+  void resetForNewRun() {
+    m_currentRunSampleCount = 0u;
+    m_completion = RuntimeCompletion::none;
+    m_warmupRemaining = 0u;
+    m_state = ConfigurationState::unmeasured;
+  }
+
   /** Restore a persisted, completed record without replaying warm-up state. */
   void restoreCompleted(std::span<double const> samples) {
     if (samples.empty())
@@ -169,6 +178,28 @@ public:
             "A persisted runtime measurement is invalid."};
     }
     rebuildAcceptedSamples();
+    m_currentRunSampleCount = 0u;
+    m_warmupRemaining = 0u;
+    m_completion = RuntimeCompletion::maximumSamples;
+    m_state = ConfigurationState::retired;
+  }
+
+  /** @brief Restore a lossy compact summary as median-valued samples.
+   *
+   * The compact schema deliberately omits the raw distribution. Repeating the
+   * persisted median preserves its decision estimate and retained measurement
+   * weight while respecting the active rolling-window limit.
+   */
+  void restoreSummary(double median, std::size_t measurementCount) {
+    if (!std::isfinite(median) || median < 0.0 || measurementCount == 0u)
+      throw std::invalid_argument{
+          "A compact runtime summary requires a finite non-negative median "
+          "and a positive measurement count."};
+    auto const retained =
+        std::min(measurementCount, m_options.historyWindowSize);
+    m_samples.assign(retained, median);
+    rebuildAcceptedSamples();
+    m_currentRunSampleCount = 0u;
     m_warmupRemaining = 0u;
     m_completion = RuntimeCompletion::maximumSamples;
     m_state = ConfigurationState::retired;
@@ -189,6 +220,10 @@ public:
   /** @brief Whether no timing sample is retained. */
   [[nodiscard]] auto empty() const noexcept -> bool {
     return m_samples.empty();
+  }
+  /** @brief Retained timings collected since the latest online-run reset. */
+  [[nodiscard]] auto currentRunSampleCount() const noexcept -> std::size_t {
+    return m_currentRunSampleCount;
   }
   /** @brief Raw retained rolling window, including decision outliers. */
   [[nodiscard]] auto samples() const noexcept -> std::span<double const> {
@@ -322,6 +357,7 @@ private:
   ConfigurationState m_state{ConfigurationState::unmeasured};
   RuntimeCompletion m_completion{RuntimeCompletion::none};
   std::size_t m_warmupRemaining{};
+  std::size_t m_currentRunSampleCount{};
   std::vector<double> m_samples;
   std::vector<double> m_acceptedSamples;
 };

@@ -23,6 +23,11 @@ target_link_libraries(alpakaTune_runtime_history_tests PRIVATE alpakaTune::alpak
 alpaka_finalize(alpakaTune_runtime_history_tests)
 add_test(NAME alpakaTune_runtime_history_tests COMMAND alpakaTune_runtime_history_tests)
 
+add_executable(alpakaTune_history_tests history.cpp)
+target_link_libraries(alpakaTune_history_tests PRIVATE alpakaTune::alpakaTune)
+alpaka_finalize(alpakaTune_history_tests)
+add_test(NAME alpakaTune_history_tests COMMAND alpakaTune_history_tests)
+
 add_executable(alpakaTune_tune_the_tuner_tests tune_the_tuner.cpp)
 target_link_libraries(alpakaTune_tune_the_tuner_tests PRIVATE alpakaTune::alpakaTune Catch2::Catch2WithMain)
 alpaka_finalize(alpakaTune_tune_the_tuner_tests)
@@ -40,8 +45,7 @@ if(alpakaTune_ENABLE_PERSISTENCE)
         NAME alpakaTune_persistence_shutdown_stage
         COMMAND
             alpakaTune_persistence_shutdown_tests stage "${_alpakaTune_partial_history}"
-            "${_alpakaTune_completed_history}" "${_alpakaTune_write_only_history}"
-            "${_alpakaTune_read_only_history}"
+            "${_alpakaTune_completed_history}" "${_alpakaTune_write_only_history}" "${_alpakaTune_read_only_history}"
     )
     set_tests_properties(
         alpakaTune_persistence_shutdown_stage
@@ -51,8 +55,7 @@ if(alpakaTune_ENABLE_PERSISTENCE)
         NAME alpakaTune_persistence_shutdown_verify
         COMMAND
             alpakaTune_persistence_shutdown_tests verify "${_alpakaTune_partial_history}"
-            "${_alpakaTune_completed_history}" "${_alpakaTune_write_only_history}"
-            "${_alpakaTune_read_only_history}"
+            "${_alpakaTune_completed_history}" "${_alpakaTune_write_only_history}" "${_alpakaTune_read_only_history}"
     )
     set_tests_properties(
         alpakaTune_persistence_shutdown_verify

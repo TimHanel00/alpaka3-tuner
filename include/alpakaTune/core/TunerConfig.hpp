@@ -57,6 +57,28 @@ enum class TuningMode {
       "YAML tuning.mode must be offline, online_fixed, or online_adaptive."};
 }
 
+/** @brief Access policy for the compact sampled history. */
+struct HistoryConfig {
+  /** Optional compact-history JSON file. */
+  std::optional<std::filesystem::path> file;
+  /** Load compatible compact contexts when the file exists. */
+  bool read{true};
+  /** Replace or update the compact file during normal process shutdown. */
+  bool write{true};
+  /** Maximum configurations written per context; omission writes all. */
+  std::optional<std::size_t> sampleCount;
+};
+
+/** @brief Access policy for the complete raw-sample history. */
+struct CompleteHistoryConfig {
+  /** Optional complete-history JSON file. */
+  std::optional<std::filesystem::path> file;
+  /** Load compatible complete contexts when the file exists. */
+  bool read{true};
+  /** Replace or update the complete file during normal process shutdown. */
+  bool write{true};
+};
+
 /** @brief Complete, copyable policy used to construct one or more tuners.
  *
  * A tuner snapshots this aggregate at construction. Configuration controls
@@ -67,9 +89,9 @@ struct TunerConfig {
   TuningMode mode{TuningMode::onlineAdaptive};
   /** Untimed launches at the beginning of every queue activation. */
   std::size_t warmupRuns{1u};
-  /** Maximum number of recorded (non-warm-up) runs per configuration. */
+  /** Maximum new-run measurements per configuration in online-fixed mode. */
   std::size_t runsPerCandidate{1u};
-  /** CI convergence may retire a configuration once this many runs exist. */
+  /** New-run measurements required before fixed-mode CI retirement. */
   std::size_t minimumRunsPerCandidate{1u};
   /** Recompute the fixed-mode confidence interval at this sample cadence. */
   std::size_t ciCheckInterval{10u};
@@ -89,9 +111,9 @@ struct TunerConfig {
   std::size_t noiseCancellationWindow{50u};
   /** Launches in one queue activation, including warm-up launches. */
   std::size_t maxConsecutiveRuns{3u};
-  /** Consecutive rejected strategy proposals before tuning terminates. */
+  /** Consecutive rejected proposals allowed in one bounded refill attempt. */
   std::size_t maximumConsecutiveStrategyRetries{20u};
-  /** Online-fixed completion guard on total launches. */
+  /** Online-fixed completion guard on launches in the current online run. */
   std::optional<std::size_t> maximumExecutions;
   /** Alternative online-fixed completion guard on retired configurations. */
   std::optional<std::size_t> maximumRetiredConfigurations;
@@ -111,12 +133,10 @@ struct TunerConfig {
   StrategyKind strategy{StrategyKind::exhaustive};
   /** Reproducible seed shared by strategy and tuner admission randomness. */
   std::uint64_t randomSeed{0u};
-  /** Optional process-shared JSON history file. */
-  std::optional<std::filesystem::path> persistenceFile;
-  /** Load compatible contexts from persistenceFile when it exists. */
-  bool persistenceRead{true};
-  /** Replace or update persistenceFile during normal process shutdown. */
-  bool persistenceWrite{true};
+  /** Compact sampled history policy. */
+  HistoryConfig history;
+  /** Complete raw-sample history policy. */
+  CompleteHistoryConfig completeHistory;
   /** Optional override for the model used by the learned-hybrid strategy. */
   std::filesystem::path learnedModelFile{
 #ifdef ALPAKA_TUNE_DEFAULT_MODEL
@@ -215,21 +235,26 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
   if (!root.IsMap())
     throw std::runtime_error{
         "alpakaTune YAML configuration must contain a map."};
-  rejectUnknown(root, {"schema_version", "tuning", "persistence", "learning"},
-                "root");
+  rejectUnknown(
+      root,
+      {"schema_version", "tuning", "history", "complete_history", "learning"},
+      "root");
   if (!root["schema_version"])
     throw std::runtime_error{"Missing YAML key: schema_version"};
   auto const schemaVersion = root["schema_version"].as<int>();
-  if (schemaVersion != 1 && schemaVersion != 2)
+  if (schemaVersion != 1 && schemaVersion != 2 && schemaVersion != 3)
     throw std::runtime_error{
-        "Unsupported alpakaTune YAML schema_version; expected 1 or 2."};
+        "Unsupported alpakaTune YAML schema_version; expected 1, 2, or 3."};
   if (!root["tuning"] || !root["tuning"].IsMap())
     throw std::runtime_error{"Missing YAML map: tuning"};
-  if (root["persistence"] && !root["persistence"].IsMap())
-    throw std::runtime_error{"YAML persistence must contain a map."};
+  if (root["history"] && !root["history"].IsMap())
+    throw std::runtime_error{"YAML history must contain a map."};
+  if (root["complete_history"] && !root["complete_history"].IsMap())
+    throw std::runtime_error{"YAML complete_history must contain a map."};
 
   auto const tuning = root["tuning"];
-  auto const persistence = root["persistence"];
+  auto const history = root["history"];
+  auto const completeHistory = root["complete_history"];
   auto const learning = root["learning"];
   if (learning && schemaVersion < 2)
     throw std::runtime_error{
@@ -262,9 +287,15 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
                  "score_temperature_end",
                  "horizon_offset_with_active_history"},
                 "tuning");
-  if (persistence)
-    rejectUnknown(persistence, {"file", "directory", "read", "write"},
-                  "persistence");
+  if ((history || completeHistory) && schemaVersion < 3)
+    throw std::runtime_error{
+        "YAML history configuration requires schema_version: 3."};
+  if (history)
+    rejectUnknown(history, {"file", "read", "write", "sample_count"},
+                  "history");
+  if (completeHistory)
+    rejectUnknown(completeHistory, {"file", "read", "write"},
+                  "complete_history");
   if (learning)
     rejectUnknown(
         learning,
@@ -358,25 +389,28 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
   if (defaults.maxConsecutiveRuns <= defaults.warmupRuns)
     throw std::runtime_error{"YAML max_consecutive_runs must exceed "
                              "warmup_runs so every activation is measured."};
-  if (persistence && persistence["file"] && persistence["directory"])
-    throw std::runtime_error{
-        "YAML persistence must define either file or directory, not both."};
-  if (persistence && persistence["file"]) {
-    auto const file = persistence["file"].as<std::string>();
+  if (history && history["file"]) {
+    auto const file = history["file"].as<std::string>();
     if (file.empty())
-      throw std::runtime_error{"YAML persistence.file must not be empty."};
-    defaults.persistenceFile = file;
-  } else if (persistence && persistence["directory"]) {
-    auto const directory = persistence["directory"].as<std::string>();
-    if (directory.empty())
-      throw std::runtime_error{"YAML persistence.directory must not be empty."};
-    defaults.persistenceFile =
-        std::filesystem::path{directory} / "history.json";
+      throw std::runtime_error{"YAML history.file must not be empty."};
+    defaults.history.file = file;
   }
-  if (persistence && persistence["read"])
-    defaults.persistenceRead = persistence["read"].as<bool>();
-  if (persistence && persistence["write"])
-    defaults.persistenceWrite = persistence["write"].as<bool>();
+  if (history && history["read"])
+    defaults.history.read = history["read"].as<bool>();
+  if (history && history["write"])
+    defaults.history.write = history["write"].as<bool>();
+  if (history && history["sample_count"])
+    defaults.history.sampleCount = requirePositive(history, "sample_count");
+  if (completeHistory && completeHistory["file"]) {
+    auto const file = completeHistory["file"].as<std::string>();
+    if (file.empty())
+      throw std::runtime_error{"YAML complete_history.file must not be empty."};
+    defaults.completeHistory.file = file;
+  }
+  if (completeHistory && completeHistory["read"])
+    defaults.completeHistory.read = completeHistory["read"].as<bool>();
+  if (completeHistory && completeHistory["write"])
+    defaults.completeHistory.write = completeHistory["write"].as<bool>();
   if (learning && learning["model"]) {
     auto const model = learning["model"].as<std::string>();
     if (model.empty())
@@ -496,9 +530,19 @@ inline void TunerConfig::validate() const {
     throw std::invalid_argument{
         "TunerConfig::runsPerCandidate must not exceed historyWindowSize in "
         "online-fixed mode."};
-  if (persistenceFile && persistenceFile->empty())
+  if (history.file && history.file->empty())
     throw std::invalid_argument{
-        "TunerConfig::persistenceFile must contain a non-empty path."};
+        "TunerConfig::history.file must contain a non-empty path."};
+  if (completeHistory.file && completeHistory.file->empty())
+    throw std::invalid_argument{
+        "TunerConfig::completeHistory.file must contain a non-empty path."};
+  if (history.sampleCount)
+    positive(*history.sampleCount, "TunerConfig::history.sampleCount");
+  if (history.file && completeHistory.file &&
+      std::filesystem::absolute(*history.file).lexically_normal() ==
+          std::filesystem::absolute(*completeHistory.file).lexically_normal())
+    throw std::invalid_argument{
+        "Compact and complete history must use different files."};
   if (learnedFallback != StrategyKind::random)
     throw std::invalid_argument{"TunerConfig::learnedFallback currently "
                                 "supports only StrategyKind::random."};

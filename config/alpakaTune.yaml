@@ -1,5 +1,5 @@
 # Default alpakaTune tuner configuration.
-schema_version: 2
+schema_version: 3
 tuning:
   # offline, online_fixed, or online_adaptive
   mode: online_adaptive
@@ -42,8 +42,14 @@ tuning:
   score_temperature_start: 0.25
   score_temperature_end: 0.05
   horizon_offset_with_active_history: 0.8
-persistence:
+history:
   file: .alpakaTune/history.json
+  read: true
+  write: true
+  # Omit sample_count to persist every measured configuration.
+  sample_count: 100
+complete_history:
+  file: .alpakaTune/complete-history.json
   read: true
   write: true
 learning:

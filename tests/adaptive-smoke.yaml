@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 tuning:
   mode: online_adaptive
   strategy: exhaustive
@@ -10,5 +10,9 @@ tuning:
   max_consecutive_runs: 1
   horizon: 1
   history_window_size: 1
-persistence:
-  file: .alpakaTune/smoke-history.json
+history:
+  read: false
+  write: false
+complete_history:
+  read: false
+  write: false
