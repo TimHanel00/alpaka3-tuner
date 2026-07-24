@@ -84,7 +84,7 @@ def collect(root: Path) -> dict[str, dict[tuple, dict[str, dict]]]:
     examples: dict[str, dict[tuple, dict[str, dict]]] = defaultdict(
         lambda: defaultdict(dict)
     )
-    for history_path in sorted(root.glob("*/*/history.json")):
+    for history_path in sorted(root.glob("*/*/complete-history.json")):
         example = history_path.parents[1].name
         strategy = history_path.parent.name
         try:

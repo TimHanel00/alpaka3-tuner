@@ -121,7 +121,7 @@ def successful_run(
     expected_model_runtime_digest: str | None = None,
 ) -> bool:
     metadata = directory / "run.json"
-    history = directory / "history.json"
+    history = directory / "complete-history.json"
     if not metadata.exists() or not history.exists():
         return False
     try:
@@ -201,7 +201,7 @@ def benchmark_configuration(
             configuration["learning"] = learning
         if not isinstance(learning, dict):
             raise ValueError("configuration learning section must be a map")
-        configuration["schema_version"] = 2
+        configuration["schema_version"] = 3
         learning["model"] = str(model.resolve())
         if learned_candidate_pool_size is not None:
             learning["candidate_pool_size"] = learned_candidate_pool_size
@@ -209,7 +209,10 @@ def benchmark_configuration(
             learning["candidate_batch_size"] = learned_candidate_batch_size
     elif isinstance(learning, dict):
         learning.pop("model", None)
-    configuration["persistence"] = {"file": str(history)}
+    configuration["schema_version"] = 3
+    configuration.pop("persistence", None)
+    configuration["history"] = {"read": False, "write": False}
+    configuration["complete_history"] = {"file": str(history)}
     return configuration
 
 
@@ -574,7 +577,7 @@ def run_pair(
 ) -> bool:
     directory = output / example / strategy
     directory.mkdir(parents=True, exist_ok=True)
-    history = (directory / "history.json").resolve()
+    history = (directory / "complete-history.json").resolve()
     configuration_path = (directory / "tuning.yaml").resolve()
 
     configuration = benchmark_configuration(

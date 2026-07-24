@@ -51,7 +51,9 @@ class VisualizeTest(unittest.TestCase):
                         }
                     },
                 }
-                (directory / "history.json").write_text(json.dumps(history), encoding="utf-8")
+                (directory / "complete-history.json").write_text(
+                    json.dumps(history), encoding="utf-8"
+                )
 
             collected = visualize.collect(root)
             self.assertEqual(

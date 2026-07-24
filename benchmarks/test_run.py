@@ -194,7 +194,7 @@ class FullCoverageConfigurationTest(unittest.TestCase):
         generated = run.benchmark_configuration(
             base,
             "exhaustive",
-            Path("history.json"),
+            Path("complete-history.json"),
             250_000,
             None,
             True,
@@ -213,14 +213,22 @@ class FullCoverageConfigurationTest(unittest.TestCase):
         self.assertNotIn(
             "horizon_offset_with_active_history", generated["tuning"]
         )
-        self.assertEqual(generated["persistence"]["file"], "history.json")
+        self.assertEqual(
+            generated["complete_history"]["file"], "complete-history.json"
+        )
+        self.assertEqual(
+            generated["history"], {"read": False, "write": False}
+        )
+        self.assertNotIn("persistence", generated)
         self.assertIn("maximum_executions", base["tuning"])
         self.assertIn("horizon", base["tuning"])
 
     def test_resume_requires_a_verified_full_coverage_run(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            (directory / "history.json").write_text("{}", encoding="utf-8")
+            (directory / "complete-history.json").write_text(
+                "{}", encoding="utf-8"
+            )
             (directory / "run.json").write_text(
                 json.dumps({"status": "completed", "full_coverage_verified": False}),
                 encoding="utf-8",
