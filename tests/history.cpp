@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
 
 namespace {
@@ -35,6 +36,13 @@ namespace {
   return cache;
 }
 
+[[nodiscard]] auto readText(std::filesystem::path const &path) -> std::string {
+  auto input = std::ifstream{path};
+  auto content = std::ostringstream{};
+  content << input.rdbuf();
+  return content.str();
+}
+
 } // namespace
 
 auto main() -> int {
@@ -42,8 +50,7 @@ auto main() -> int {
   auto const four =
       alpakaTune::detail::sampledHistoryContext(stagedHistory(4u));
   if (four != alpakaTune::detail::sampledHistoryContext(stagedHistory(4u)) ||
-      four.at("configurations").size() != 4u ||
-      !four.contains("adapter"))
+      four.at("configurations").size() != 4u || !four.contains("adapter"))
     return EXIT_FAILURE;
   auto previousRuntime = 0.0;
   for (std::size_t rank = 0u; rank < four.at("configurations").size(); ++rank) {
@@ -63,8 +70,7 @@ auto main() -> int {
           .get<std::size_t>() == 5u)
     return EXIT_FAILURE;
 
-  auto const two =
-      alpakaTune::detail::sampledHistoryContext(stagedHistory(2u));
+  auto const two = alpakaTune::detail::sampledHistoryContext(stagedHistory(2u));
   if (two.at("configurations").size() != 2u ||
       two.at("configurations").at(0).at("configuration").at("value") != 0u ||
       two.at("configurations").at(1).at("configuration").at("value") != 1u)
@@ -89,10 +95,8 @@ auto main() -> int {
   input >> persisted;
   if (persisted.at("schema_version") !=
           alpakaTune::detail::historySchemaVersion ||
-      persisted.at("contexts")
-              .at("context")
-              .at("configurations")
-              .size() != 4u ||
+      persisted.at("contexts").at("context").at("configurations").size() !=
+          4u ||
       !persisted.at("contexts").at("context").contains("adapter"))
     return EXIT_FAILURE;
 
@@ -119,13 +123,38 @@ auto main() -> int {
       !merged.at("contexts").contains("second"))
     return EXIT_FAILURE;
   std::filesystem::remove(path);
+
+  auto const explicitHistoryPath = std::filesystem::temp_directory_path() /
+                                   "alpakaTune-explicit-history-test.json";
+  auto const explicitCompletePath =
+      std::filesystem::temp_directory_path() /
+      "alpakaTune-explicit-complete-history-test.json";
+  std::filesystem::remove(explicitHistoryPath);
+  std::filesystem::remove(explicitCompletePath);
+  alpakaTune::detail::historyStore(explicitHistoryPath, false, true)
+      ->stageCache("explicit",
+                   std::make_shared<nlohmann::json>(stagedHistory(3u)));
+  alpakaTune::detail::completeHistoryStore(explicitCompletePath, false, true)
+      ->stageCache(17, "explicit",
+                   std::make_shared<nlohmann::json>(
+                       nlohmann::json{{"execution_count", 9u}}));
+  alpakaTune::flushPersistence();
+  auto const explicitHistory = readText(explicitHistoryPath);
+  auto const explicitComplete = readText(explicitCompletePath);
+  if (explicitHistory.empty() || explicitComplete.empty())
+    return EXIT_FAILURE;
+  alpakaTune::flushPersistence();
+  if (readText(explicitHistoryPath) != explicitHistory ||
+      readText(explicitCompletePath) != explicitComplete)
+    return EXIT_FAILURE;
+  std::filesystem::remove(explicitHistoryPath);
+  std::filesystem::remove(explicitCompletePath);
 #endif
 
   auto history = alpakaTune::detail::RuntimeHistory{
       {.historyWindowSize = 3u, .automaticRetirement = false}};
   history.restoreSummary(1.25, 10u);
-  if (history.samples().size() != 3u ||
-      history.currentRunSampleCount() != 0u ||
+  if (history.samples().size() != 3u || history.currentRunSampleCount() != 0u ||
       history.statistics().sampleCount != 3u ||
       history.statistics().estimate() != 1.25)
     return EXIT_FAILURE;

@@ -93,8 +93,15 @@ Each store has its own ``file``, ``read``, and ``write`` controls:
 
 Omitting a file also makes that store process-local. Compact and complete
 history must not name the same file because their schemas are unrelated.
-Normal return and ``std::exit`` run the static store destructors; abnormal
-termination cannot guarantee either write.
+
+Applications with an explicit end-of-run boundary should call
+``alpakaTune::flushPersistence()`` after every thread performing tuned
+launches has joined. The call writes each staged store once, reports
+serialization and I/O failures to the caller, and is idempotent after a
+successful write. Static store destructors provide a fallback for applications
+that do not call it; destructor-time failures cannot be reported. Normal return
+and ``std::exit`` run those destructors, while abnormal termination cannot
+guarantee either write.
 
 Schema and identity
 -------------------

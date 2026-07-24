@@ -46,17 +46,29 @@ struct CompleteHistoryStore {
   ~CompleteHistoryStore() noexcept {
 #if ALPAKA_TUNE_HAS_JSON
     try {
-      std::lock_guard lock{mutex};
-      if (file && writeFile && !pendingCaches.empty()) {
-        auto caches = std::unordered_map<std::string, nlohmann::json>{};
-        caches.reserve(pendingCaches.size());
-        for (auto const &[fingerprint, cache] : pendingCaches)
-          caches.emplace(fingerprint, *cache);
-        mergeAndWrite(schemaVersion, caches);
-        pendingCaches.clear();
-      }
+      flush();
     } catch (...) {
       // Static destruction cannot report persistence failures to the caller.
+    }
+#endif
+  }
+
+  /** @brief Write the newest staged snapshots exactly once.
+   *
+   * Applications should call this after all tuning work has joined so I/O
+   * failures can be reported normally. The destructor remains a fallback for
+   * callers that do not provide an explicit end-of-run boundary.
+   */
+  void flush() {
+#if ALPAKA_TUNE_HAS_JSON
+    std::lock_guard lock{mutex};
+    if (file && writeFile && !pendingCaches.empty()) {
+      auto caches = std::unordered_map<std::string, nlohmann::json>{};
+      caches.reserve(pendingCaches.size());
+      for (auto const &[fingerprint, cache] : pendingCaches)
+        caches.emplace(fingerprint, *cache);
+      mergeAndWrite(schemaVersion, caches);
+      pendingCaches.clear();
     }
 #endif
   }
@@ -245,17 +257,28 @@ struct HistoryStore {
   ~HistoryStore() noexcept {
 #if ALPAKA_TUNE_HAS_JSON
     try {
-      std::lock_guard lock{mutex};
-      if (file && writeFile && !pendingCaches.empty()) {
-        auto contexts = std::unordered_map<std::string, nlohmann::json>{};
-        contexts.reserve(pendingCaches.size());
-        for (auto const &[fingerprint, cache] : pendingCaches)
-          contexts.emplace(fingerprint, sampledHistoryContext(*cache));
-        mergeAndWrite(contexts);
-        pendingCaches.clear();
-      }
+      flush();
     } catch (...) {
       // Static destruction cannot report persistence failures to the caller.
+    }
+#endif
+  }
+
+  /** @brief Sample and write the newest staged histories exactly once.
+   *
+   * Applications should call this after all tuning work has joined so
+   * serialization and I/O failures remain observable.
+   */
+  void flush() {
+#if ALPAKA_TUNE_HAS_JSON
+    std::lock_guard lock{mutex};
+    if (file && writeFile && !pendingCaches.empty()) {
+      auto contexts = std::unordered_map<std::string, nlohmann::json>{};
+      contexts.reserve(pendingCaches.size());
+      for (auto const &[fingerprint, cache] : pendingCaches)
+        contexts.emplace(fingerprint, sampledHistoryContext(*cache));
+      mergeAndWrite(contexts);
+      pendingCaches.clear();
     }
 #endif
   }
@@ -344,18 +367,38 @@ public:
     return store;
   }
 
+  /** @brief Flush every process-shared complete-history store. */
+  void flush() {
+    auto snapshot = std::vector<std::shared_ptr<CompleteHistoryStore>>{};
+    {
+      std::lock_guard lock{mutex};
+      snapshot.reserve(stores.size());
+      for (auto const &[key, store] : stores) {
+        static_cast<void>(key);
+        snapshot.push_back(store);
+      }
+    }
+    for (auto const &store : snapshot)
+      store->flush();
+  }
+
 private:
   std::mutex mutex;
   std::unordered_map<std::string, std::shared_ptr<CompleteHistoryStore>> stores;
 };
+
+/** @brief Access the process-wide complete-history registry itself. */
+inline auto completeHistoryRegistry() -> CompleteHistoryRegistry & {
+  static CompleteHistoryRegistry registry;
+  return registry;
+}
 
 /** @brief Access the process-wide complete-history registry. */
 inline auto
 completeHistoryStore(std::optional<std::filesystem::path> file = std::nullopt,
                      bool readFile = true, bool writeFile = true)
     -> std::shared_ptr<CompleteHistoryStore> {
-  static CompleteHistoryRegistry registry;
-  return registry.get(std::move(file), readFile, writeFile);
+  return completeHistoryRegistry().get(std::move(file), readFile, writeFile);
 }
 
 class HistoryRegistry {
@@ -379,18 +422,53 @@ public:
     return store;
   }
 
+  /** @brief Flush every process-shared compact-history store. */
+  void flush() {
+    auto snapshot = std::vector<std::shared_ptr<HistoryStore>>{};
+    {
+      std::lock_guard lock{mutex};
+      snapshot.reserve(stores.size());
+      for (auto const &[key, store] : stores) {
+        static_cast<void>(key);
+        snapshot.push_back(store);
+      }
+    }
+    for (auto const &store : snapshot)
+      store->flush();
+  }
+
 private:
   std::mutex mutex;
   std::unordered_map<std::string, std::shared_ptr<HistoryStore>> stores;
 };
+
+/** @brief Access the process-wide compact-history registry itself. */
+inline auto historyRegistry() -> HistoryRegistry & {
+  static HistoryRegistry registry;
+  return registry;
+}
 
 /** @brief Access the process-wide compact-history registry. */
 inline auto
 historyStore(std::optional<std::filesystem::path> file = std::nullopt,
              bool readFile = true, bool writeFile = true)
     -> std::shared_ptr<HistoryStore> {
-  static HistoryRegistry registry;
-  return registry.get(std::move(file), readFile, writeFile);
+  return historyRegistry().get(std::move(file), readFile, writeFile);
 }
 
 } // namespace alpakaTune::detail
+
+namespace alpakaTune {
+
+/** @brief Persist all staged histories at an application end-of-run boundary.
+ *
+ * Call this only after all threads performing tuned launches have joined.
+ * Successful stores are idempotent: their destructors will not write again.
+ * Unlike destructor fallback, failures are reported to the caller.
+ */
+inline void flushPersistence() {
+  detail::completeHistoryRegistry().flush();
+  detail::historyRegistry().flush();
+}
+
+} // namespace alpakaTune
