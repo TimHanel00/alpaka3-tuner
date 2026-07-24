@@ -50,7 +50,7 @@ once at normal process shutdown:
 
 .. code-block:: yaml
 
-   schema_version: 2
+   schema_version: 3
    tuning:
      mode: online_adaptive
      strategy: learned_hybrid
@@ -60,8 +60,13 @@ once at normal process shutdown:
      history_window_size: 12
      horizon: 40000
      horizon_offset_with_active_history: 0.8
-   persistence:
+   history:
      file: learned-history.json
+     read: false
+     write: true
+     sample_count: 100
+   complete_history:
+     file: learned-complete-history.json
      read: false
      write: true
    learning:
@@ -71,10 +76,9 @@ once at normal process shutdown:
      candidate_batch_size: 256
 
 ``read: false`` means that an old file cannot influence this run. ``write:
-true`` does not cause per-launch JSON writes: the in-memory histories are
-serialized once by the process-wide persistence store during normal shutdown.
-If the file already exists, it is replaced because its contents were
-explicitly excluded from this run.
+true`` does not cause per-launch file writes: both in-memory stores flush once
+during normal shutdown. Existing files are replaced because their contents
+were explicitly excluded from this run.
 
 Continue learned adaptation without modifying history
 ------------------------------------------------------
@@ -84,6 +88,7 @@ path, but changes only the access policy:
 
 .. code-block:: yaml
 
+   schema_version: 3
    tuning:
      mode: online_adaptive
      strategy: learned_hybrid
@@ -92,8 +97,12 @@ path, but changes only the access policy:
      history_window_size: 12
      horizon: 40000
      horizon_offset_with_active_history: 0.8
-   persistence:
+   history:
      file: learned-history.json
+     read: true
+     write: false
+   complete_history:
+     file: learned-complete-history.json
      read: true
      write: false
    learning:
@@ -110,16 +119,61 @@ functions receive
 
 where ``h`` is ``horizon_offset_with_active_history``. With the default 0.8,
 the second run begins at schedule position 0.8 and stretches the remaining
-0.2 across all new ``horizon`` launches. The cumulative execution counter
-stored for provenance does not shorten this new horizon.
+0.2 across all new ``horizon`` launches. Candidate run counts and execution
+counters restart at zero, while the retained timings remain in their original
+rolling histories. Those old samples inform the strategy but do not consume
+the new run's measurement or horizon counts.
 
-The learned residual adapter resumes as well. The history stores its
+The learned residual adapter resumes from compact history first. Both files
+store its
 coefficients, retained residual observations, partial update-batch progress,
 and update count. Restore occurs only when the tuner fingerprint and exact
 model-artifact digest are compatible. Timing history remains usable if this
-optional adapter state is absent or invalid. ``write: false`` guarantees that
-the input file remains unchanged even though the in-memory adapter continues
+optional adapter state is absent or invalid. A valid compact adapter wins over
+the duplicated complete-history state. ``write: false`` guarantees that both
+input files remain unchanged even though the in-memory adapter continues
 learning during the second run.
+
+Retune online-fixed with history
+--------------------------------
+
+A completed fixed run may also seed another fixed run. Both runs use the same
+mode and limits; only the history access policy needs to change:
+
+.. code-block:: yaml
+
+   schema_version: 3
+   tuning:
+     mode: online_fixed
+     strategy: learned_hybrid
+     warmup_runs: 1
+     runs_per_candidate: 4
+     minimum_runs_per_candidate: 4
+     noise_cancellation_window: 20
+     max_consecutive_runs: 5
+     maximum_executions: 20000
+     maximum_retired_configurations: null
+     history_window_size: 12
+   history:
+     file: fixed-history.json
+     read: true
+     write: false
+   complete_history:
+     file: fixed-complete-history.json
+     read: true
+     write: false
+   learning:
+     model: /path/to/model.atml
+
+For a fresh first run, set both ``read`` flags to ``false`` and the desired
+``write`` flags to ``true``. In the second run above, each candidate keeps its
+loaded timing window and the learned strategy restores its compatible adapter.
+Nevertheless, every candidate's run-local sample count, the global execution
+count, scheduler residency, and terminal state start again from zero. The
+retained samples therefore inform estimates, but each candidate can still
+contribute four new measurements before its current-run cap is reached. The
+earlier terminal winner is not replayed unless the second run independently
+reaches a terminal condition.
 
 Collect random, then replay offline
 -----------------------------------
@@ -128,6 +182,7 @@ A strategy-independent history can first be collected with random proposals:
 
 .. code-block:: yaml
 
+   schema_version: 3
    tuning:
      mode: online_adaptive
      strategy: random
@@ -137,7 +192,7 @@ A strategy-independent history can first be collected with random proposals:
      history_window_size: 12
      horizon: 40000
      horizon_offset_with_active_history: 0.8
-   persistence:
+   history:
      file: random-history.json
      read: false
      write: true
@@ -146,10 +201,11 @@ The subsequent replay needs no schedule or fixed-mode limit:
 
 .. code-block:: yaml
 
+   schema_version: 3
    tuning:
      mode: offline
      strategy: random
-   persistence:
+   history:
      file: random-history.json
      read: true
      write: false

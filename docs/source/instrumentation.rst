@@ -46,8 +46,9 @@ configured admission and cooling horizon has been reached. The tuner remains
 active: later calls still recommend, measure, revisit configurations, and
 update the residual adapter. Therefore ``completed()`` is policy information,
 not an instruction from the library to stop the application.
-``isTuningComplete()`` remains the stricter terminal-state query and stays
-false throughout adaptive mode.
+``isTuningComplete()`` reports the same adaptive horizon completion while the
+internal scheduler remains active. ``completionReason()`` stays unavailable
+because no terminal replay state was entered.
 
 Reuse one ``TunerConfig`` for several tuners when they should share settings
 and optional history access; every tuner still owns independent runtime state.

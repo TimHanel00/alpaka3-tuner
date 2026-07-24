@@ -15,9 +15,13 @@ selected by ``ALPAKA_TUNE_CONFIG`` when set.
    config.horizonOffsetWithActiveHistory = 0.8;
    config.maximumConsecutiveStrategyRetries = 20u;
    config.historyWindowSize = 10u;
-   config.persistenceFile = ".my-tuning-cache/history.json";
-   config.persistenceRead = true;
-   config.persistenceWrite = false; // Reuse history without changing it.
+   config.history.file = ".my-tuning-cache/history.json";
+   config.history.read = true;
+   config.history.write = false;
+   config.history.sampleCount = 100u;
+   config.completeHistory.file = ".my-tuning-cache/complete-history.json";
+   config.completeHistory.read = true;
+   config.completeHistory.write = false;
 
 The type is an aggregate, so direct construction is also supported:
 
@@ -33,22 +37,24 @@ The type is an aggregate, so direct construction is also supported:
        .maximumConsecutiveStrategyRetries = 20u,
        .maximumExecutions = 100u,
        .strategy = alpakaTune::StrategyKind::exhaustive,
-       .persistenceFile = ".alpakaTune/vector-add.json"};
+       .history = {.file = ".alpakaTune/vector-add-history.json"},
+       .completeHistory =
+           {.file = ".alpakaTune/vector-add-complete-history.json"}};
 
 ``makeTuner`` snapshots its configuration. Later mutations affect only tuners
 created afterward. The same ``TunerConfig`` can create multiple tuners. They
 keep independent candidates, measurements, and winners; when
-``persistenceFile`` and its access policy are equal, they share the internal
-persistence store and their fingerprinted records coexist in that file. With
-no ``persistenceFile``, compatible tuners in the same process still share
-staged records in memory, but perform no filesystem I/O.
+the corresponding history file and access policy are equal, they share that
+store and their fingerprinted records coexist in the file. Compact and
+complete stores are independent. With no file, compatible tuners still share
+that store's staged records in memory but perform no filesystem I/O.
 
-YAML schema version 2 adds the optional learned-model section. Schema version
-1 remains accepted for existing non-learned configurations:
+YAML schema version 3 adds independent compact and complete histories. Schemas
+1 and 2 remain accepted only when they do not configure persistence:
 
 .. code-block:: yaml
 
-   schema_version: 2
+   schema_version: 3
    tuning:
      mode: online_adaptive
      strategy: exhaustive
@@ -72,8 +78,13 @@ YAML schema version 2 adds the optional learned-model section. Schema version
      score_temperature_start: 0.25
      score_temperature_end: 0.05
      horizon_offset_with_active_history: 0.8
-   persistence:
+   history:
      file: .alpakaTune/history.json
+     read: true
+     write: true
+     sample_count: 100
+   complete_history:
+     file: .alpakaTune/complete-history.json
      read: true
      write: true
    learning:
@@ -83,7 +94,7 @@ YAML schema version 2 adds the optional learned-model section. Schema version
      candidate_pool_size: 4096
      candidate_batch_size: 256
 
-The complete persistence access matrix is:
+Each store independently uses this access matrix:
 
 .. list-table::
    :header-rows: 1
@@ -107,11 +118,12 @@ The complete persistence access matrix is:
      - ``false``
      - Use only process-local staged history.
 
-Both flags default to ``true`` for backward compatibility when ``file`` is
-present. The entire ``persistence`` map, or just its ``file`` key, may be
-omitted. Without a file the flags have no filesystem effect and history stays
-process-local. See :doc:`history_workflows` for complete fresh-collection,
-read-only adaptive continuation, and offline-replay configurations.
+Both flags default to ``true``. Either store map or its ``file`` key may be
+omitted. Without a file its flags have no filesystem effect and that history
+stays process-local. ``sample_count`` is optional, positive, and affects only
+compact-history writes. The two stores cannot use the same path. See
+:doc:`history_workflows` for collection, adaptive continuation, and replay
+configurations.
 
 Unknown keys and invalid values are rejected. ``online_adaptive`` is the
 default. In ``online_fixed``, ``runsPerCandidate`` is the hard measurement cap
@@ -133,9 +145,15 @@ to ``20``. Its YAML spelling is
 immediately replaced by a fresh strategy call. An accepted proposal resets the
 retry streak. If active queue entries still exist, reaching the limit pauses
 refill until a completed activation changes the admission context. Reaching
-the limit with an empty queue enters a terminal state with completion reason
-``maximum_consecutive_strategy_retries``. ``TunerInfo`` exposes both the
-configured maximum and the current ``consecutiveStrategyRetries`` value.
+the limit with an empty ``online_fixed`` queue enters a terminal state with
+completion reason ``maximum_consecutive_strategy_retries``. In
+``online_adaptive``, the tuner instead reopens the best measured history entry
+as a measured progress fallback and retries the strategy during later refills.
+This keeps the host-side work bounded without creating a winner or ending
+adaptation. ``TunerInfo`` exposes the configured maximum, the current
+``consecutiveStrategyRetries`` value, the cumulative
+``strategyRetryLimitReachedCount``, and the adaptive subset
+``adaptiveRetryFallbackCount``.
 Set ``maximum_executions: null`` in YAML when a fixed run should use only the
 retired-configuration guard.
 This does not configure the surrounding application's loop. Applications own
