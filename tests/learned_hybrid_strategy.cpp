@@ -184,8 +184,10 @@ auto main() -> int {
   makeArtifact(modelPath);
 
   auto const loaded = alpakaTune::loadLearnedModelArtifact(modelPath);
+  auto const loadedAgain = alpakaTune::loadLearnedModelArtifact(modelPath);
   if (!loaded || loaded.artifact->ensembleSize() != 3u ||
-      loaded.artifact->dimensionFeatureCount() != 18u)
+      loaded.artifact->dimensionFeatureCount() != 18u || !loadedAgain ||
+      loadedAgain.artifact != loaded.artifact)
     return EXIT_FAILURE;
 
   auto model = alpakaTune::NativeDeepSetsModel{loaded.artifact, descriptor()};

@@ -14,11 +14,13 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -358,7 +360,7 @@ struct LearnedModelArtifactBuilder {
  * metadata, then contiguous little-endian float32 tensors in metadata order.
  */
 [[nodiscard]] inline auto
-loadLearnedModelArtifact(std::filesystem::path const &path)
+loadLearnedModelArtifactUncached(std::filesystem::path const &path)
     -> LearnedModelLoadResult {
 #if !defined(ALPAKA_TUNE_HAS_JSON) || !ALPAKA_TUNE_HAS_JSON
   static_cast<void>(path);
@@ -512,6 +514,24 @@ loadLearnedModelArtifact(std::filesystem::path const &path)
                                     error.what());
   }
 #endif
+}
+
+/** Load one immutable deployment artifact at most once per process and path. */
+[[nodiscard]] inline auto
+loadLearnedModelArtifact(std::filesystem::path const &path)
+    -> LearnedModelLoadResult {
+  static auto mutex = std::mutex{};
+  static auto artifacts =
+      std::unordered_map<std::string, LearnedModelLoadResult>{};
+  auto const normalized =
+      std::filesystem::absolute(path).lexically_normal().string();
+  auto lock = std::lock_guard{mutex};
+  if (auto const found = artifacts.find(normalized); found != artifacts.end())
+    return found->second;
+  auto loaded = loadLearnedModelArtifactUncached(path);
+  if (loaded)
+    artifacts.emplace(normalized, loaded);
+  return loaded;
 }
 
 } // namespace alpakaTune
