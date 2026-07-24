@@ -182,11 +182,28 @@ auto main() -> int {
       firstObservation.recommendationSeconds < 0.0 ||
       firstObservation.learnedStatus)
     return EXIT_FAILURE;
+  auto const shortKernelWarningExpected =
+      *firstObservation.runtimeSeconds < 200.0e-6;
+  auto const firstTunerInfo = tuner.info();
+  if (firstTunerInfo.instrumentationOverheadWarning.has_value() !=
+      shortKernelWarningExpected)
+    return EXIT_FAILURE;
+  if (firstTunerInfo.instrumentationOverheadWarning) {
+    auto const &warning = *firstTunerInfo.instrumentationOverheadWarning;
+    if (warning.observedRuntimeSeconds != *firstObservation.runtimeSeconds ||
+        warning.thresholdSeconds != 200.0e-6 ||
+        warning.estimatedOverheadMinimumSeconds != 20.0e-6 ||
+        warning.estimatedOverheadMaximumSeconds != 40.0e-6)
+      return EXIT_FAILURE;
+  }
   for (std::size_t launch = 1u; launch < 6u; ++launch)
     tuner.enqueue(queue, frameSpec, bundle);
   if (!tuner.isTuningComplete() || tuner.bestCandidateIndex() >= 3u ||
       tuner.completionReason() !=
           alpakaTune::TunerCompletionReason::allConfigurations)
+    return EXIT_FAILURE;
+  if (shortKernelWarningExpected &&
+      !tuner.info().instrumentationOverheadWarning)
     return EXIT_FAILURE;
   if (tuner.lastCandidateIndex() == std::numeric_limits<std::size_t>::max())
     return EXIT_FAILURE;

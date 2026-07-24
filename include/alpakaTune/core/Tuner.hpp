@@ -26,6 +26,7 @@
 #include <fstream>
 #include <functional>
 #include <iomanip>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -412,6 +413,7 @@ public:
                 : std::nullopt,
         .loadedFromCache = m_loadedFromCache,
         .executionBudgetReached = m_executionBudgetReached,
+        .instrumentationOverheadWarning = m_instrumentationOverheadWarning,
         .bestCandidateIndex = std::nullopt,
         .bestConfiguration = std::nullopt,
         .learnedStatus = std::nullopt,
@@ -458,6 +460,12 @@ public:
    * The application owns call count and lifetime. Depending on mode and queue
    * state, the launch may be a warm-up, measurement, adaptive revisit, or
    * terminal winner replay.
+   *
+   * @warning A measured GPU launch synchronizes the queue and commonly adds
+   * approximately 20--40 microseconds of instrumentation overhead. After the
+   * first measured runtime below 200 microseconds, info() exposes a persistent
+   * instrumentationOverheadWarning for this tuner context and the tuner emits
+   * the same warning once through std::clog.
    */
   void enqueue(Queue const &queue, FrameSpec const &frameSpec,
                alpaka::KernelBundle<Kernel, Args...> const &prototype) {
@@ -466,7 +474,12 @@ public:
 
   template <typename Queue, typename FrameSpec, typename Kernel,
             typename... Args>
-  /** @brief Perform one launch and return its selection/timing diagnostics. */
+  /** @brief Perform one launch and return its selection/timing diagnostics.
+   *
+   * Measured GPU launches have the synchronization overhead documented on
+   * enqueue(); applications that need the once-only short-kernel diagnostic
+   * can also inspect info().instrumentationOverheadWarning.
+   */
   [[nodiscard]] auto
   enqueueObserved(Queue const &queue, FrameSpec const &frameSpec,
                   alpaka::KernelBundle<Kernel, Args...> const &prototype)
@@ -1616,12 +1629,14 @@ private:
     alpaka::onHost::wait(queue);
     auto const elapsed = std::chrono::steady_clock::now() - start;
     runtimeSeconds = std::chrono::duration<double>{elapsed}.count();
+    recordInstrumentationOverheadWarning(*runtimeSeconds);
     static_cast<void>(history.record(*runtimeSeconds));
     if (m_defaults.mode == TuningMode::onlineFixed)
       retireByMannWhitneyIfWarranted(candidate);
     if (m_defaults.mode == TuningMode::onlineAdaptive && endActivation)
       history.retire(detail::RuntimeCompletion::adaptiveVisit);
-    if (history.isFinished()) {
+    auto const schedulingChanged = history.isFinished();
+    if (schedulingChanged) {
       recordRetiredConfiguration(candidate);
       if (!m_queue->retire(candidate))
         throw std::logic_error{
@@ -1641,11 +1656,26 @@ private:
       finishTuningAtBudget(TunerCompletionReason::maximumRetiredConfigurations);
       return;
     }
-    if (history.isFinished()) {
+    if (schedulingChanged) {
       m_consecutiveStrategyRetries = 0u;
       refillQueue();
     }
-    stageCache(candidate, history.isFinished());
+    stageCache(candidate, schedulingChanged);
+  }
+
+  void recordInstrumentationOverheadWarning(double runtimeSeconds) {
+    constexpr auto thresholdSeconds = 200.0e-6;
+    if (m_instrumentationOverheadWarning || runtimeSeconds >= thresholdSeconds)
+      return;
+    m_instrumentationOverheadWarning = InstrumentationOverheadWarning{
+        .observedRuntimeSeconds = runtimeSeconds};
+    std::clog
+        << "alpakaTune warning: measured runtime for " << m_kernelName << " ("
+        << runtimeSeconds * 1.0e6
+        << " us) is below 200 us; per-launch instrumentation and "
+           "synchronization commonly costs approximately 20-40 us and may "
+           "outweigh tuning gains. This warning is emitted once for this "
+           "tuner context.\n";
   }
 
   template <typename LaunchSpec, typename Bundle>
@@ -2317,6 +2347,8 @@ private:
   bool m_complete{};
   bool m_loadedFromCache{};
   bool m_executionBudgetReached{};
+  std::optional<InstrumentationOverheadWarning>
+      m_instrumentationOverheadWarning;
 #if ALPAKA_TUNE_HAS_JSON
   std::shared_ptr<nlohmann::json> m_stagedCache;
 #endif

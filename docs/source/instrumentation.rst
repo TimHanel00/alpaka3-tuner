@@ -52,6 +52,47 @@ false throughout adaptive mode.
 Reuse one ``TunerConfig`` for several tuners when they should share settings
 and optional history access; every tuner still owns independent runtime state.
 
+Instrumentation overhead
+------------------------
+
+Online measurement is not free. A measured ``Tuner::enqueue`` call performs
+strategy recommendation and admission, rebuilds the selected launch, submits
+the kernel, synchronizes the queue, updates the rolling statistics, and stages
+enabled history state. The synchronized launch path commonly adds
+approximately 20--40 microseconds per call on GPU workloads once tuner and
+model state are initialized. This is a representative engineering estimate,
+not a backend-independent guarantee; device, driver, queue state, host load,
+strategy, and enabled application-side tracing can change it.
+
+``LaunchObservation::runtimeSeconds`` starts immediately before
+``queue.enqueue`` and ends after ``alpaka::onHost::wait(queue)``. It therefore
+contains launch submission and queue synchronization in addition to device
+execution. It can also include earlier work already resident in the same
+queue. Recommendation time is reported separately, while application-side
+logging outside ``Tuner::enqueue`` is not included.
+
+For a 200-microsecond kernel, a 20--40-microsecond measurement cost is already
+about 10--20 percent of that runtime. Online tuning pays off only when the
+accumulated time saved by better configurations exceeds measurement,
+recommendation, exploration, and integration costs. Short or infrequently
+called kernels are consequently often better served by an offline workflow:
+collect a history in a dedicated run, then use ``offline`` mode to replay the
+recorded best configuration without synchronized timing or history updates.
+
+Short-kernel diagnostic
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Once a tuner first observes a measured runtime below 200 microseconds, it
+emits one warning for that tuner context through ``std::clog``. The warning is
+not repeated on later launches.
+
+``TunerInfo::instrumentationOverheadWarning`` remains populated afterward and
+reports the triggering runtime, the 200-microsecond threshold, and the
+representative 20--40-microsecond overhead range. Applications can use this
+diagnostic to exclude short kernels from online tuning. It is runtime
+information and does not alter the persistence schema or candidate-selection
+policy.
+
 Launch-shape tuning
 -------------------
 

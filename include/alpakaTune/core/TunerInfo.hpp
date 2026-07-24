@@ -22,6 +22,19 @@ enum class TunerCompletionReason {
   maximumConsecutiveStrategyRetries,
 };
 
+/** @brief Diagnostic emitted when timing overhead may dominate a short kernel.
+ */
+struct InstrumentationOverheadWarning {
+  /** First synchronized kernel runtime which crossed the warning threshold. */
+  double observedRuntimeSeconds{};
+  /** Runtime below which the tuner emits this diagnostic. */
+  double thresholdSeconds{200.0e-6};
+  /** Representative lower instrumentation-overhead estimate. */
+  double estimatedOverheadMinimumSeconds{20.0e-6};
+  /** Representative upper instrumentation-overhead estimate. */
+  double estimatedOverheadMaximumSeconds{40.0e-6};
+};
+
 /** @brief Return the stable persistence spelling of a completion reason. */
 [[nodiscard]] constexpr auto
 completionReasonName(TunerCompletionReason reason) noexcept -> char const * {
@@ -78,6 +91,8 @@ struct TunerInfo {
   bool loadedFromCache{};
   /** Whether fixed mode terminated specifically at the execution guard. */
   bool executionBudgetReached{};
+  /** Present after the first measured runtime below 200 microseconds. */
+  std::optional<InstrumentationOverheadWarning> instrumentationOverheadWarning;
   /** Current statistically best measured candidate, when one exists. */
   std::optional<std::size_t> bestCandidateIndex;
   /** Normalized parameters corresponding to bestCandidateIndex. */
