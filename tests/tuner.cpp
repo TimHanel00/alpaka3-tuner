@@ -109,6 +109,11 @@ tuning:
   noise_cancellation_window: 3
   max_consecutive_runs: 1
   maximum_executions: 100000
+history:
+  file: )"
+         << (directory / "history.json").string() << R"(
+  read: false
+  write: true
 complete_history:
   file: )"
          << (directory / "complete-history.json").string() << '\n';
@@ -489,17 +494,16 @@ auto main() -> int {
   adaptiveRetryConfig.maximumRetiredConfigurations.reset();
   adaptiveRetryConfig.maximumConsecutiveStrategyRetries = 1u;
   adaptiveRetryConfig.horizon = std::numeric_limits<std::size_t>::max();
-  auto emptyAdaptiveRetryTuner = alpakaTune::makeTuner(
-      adaptiveRetryConfig, rejectedTunables, device,
-      "strategy-retry-empty-adaptive-test");
+  auto emptyAdaptiveRetryTuner =
+      alpakaTune::makeTuner(adaptiveRetryConfig, rejectedTunables, device,
+                            "strategy-retry-empty-adaptive-test");
   auto emptyAdaptiveRetryThrew = false;
   try {
     emptyAdaptiveRetryTuner.enqueue(queue, frameSpec, bundle);
   } catch (std::invalid_argument const &) {
     emptyAdaptiveRetryThrew = true;
   }
-  if (!emptyAdaptiveRetryThrew ||
-      emptyAdaptiveRetryTuner.isTuningComplete() ||
+  if (!emptyAdaptiveRetryThrew || emptyAdaptiveRetryTuner.isTuningComplete() ||
       emptyAdaptiveRetryTuner.completed() ||
       emptyAdaptiveRetryTuner.info().strategyRetryLimitReachedCount != 1u ||
       emptyAdaptiveRetryTuner.info().adaptiveRetryFallbackCount != 0u ||
@@ -522,8 +526,7 @@ auto main() -> int {
       adaptiveRetryTuner.enqueueObserved(queue, frameSpec, bundle);
   if (!secondAdaptiveRetry.measured || !secondAdaptiveRetry.runtimeSeconds ||
       secondAdaptiveRetry.tuningComplete ||
-      secondAdaptiveRetry.candidateIndex !=
-          firstAdaptiveRetry.candidateIndex ||
+      secondAdaptiveRetry.candidateIndex != firstAdaptiveRetry.candidateIndex ||
       adaptiveRetryTuner.isTuningComplete() ||
       adaptiveRetryTuner.info().strategyRetryLimitReachedCount != 2u ||
       adaptiveRetryTuner.info().adaptiveRetryFallbackCount != 2u ||
@@ -667,8 +670,8 @@ auto main() -> int {
       offlineTuner.completionReason() !=
           alpakaTune::TunerCompletionReason::offlineReplay ||
       !offlineObservation.tuningComplete ||
-      !offlineTuner.info().tuningComplete ||
-      offlineObservation.measured || offlineObservation.runtimeSeconds ||
+      !offlineTuner.info().tuningComplete || offlineObservation.measured ||
+      offlineObservation.runtimeSeconds ||
       offlineTuner.info().mode != alpakaTune::TuningMode::offline ||
       offlineTuner.candidateRuntimeSamples(0u).size() != 3u)
     return EXIT_FAILURE;
@@ -825,6 +828,24 @@ auto main() -> int {
   if (!compileVectorOffline.loadedFromCache() ||
       !compileVectorOffline.isTuningComplete())
     return EXIT_FAILURE;
+
+#if ALPAKA_TUNE_HAS_JSON
+  alpakaTune::flushPersistence();
+  auto compactHistory = nlohmann::json{};
+  auto compactHistoryInput =
+      std::ifstream{configuration.parent_path() / "history.json"};
+  compactHistoryInput >> compactHistory;
+  if (compactHistory.at("schema_version") !=
+          alpakaTune::detail::historySchemaVersion ||
+      compactHistory.at("contexts").empty())
+    return EXIT_FAILURE;
+  for (auto const &[fingerprint, context] :
+       compactHistory.at("contexts").items()) {
+    static_cast<void>(fingerprint);
+    if (context.at("configurations").empty())
+      return EXIT_FAILURE;
+  }
+#endif
 
   std::filesystem::remove_all(configuration.parent_path());
   return EXIT_SUCCESS;

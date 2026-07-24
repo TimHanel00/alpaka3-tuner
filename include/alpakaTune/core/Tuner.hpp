@@ -406,8 +406,7 @@ public:
         .maximumConsecutiveStrategyRetries =
             m_defaults.maximumConsecutiveStrategyRetries,
         .consecutiveStrategyRetries = m_consecutiveStrategyRetries,
-        .strategyRetryLimitReachedCount =
-            m_strategyRetryLimitReachedCount,
+        .strategyRetryLimitReachedCount = m_strategyRetryLimitReachedCount,
         .adaptiveRetryFallbackCount = m_adaptiveRetryFallbackCount,
         .tuningComplete = isTuningComplete(),
         .completionReason =
@@ -1387,8 +1386,7 @@ private:
     if (!best)
       return false;
     if (m_scheduled.at(*best) || m_rejected.at(*best))
-      throw std::logic_error{
-          "The adaptive retry fallback is not schedulable."};
+      throw std::logic_error{"The adaptive retry fallback is not schedulable."};
     if (!m_queue->insert(*best))
       throw std::logic_error{
           "The adaptive retry fallback could not enter the active queue."};
@@ -2542,8 +2540,7 @@ private:
             {"restriction_rejected", m_restrictionRejectedCount},
             {"revisit_rejected", m_revisitRejectedCount},
             {"score_rejected", m_scoreRejectedCount},
-            {"strategy_retry_limit_reached",
-             m_strategyRetryLimitReachedCount},
+            {"strategy_retry_limit_reached", m_strategyRetryLimitReachedCount},
             {"adaptive_retry_fallback", m_adaptiveRetryFallbackCount},
             {"consecutive_strategy_retries", m_consecutiveStrategyRetries}};
   }
@@ -2562,8 +2559,8 @@ private:
         {"records", nlohmann::json::object()},
         {"sampling_seed", historySamplingSeed()},
         {"sample_count", m_defaults.history.sampleCount
-                             ? nlohmann::json{*m_defaults.history.sampleCount}
-                             : nlohmann::json{nullptr}}};
+                             ? nlohmann::json(*m_defaults.history.sampleCount)
+                             : nlohmann::json(nullptr)}};
     for (std::size_t candidate = 0u; candidate < m_candidateCount;
          ++candidate) {
       if (m_histories.at(candidate).empty())
