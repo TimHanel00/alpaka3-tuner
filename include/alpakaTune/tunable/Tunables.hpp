@@ -490,8 +490,8 @@ template <typename Entry, typename = void>
 struct EntryIsNamed : std::false_type {};
 
 template <typename Entry>
-struct EntryIsNamed<Entry, std::void_t<decltype(Entry::name)>> : std::true_type {
-};
+struct EntryIsNamed<Entry, std::void_t<decltype(Entry::name)>>
+    : std::true_type {};
 
 template <typename... Entries>
 struct TupleEntriesAreNamed<std::tuple<Entries...>>

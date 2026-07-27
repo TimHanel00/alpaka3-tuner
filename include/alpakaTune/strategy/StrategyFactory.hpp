@@ -58,9 +58,8 @@ private:
     if (learnedContext == nullptr)
       throw std::invalid_argument{
           "The learned-hybrid strategy requires a Tuner-owned model context."};
-    return std::make_unique<LearnedHybridStrategy>(learnedModel,
-                                                   *learnedContext, seed,
-                                                   learnedOptions);
+    return std::make_unique<LearnedHybridStrategy>(
+        learnedModel, *learnedContext, seed, learnedOptions);
   }
   throw std::logic_error{"Unknown alpakaTune strategy kind."};
 }

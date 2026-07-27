@@ -260,10 +260,9 @@ public:
         .updateCount = m_adapterUpdateCount};
     state.observations.reserve(m_observations.size());
     for (auto const &observation : m_observations)
-      state.observations.push_back(
-          {.rawIndex = observation.rawIndex,
-           .features = observation.features,
-           .residual = observation.residual});
+      state.observations.push_back({.rawIndex = observation.rawIndex,
+                                    .features = observation.features,
+                                    .residual = observation.residual});
     return state;
   }
 
@@ -282,8 +281,7 @@ public:
         !std::ranges::all_of(state.coefficients,
                              [](double value) { return std::isfinite(value); }))
       return false;
-    auto const candidateCount =
-        detail::candidateCount(m_descriptor.dimensions);
+    auto const candidateCount = detail::candidateCount(m_descriptor.dimensions);
     auto indices = std::vector<std::size_t>{};
     indices.reserve(state.observations.size());
     for (auto const &observation : state.observations) {
@@ -303,10 +301,9 @@ public:
     m_observations.clear();
     m_observations.reserve(state.observations.size());
     for (auto &observation : state.observations)
-      m_observations.push_back(
-          {.rawIndex = observation.rawIndex,
-           .features = std::move(observation.features),
-           .residual = observation.residual});
+      m_observations.push_back({.rawIndex = observation.rawIndex,
+                                .features = std::move(observation.features),
+                                .residual = observation.residual});
     m_observationsSinceUpdate = state.observationsSinceUpdate;
     m_adapterUpdateCount = state.updateCount;
     return true;

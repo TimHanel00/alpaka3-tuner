@@ -53,9 +53,9 @@ template <typename... Tuners>
 
 /** @brief Use the examples' shared 50,000-launch convenience minimum. */
 template <typename... Tuners>
-[[nodiscard]] auto
-applicationRunsRemain(std::size_t completedExecutions,
-                      Tuners const &...tuners) noexcept -> bool {
+[[nodiscard]] auto applicationRunsRemain(std::size_t completedExecutions,
+                                         Tuners const &...tuners) noexcept
+    -> bool {
   return applicationRunsRemain(completedExecutions, minimumTuningExecutions,
                                tuners...);
 }
