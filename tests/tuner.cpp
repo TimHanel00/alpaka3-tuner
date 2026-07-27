@@ -364,9 +364,9 @@ auto main() -> int {
     defaultFrameTuner.enqueue(queue, defaultFrameSpec, bundle);
   auto const defaultFrameInfo = defaultFrameTuner.info();
   if (!defaultFrameInfo.tuningComplete ||
-      defaultFrameInfo.candidateCount != 8u ||
-      defaultFrameInfo.rejectedCandidateCount != 4u ||
-      defaultFrameInfo.measuredCandidateCount != 4u)
+      defaultFrameInfo.candidateCount != 14u ||
+      defaultFrameInfo.rejectedCandidateCount != 12u ||
+      defaultFrameInfo.measuredCandidateCount != 2u)
     return EXIT_FAILURE;
 
   using StaticFrameExtent = alpaka::CVec<std::size_t, 4u>;

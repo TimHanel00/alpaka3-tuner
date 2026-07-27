@@ -52,9 +52,10 @@ while the kernel continues to receive one compile-time vector.
            frameSpec, alpakaTune::CTypes<Small, Large>{})};
 
 This tunes the frame extent independently and leaves ``numFrames`` fixed.
-Combine it with ``tuneNumFrames`` for the Cartesian product, or pass both
-entries and ``preserveCoverage(frameSpec)`` to ``makeFrameSpecTuning`` for a
-correlated launch-space fragment.
+Combine it with ``tuneNumFrames`` for the Cartesian product. Explicit launch
+entries receive no implicit constraint: add ``doesNotExceedCoverage`` for an
+upper coverage bound, ``preserveCoverage`` for exact equality, or an
+application-specific relation when required.
 
 The mirrored Alpaka examples deliberately retain their upstream kernel source
 shape. Add compile-time candidates only where an existing kernel argument is

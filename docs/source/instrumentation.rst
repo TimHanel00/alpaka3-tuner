@@ -122,9 +122,24 @@ Putting both directly in a bundle exposes their Cartesian product:
        alpakaTune::tuneNumFrames(frameSpec, numFramesCandidates),
        chunkSize(alpakaTune::RVals{64u, 128u, 256u})};
 
-Use ``makeFrameSpecTuning(frameSpec)`` for the generated defaults plus a lazy
-coverage-preserving relation. A tuning fragment flattens into the enclosing
-bundle alongside ordinary kernel parameters:
+Use ``makeFrameSpecTuning(frameSpec)`` for the generated defaults. Default
+``frameExtent`` values cover 32, 64, 128, 256, 512, and 1024 logical elements.
+For an N-dimensional extent, every power-of-two factorization is generated
+with nondecreasing components. Alpaka's final, fastest-varying index therefore
+contains the largest component. The original extent is retained as a safe
+fallback for small or nonstandard launch prototypes.
+
+Default ``numFrames`` values start at one and end at the input FrameSpec value.
+They contain repeated halves plus integer midpoints between adjacent splits.
+For example, an upper limit of 1024 includes 256, 512, 768, and 1024. In
+multiple dimensions, Alpaka ``mapToND`` ordering forms their Cartesian product,
+with the final component varying fastest.
+
+The complete default factory applies two lazy relations: only the documented
+extent factorizations are legal after vector-component recombination, and each
+candidate's logical coverage must be less than or equal to the original
+FrameSpec coverage. A tuning fragment flattens into the enclosing bundle
+alongside ordinary kernel parameters:
 
 .. code-block:: cpp
 
@@ -132,7 +147,26 @@ bundle alongside ordinary kernel parameters:
        alpakaTune::makeFrameSpecTuning(frameSpec),
        chunkSize(alpakaTune::RVals{64u, 128u, 256u})};
 
-Explicit candidates can be correlated with the same factory:
+The generators can also be composed independently. This example keeps the
+default extent space but supplies a larger application-specific upper limit
+for ``numFrames``:
+
+.. code-block:: cpp
+
+   auto upperNumFrames = frameSpec.getNumFrames() * 4u;
+   auto tunables = alpakaTune::TunableBundle{
+       alpakaTune::makeDefaultFrameExtentTuning(frameSpec),
+       alpakaTune::tuneNumFrames(
+           frameSpec,
+           alpakaTune::defaultNumFramesCandidates(upperNumFrames))};
+
+There is deliberately no implicit coverage relation when an application
+supplies either tuning entry. The application must add
+``doesNotExceedCoverage(frameSpec)``, ``preserveCoverage(frameSpec)``, or its
+own semantic restriction when one is required. ``doesNotExceedCoverage``
+accepts less-than-or-equal coverage independently in every dimension;
+``preserveCoverage`` requires exact equality. Explicit candidates can be
+correlated with the same factory:
 
 .. code-block:: cpp
 
@@ -140,6 +174,11 @@ Explicit candidates can be correlated with the same factory:
        alpakaTune::tuneFrameExtent(frameSpec, frameExtentCandidates),
        alpakaTune::tuneNumFrames(frameSpec, numFramesCandidates),
        alpakaTune::preserveCoverage(frameSpec));
+
+An ``RVals<Vec<T, N>>`` remains one named N-dimensional launch tunable. The
+strategy sees N scalar dimensions and the selected components are reconstructed
+into one ``alpaka::Vec<T, N>`` before launch. Component-wise recombination is
+why multidimensional vector spaces may need an explicit relation.
 
 ``tuneNumBlocks``, ``tuneNumThreads``, and ``makeThreadSpecTuning`` provide the
 corresponding ``ThreadSpec`` interface.
