@@ -5,6 +5,7 @@
 
 #include <alpakaTune/core/Tuner.hpp>
 #include <alpakaTune/core/TunerConfig.hpp>
+#include <alpakaTune/core/timing/TuningQueue.hpp>
 #include <alpakaTune/interfaces/Strategy.hpp>
 #include <alpakaTune/strategy/BayesianOptimizationStrategy.hpp>
 #include <alpakaTune/strategy/LearnedHybridStrategy.hpp>

@@ -68,6 +68,8 @@ int example(auto const devSpec, auto const computeExec) {
   auto viewTarget = buffer.getView();
 
   auto blockingQueue = device.makeQueue(queueKind::blocking);
+  auto tuningQueue = alpakaTune::makeQueue(device, queueKind::nonBlocking,
+                                           alpakaTune::timing::enabled);
   onHost::iota(blockingQueue, 1.f, buffer);
 
   std::cout << "Running on device: " << device.getName() << std::endl;
@@ -120,7 +122,7 @@ int example(auto const devSpec, auto const computeExec) {
     std::size_t completedExecutions = 0u;
     while (alpakaTune::example::applicationRunsRemain(completedExecutions,
                                                       tuner)) {
-      tuner.enqueue(blockingQueue, frameSpec, kernelBundle);
+      tuner.enqueue(tuningQueue, frameSpec, kernelBundle);
       ++completedExecutions;
     }
   }
@@ -156,7 +158,7 @@ int example(auto const devSpec, auto const computeExec) {
     std::size_t completedExecutions = 0u;
     while (alpakaTune::example::applicationRunsRemain(completedExecutions,
                                                       tuner)) {
-      tuner.enqueue(blockingQueue, frameSpec, kernelBundle);
+      tuner.enqueue(tuningQueue, frameSpec, kernelBundle);
       ++completedExecutions;
     }
   }
@@ -184,7 +186,7 @@ int example(auto const devSpec, auto const computeExec) {
     std::size_t completedExecutions = 0u;
     while (alpakaTune::example::applicationRunsRemain(completedExecutions,
                                                       tuner)) {
-      tuner.enqueue(blockingQueue, frameSpec, kernelBundle);
+      tuner.enqueue(tuningQueue, frameSpec, kernelBundle);
       ++completedExecutions;
     }
   }

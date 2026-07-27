@@ -139,6 +139,8 @@ int example(auto const deviceSpec, auto const computeExec,
   // Select queue
   Queue dumpQueue = devAcc.makeQueue();
   Queue computeQueue = devAcc.makeQueue();
+  auto tuningQueue = alpakaTune::makeQueue(devAcc, queueKind::nonBlocking,
+                                           alpakaTune::timing::enabled);
 
   // Copy host -> device
   memcpy(computeQueue, uCurrBufAcc, uBufHost);
@@ -215,12 +217,12 @@ int example(auto const deviceSpec, auto const computeExec,
        ++step) {
     ++completedSteps;
     // Compute next values
-    stencilTuning.enqueue(computeQueue, dataBlockingStencil,
+    stencilTuning.enqueue(tuningQueue, dataBlockingStencil,
                           KernelBundle{stencilKernel, uCurrBufAcc, uNextBufAcc,
                                        stencilTileExtent, numNodes, dx, dy,
                                        dt});
 
-    boundaryTuning.enqueue(computeQueue, dataBlockingBorder,
+    boundaryTuning.enqueue(tuningQueue, dataBlockingBorder,
                            KernelBundle{boundaryKernel, uNextBufAcc.getMdSpan(),
                                         numNodesWithHalo, step, dx, dy, dt});
 

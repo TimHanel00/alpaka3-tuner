@@ -8,6 +8,7 @@
 #include "alpakaTune/core/TunerConfig.hpp"
 #include "alpakaTune/core/TunerInfo.hpp"
 #include "alpakaTune/core/peripherals/CandidateQueue.hpp"
+#include "alpakaTune/core/timing/KernelTimer.hpp"
 #include "alpakaTune/model/LearnedModelContext.hpp"
 #include "alpakaTune/store/RuntimeHistory.hpp"
 #include "alpakaTune/strategy/StrategyFactory.hpp"
@@ -313,7 +314,8 @@ public:
       Traits::template has<detail::numThreadsName>;
   static_assert(!(tunesFrameSpec && tunesThreadSpec),
                 "A tuner cannot combine FrameSpec and ThreadSpec parameters.");
-  using Event = decltype(std::declval<Device &>().makeEvent());
+  using MeasurementTimer = ALPAKA_TYPEOF(
+      detail::timing::internal::makeKernelTimer(std::declval<Device &>()));
 
   /** @brief Construct a tuner from a validated policy and identity components.
    *
@@ -327,8 +329,7 @@ public:
       : m_defaults(std::move(defaults)), m_history(std::move(history)),
         m_completeHistory(std::move(completeHistory)),
         m_tunables(std::move(tunables)), m_device(std::move(device)),
-        m_measurementStartEvent(m_device.makeEvent()),
-        m_measurementEndEvent(m_device.makeEvent()),
+        m_measurementTimer(detail::timing::internal::makeKernelTimer(m_device)),
         m_identityEntries(std::move(identityEntries)),
         m_baseRandomSeed(m_defaults.randomSeed
                              ? *m_defaults.randomSeed
@@ -443,6 +444,7 @@ public:
         .loadedFromCache = m_loadedFromCache,
         .executionBudgetReached = m_executionBudgetReached,
         .instrumentationOverheadWarning = m_instrumentationOverheadWarning,
+        .runtimeMeasurementSource = MeasurementTimer::measurementSource(),
         .bestCandidateIndex = std::nullopt,
         .bestConfiguration = std::nullopt,
         .learnedStatus = std::nullopt,
@@ -495,9 +497,11 @@ public:
    * first measured runtime below 200 microseconds, info() exposes a persistent
    * instrumentationOverheadWarning for this tuner context and the tuner emits
    * the same warning once through std::clog.
-   * @note Portable Alpaka events delimit measured launches. The reported
-   * runtime is host-observed because Alpaka does not expose a generic
-   * device-event elapsed-time query.
+   * @note CUDA and HIP report timing-enabled device-event durations. Host and
+   * SYCL CPU use an explicitly reported synchronized host-clock fallback.
+   * SYCL GPUs report command-profiling timestamps. Construct the queue passed
+   * here with alpakaTune::makeQueue(device, alpaka::queueKind::nonBlocking,
+   * alpakaTune::timing::enabled).
    */
   void enqueue(Queue const &queue, FrameSpec const &frameSpec,
                alpaka::KernelBundle<Kernel, Args...> const &prototype) {
@@ -569,6 +573,7 @@ public:
         .candidateIndex = candidate,
         .configuration = normalizedConfiguration(candidate),
         .runtimeSeconds = call.runtimeSeconds,
+        .runtimeMeasurementSource = MeasurementTimer::measurementSource(),
         .recommendationSeconds = m_recommendationSecondsSinceLastLaunch,
         .measured = call.runtimeSeconds.has_value(),
         .tuningComplete = isTuningComplete(),
@@ -1668,8 +1673,8 @@ private:
     auto const indices = indicesFor(candidate);
     auto const bundle = rebuildBundle<CompileValues...>(prototype, indices);
 
-    auto launch = [&] {
-      if constexpr (alpaka::onHost::concepts::FrameSpec<
+    auto launch = [&](auto const &launchQueue) {
+      if constexpr (alpaka::onHost::isFrameSpec_v<
                         std::remove_cvref_t<LaunchSpec>>) {
         auto const numFrames = [&] {
           if constexpr (Traits::template has<detail::numFramesName>)
@@ -1708,11 +1713,11 @@ private:
           auto const thread = alpaka::onHost::ThreadSpec{
               blocks, threads,
               std::remove_cvref_t<decltype(derived)>::getExecutor()};
-          queue.enqueue(thread, bundle);
+          launchQueue.enqueue(thread, bundle);
         } else {
-          queue.enqueue(frame, bundle);
+          launchQueue.enqueue(frame, bundle);
         }
-      } else if constexpr (alpaka::onHost::concepts::ThreadSpec<
+      } else if constexpr (alpaka::onHost::isThreadSpec_v<
                                std::remove_cvref_t<LaunchSpec>>) {
         auto const blocks = [&] {
           if constexpr (Traits::template has<detail::numBlocksName>)
@@ -1730,7 +1735,7 @@ private:
         }();
         auto const thread = alpaka::onHost::ThreadSpec{
             blocks, threads, std::remove_cvref_t<LaunchSpec>::getExecutor()};
-        queue.enqueue(thread, bundle);
+        launchQueue.enqueue(thread, bundle);
       } else {
         static_assert(alpaka::onHost::concepts::ThreadOrFrameSpec<
                           std::remove_cvref_t<LaunchSpec>>,
@@ -1743,20 +1748,13 @@ private:
     if (m_defaults.mode == TuningMode::onlineAdaptive)
       ++m_adaptiveHorizonExecutionCount;
     if (!measure) {
-      launch();
+      launch(queue);
       return;
     }
     auto &history = m_histories.at(candidate);
     if (beginActivation)
       history.beginActivation();
-    queue.enqueue(m_measurementStartEvent);
-    alpaka::onHost::wait(m_measurementStartEvent);
-    auto const start = std::chrono::steady_clock::now();
-    launch();
-    queue.enqueue(m_measurementEndEvent);
-    alpaka::onHost::wait(m_measurementEndEvent);
-    auto const elapsed = std::chrono::steady_clock::now() - start;
-    runtimeSeconds = std::chrono::duration<double>{elapsed}.count();
+    runtimeSeconds = m_measurementTimer.measure(queue, launch);
     recordInstrumentationOverheadWarning(*runtimeSeconds);
     static_cast<void>(history.record(*runtimeSeconds));
     if (m_defaults.mode == TuningMode::onlineFixed)
@@ -2761,8 +2759,7 @@ private:
   std::shared_ptr<detail::CompleteHistoryStore> m_completeHistory;
   TunablesType m_tunables;
   Device m_device;
-  Event m_measurementStartEvent;
-  Event m_measurementEndEvent;
+  MeasurementTimer m_measurementTimer;
   std::vector<std::string> m_identityEntries;
   std::vector<std::size_t> m_dimensionSizes;
   std::size_t m_candidateCount{1u};

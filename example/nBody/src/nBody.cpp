@@ -158,6 +158,8 @@ int example(auto const deviceSpec, auto const computeExec, bool const writePngs,
   // Select queue
   Queue dumpQueue = devAcc.makeQueue();
   Queue computeQueue = devAcc.makeQueue();
+  auto tuningQueue = alpakaTune::makeQueue(devAcc, queueKind::nonBlocking,
+                                           alpakaTune::timing::enabled);
 
   // copy data to device
   onHost::memcpy(dumpQueue, massesDev, massesHost);
@@ -220,7 +222,7 @@ int example(auto const deviceSpec, auto const computeExec, bool const writePngs,
     // Queue one step of the simulation
     // The kernel bundle contains the kernel first, then all its arguments
     // *except* the accelerator, which is implicitly passed by alpaka.
-    tuner.enqueue(computeQueue, frameSpec,
+    tuner.enqueue(tuningQueue, frameSpec,
                   KernelBundle{updateVelocitiesKernel, particleData,
                                velocityTileExtent, dt});
 

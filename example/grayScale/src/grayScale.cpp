@@ -145,6 +145,8 @@ auto example(T_Cfg const &cfg, size_t numElements, size_t numberOfRuns,
 
   // Create a queue on the device
   onHost::Queue queue = devAcc.makeQueue();
+  auto tuningQueue = alpakaTune::makeQueue(devAcc, queueKind::nonBlocking,
+                                           alpakaTune::timing::enabled);
 
   // Allocate host memory buffers for R, G, B, and ARGB
   auto bufHostR = onHost::allocHost<uint8_t>(extent);
@@ -236,7 +238,7 @@ auto example(T_Cfg const &cfg, size_t numElements, size_t numberOfRuns,
 
     auto const beginKernelT = std::chrono::high_resolution_clock::now();
     tuner.enqueue(
-        queue, dataBlocking,
+        tuningQueue, dataBlocking,
         KernelBundle{kernel, bufAccARGB, static_cast<size_t>(extent[0])});
     onHost::wait(queue);
     auto const endKernelT = std::chrono::high_resolution_clock::now();

@@ -183,6 +183,8 @@ auto example(auto const deviceSpec, auto const executor, Index rows,
   auto selector = onHost::makeDeviceSelector(deviceSpec);
   onHost::Device device = selector.makeDevice(0);
   onHost::Queue queue = device.makeQueue();
+  auto tuningQueue = alpakaTune::makeQueue(device, queueKind::nonBlocking,
+                                           alpakaTune::timing::enabled);
 
   auto hostA = onHost::allocHost<Scalar>(Vector{rows * innerDimension});
   auto hostB = onHost::allocHost<Scalar>(Vector{innerDimension * columns});
@@ -258,7 +260,7 @@ auto example(auto const deviceSpec, auto const executor, Index rows,
 
   Index runs = 0u;
   while (alpakaTune::example::applicationRunsRemain(runs, minimumRuns, tuner)) {
-    tuner.enqueue(queue, frameSpec, bundle);
+    tuner.enqueue(tuningQueue, frameSpec, bundle);
     ++runs;
   }
   onHost::memcpy(queue, hostC, deviceC);

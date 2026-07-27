@@ -82,6 +82,8 @@ void testVectorAddKernel(alpaka::onHost::concepts::Device auto device,
 
   // run the test the given device
   alpaka::onHost::Queue queue = device.makeQueue();
+  auto tuningQueue = alpakaTune::makeQueue(
+      device, alpaka::queueKind::nonBlocking, alpakaTune::timing::enabled);
 
   // allocate input and output buffers on the device
   auto in1_d = alpaka::onHost::allocLike(device, in1_h);
@@ -121,7 +123,7 @@ void testVectorAddKernel(alpaka::onHost::concepts::Device auto device,
   std::size_t scalarExecutions = 0u;
   while (alpakaTune::example::applicationRunsRemain(scalarExecutions,
                                                     scalarTuning)) {
-    scalarTuning.enqueue(queue, frameSpec, scalarBundle);
+    scalarTuning.enqueue(tuningQueue, frameSpec, scalarBundle);
     ++scalarExecutions;
   }
 
@@ -150,7 +152,7 @@ void testVectorAddKernel(alpaka::onHost::concepts::Device auto device,
   std::size_t vectorExecutions = 0u;
   while (alpakaTune::example::applicationRunsRemain(vectorExecutions,
                                                     vectorTuning)) {
-    vectorTuning.enqueue(queue, frameSpec, vectorBundle);
+    vectorTuning.enqueue(tuningQueue, frameSpec, vectorBundle);
     ++vectorExecutions;
   }
 
@@ -199,6 +201,8 @@ void testVectorAddKernel3D(alpaka::onHost::concepts::Device auto device,
 
   // run the test the given device
   alpaka::onHost::Queue queue = device.makeQueue();
+  auto tuningQueue = alpakaTune::makeQueue(
+      device, alpaka::queueKind::nonBlocking, alpakaTune::timing::enabled);
 
   // allocate input and output buffers on the device
   auto in1_d = alpaka::onHost::allocLike(device, in1_h);
@@ -236,7 +240,7 @@ void testVectorAddKernel3D(alpaka::onHost::concepts::Device auto device,
   std::size_t completedExecutions = 0u;
   while (
       alpakaTune::example::applicationRunsRemain(completedExecutions, tuner)) {
-    tuner.enqueue(queue, frameSpec, kernelBundle);
+    tuner.enqueue(tuningQueue, frameSpec, kernelBundle);
     ++completedExecutions;
   }
 

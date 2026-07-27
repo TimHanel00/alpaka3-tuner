@@ -123,6 +123,10 @@ complete_history:
 } // namespace
 
 auto main() -> int {
+  static_assert(alpakaTune::timing::Timing<alpakaTune::timing::Enabled>);
+  static_assert(alpakaTune::timing::Timing<alpakaTune::timing::Disabled>);
+  static_assert(!alpakaTune::timing::Timing<int>);
+
   if (std::abs(alpakaTune::detail::normalizedLogisticAdmission(0.0, 16.0)) >
           1.0e-12 ||
       std::abs(alpakaTune::detail::normalizedLogisticAdmission(0.5, 16.0) -
@@ -159,7 +163,11 @@ auto main() -> int {
   if (!selector.isAvailable())
     return EXIT_SUCCESS;
   auto device = selector.makeDevice(0u);
-  auto queue = device.makeQueue();
+  auto queue = alpakaTune::makeQueue(device, alpaka::queueKind::nonBlocking,
+                                     alpakaTune::timing::enabled);
+  auto untimedQueue = alpakaTune::makeQueue(
+      device, alpaka::queueKind::nonBlocking, alpakaTune::timing::disabled);
+  static_cast<void>(untimedQueue);
   auto const executor = alpaka::exec::cpuSerial;
   auto const frameSpec =
       alpaka::onHost::FrameSpec{Index{1u}, Index{1u}, executor};
@@ -214,6 +222,8 @@ auto main() -> int {
   auto firstObservation = tuner.enqueueObserved(queue, frameSpec, bundle);
   if (!firstObservation.measured || !firstObservation.runtimeSeconds ||
       *firstObservation.runtimeSeconds < 0.0 ||
+      firstObservation.runtimeMeasurementSource !=
+          alpakaTune::RuntimeMeasurementSource::hostClock ||
       firstObservation.candidateIndex >= 3u ||
       firstObservation.configuration.size() != 1u ||
       firstObservation.recommendationSeconds < 0.0 ||
@@ -222,8 +232,12 @@ auto main() -> int {
   auto const shortKernelWarningExpected =
       *firstObservation.runtimeSeconds < 200.0e-6;
   auto const firstTunerInfo = tuner.info();
-  if (firstTunerInfo.instrumentationOverheadWarning.has_value() !=
-      shortKernelWarningExpected)
+  if (firstTunerInfo.runtimeMeasurementSource !=
+          alpakaTune::RuntimeMeasurementSource::hostClock ||
+      std::string_view{alpakaTune::runtimeMeasurementSourceName(
+          firstTunerInfo.runtimeMeasurementSource)} != "host_clock" ||
+      firstTunerInfo.instrumentationOverheadWarning.has_value() !=
+          shortKernelWarningExpected)
     return EXIT_FAILURE;
   if (firstTunerInfo.instrumentationOverheadWarning) {
     auto const &warning = *firstTunerInfo.instrumentationOverheadWarning;

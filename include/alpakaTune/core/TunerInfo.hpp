@@ -11,6 +11,25 @@
 
 namespace alpakaTune {
 
+/** @brief Clock source used for synchronized kernel runtime observations. */
+enum class RuntimeMeasurementSource {
+  hostClock,   ///< Host wall clock around a synchronized Alpaka launch.
+  deviceEvent, ///< Backend device-event timestamps around the kernel.
+};
+
+/** @brief Stable diagnostic spelling of a runtime measurement source. */
+[[nodiscard]] constexpr auto
+runtimeMeasurementSourceName(RuntimeMeasurementSource source) noexcept
+    -> char const * {
+  switch (source) {
+  case RuntimeMeasurementSource::hostClock:
+    return "host_clock";
+  case RuntimeMeasurementSource::deviceEvent:
+    return "device_event";
+  }
+  return "host_clock";
+}
+
 /** @brief Terminal reason recorded by tuner policies. */
 enum class TunerCompletionReason {
   none,                         ///< No terminal state has been entered.
@@ -98,6 +117,9 @@ struct TunerInfo {
   bool executionBudgetReached{};
   /** Present after the first measured runtime below 200 microseconds. */
   std::optional<InstrumentationOverheadWarning> instrumentationOverheadWarning;
+  /** Backend clock used for measured kernel runtimes. */
+  RuntimeMeasurementSource runtimeMeasurementSource{
+      RuntimeMeasurementSource::hostClock};
   /** Current statistically best measured candidate, when one exists. */
   std::optional<std::size_t> bestCandidateIndex;
   /** Normalized parameters corresponding to bestCandidateIndex. */
@@ -128,6 +150,9 @@ struct LaunchObservation {
   ParameterConfiguration configuration;
   /** Synchronized launch duration when timing was enabled. */
   std::optional<double> runtimeSeconds;
+  /** Backend clock used to produce runtimeSeconds. */
+  RuntimeMeasurementSource runtimeMeasurementSource{
+      RuntimeMeasurementSource::hostClock};
   /** Wall time spent obtaining and admitting this call's recommendation. */
   double recommendationSeconds{};
   /** Whether this call synchronized and produced runtimeSeconds. */

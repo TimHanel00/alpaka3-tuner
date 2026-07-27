@@ -3,4 +3,5 @@
 
 #pragma once
 
+#include <alpakaTune/core/timing/TuningQueue.hpp>
 #include <alpakaTune/tune.hpp>

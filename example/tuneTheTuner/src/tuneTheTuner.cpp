@@ -46,7 +46,8 @@ public:
   VectorAddTuner(Device device, std::filesystem::path directory,
                  alpakaTune::TunerConfig config)
       : m_device(std::move(device)),
-        m_queue(m_device.makeQueue(alpaka::queueKind::blocking)),
+        m_queue(alpakaTune::makeQueue(m_device, alpaka::queueKind::nonBlocking,
+                                      alpakaTune::timing::enabled)),
         m_directory(std::move(directory)), m_config(std::move(config)),
         m_inputA(alpaka::onHost::allocHost<std::uint32_t>(extent)),
         m_inputB(alpaka::onHost::allocHost<std::uint32_t>(extent)),
@@ -104,7 +105,9 @@ public:
 private:
   static constexpr Index extent{64u};
   Device m_device;
-  decltype(m_device.makeQueue(alpaka::queueKind::blocking)) m_queue;
+  ALPAKA_TYPEOF(alpakaTune::makeQueue(m_device, alpaka::queueKind::nonBlocking,
+                                      alpakaTune::timing::enabled))
+  m_queue;
   std::filesystem::path m_directory;
   alpakaTune::TunerConfig m_config;
   decltype(alpaka::onHost::allocHost<std::uint32_t>(extent)) m_inputA;
@@ -144,7 +147,8 @@ auto main() -> int {
     return EXIT_FAILURE;
 
   auto device = selector.makeDevice(0u);
-  auto outerQueue = device.makeQueue(alpaka::queueKind::blocking);
+  auto outerQueue = alpakaTune::makeQueue(
+      device, alpaka::queueKind::nonBlocking, alpakaTune::timing::enabled);
   auto const outerFrameSpec =
       alpaka::onHost::FrameSpec{Index{1u}, Index{1u}, alpaka::exec::cpuSerial};
 

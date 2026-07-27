@@ -179,6 +179,8 @@ void testVectorAddKernel(alpaka::onHost::concepts::Device auto device,
 
   // run the test the given device
   alpaka::onHost::Queue queue = device.makeQueue();
+  auto tuningQueue = alpakaTune::makeQueue(
+      device, alpaka::queueKind::nonBlocking, alpakaTune::timing::enabled);
 
   // allocate input and output buffers on the device
   auto in1_d = alpaka::onHost::allocLike(device, in1_h);
@@ -227,7 +229,7 @@ void testVectorAddKernel(alpaka::onHost::concepts::Device auto device,
   std::size_t completedExecutions = 0u;
   while (
       alpakaTune::example::applicationRunsRemain(completedExecutions, tuner)) {
-    tuner.enqueue(queue, frameSpec, kernelBundle);
+    tuner.enqueue(tuningQueue, frameSpec, kernelBundle);
     ++completedExecutions;
   }
 
@@ -276,6 +278,8 @@ void testVectorAddKernel3D(alpaka::onHost::concepts::Device auto device,
 
   // run the test the given device
   alpaka::onHost::Queue queue = device.makeQueue();
+  auto tuningQueue = alpakaTune::makeQueue(
+      device, alpaka::queueKind::nonBlocking, alpakaTune::timing::enabled);
 
   // allocate input and output buffers on the device
   auto in1_d = alpaka::onHost::allocLike(device, in1_h);
@@ -320,7 +324,7 @@ void testVectorAddKernel3D(alpaka::onHost::concepts::Device auto device,
   std::size_t completedExecutions = 0u;
   while (
       alpakaTune::example::applicationRunsRemain(completedExecutions, tuner)) {
-    tuner.enqueue(queue, frameSpec, kernelBundle);
+    tuner.enqueue(tuningQueue, frameSpec, kernelBundle);
     ++completedExecutions;
   }
 

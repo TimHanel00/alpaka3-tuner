@@ -104,6 +104,8 @@ auto example(auto const deviceSpec, auto const exec, size_t numElements,
 
   // Create a queue on the device
   onHost::Queue queue = devAcc.makeQueue();
+  auto tuningQueue = alpakaTune::makeQueue(devAcc, queueKind::nonBlocking,
+                                           alpakaTune::timing::enabled);
 
   // Allocate 3 host memory buffers
   auto bufHostA = onHost::allocHost<Data>(extent);
@@ -169,7 +171,7 @@ auto example(auto const deviceSpec, auto const exec, size_t numElements,
     onHost::wait(queue);
     auto const beginT = std::chrono::high_resolution_clock::now();
     // Enqueue the kernel execution task
-    tuner.enqueue(queue, dataBlocking, taskKernel);
+    tuner.enqueue(tuningQueue, dataBlocking, taskKernel);
     // wait in case we are using an asynchronous queue to time actual kernel
     // runtime
     onHost::wait(queue);

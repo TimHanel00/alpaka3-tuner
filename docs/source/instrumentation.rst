@@ -69,16 +69,39 @@ model state are initialized. This is a representative engineering estimate,
 not a backend-independent guarantee; device, driver, queue state, host load,
 strategy, and enabled application-side tracing can change it.
 
-Before timing, the tuner enqueues and waits for a reusable start event. It then
-starts the host clock, submits exactly the selected kernel, enqueues a reusable
-completion event, and waits for that event. Consequently,
-``LaunchObservation::runtimeSeconds`` excludes older work already resident in
-the queue, but still contains host launch submission and event-wait latency in
-addition to device execution. Alpaka currently exposes portable event ordering
-and completion, but not a generic elapsed-device-time query, so this is an
-event-delimited host observation rather than a CUDA- or HIP-specific device
-timestamp. Recommendation time is reported separately, while application-side
-logging outside ``Tuner::enqueue`` is not included.
+alpakaTune selects its runtime clock from the Alpaka API and device-kind tags
+at compile time. Applications should construct the queue passed to
+``Tuner::enqueue`` with
+``alpakaTune::makeQueue(device, alpaka::queueKind::nonBlocking,
+alpakaTune::timing::enabled)``. Timing is an explicit tag independent of the
+queue's blocking behavior; the temporary implementation currently requires a
+non-blocking timed queue so markers can be submitted adjacent to the kernel.
+CUDA and HIP use timing-enabled native events behind an internal backend
+adapter. Before measuring, the adapter enqueues and waits for an Alpaka event
+on the application queue. It then submits a start event, exactly the selected
+kernel, and an end event consecutively on that non-blocking timed queue.
+Waiting for the end event preserves the synchronous tuner contract, while
+``LaunchObservation::runtimeSeconds`` comes from the device-event timestamps.
+This avoids folding host submission and wake-up latency into the candidate
+runtime.
+
+The host API uses a synchronized ``std::chrono::steady_clock`` interval. SYCL
+CPU devices select that host implementation directly. For SYCL GPU devices,
+alpakaTune temporarily returns a minimal Alpaka-compatible measurement queue
+created with ``sycl::property::queue::enable_profiling``. The kernel event's
+``command_start`` and ``command_end`` timestamps provide the device runtime.
+This compatibility layer is intended to disappear once Alpaka exposes the same
+capability through its public queue and event interfaces.
+``LaunchObservation::runtimeMeasurementSource`` and
+``TunerInfo::runtimeMeasurementSource`` report either ``device_event`` or
+``host_clock``; fallback therefore never masquerades as device timing.
+Recommendation time is reported separately, while application-side logging
+outside ``Tuner::enqueue`` is not included.
+
+Device-event timing improves the runtime sample used for candidate ranking; it
+does not remove the synchronization cost paid by the application. The external
+queue boundary, end-event wait, strategy, statistics, and persistence work
+remain part of the overall measured-enqueue overhead.
 
 For a 200-microsecond kernel, a 20--40-microsecond measurement cost is already
 about 10--20 percent of that runtime. Online tuning pays off only when the

@@ -195,6 +195,8 @@ bool testRandomInitKernels(alpaka::onHost::concepts::Device auto host,
 
   // Run the test on the given device
   alpaka::onHost::Queue queue = device.makeQueue();
+  auto tuningQueue = alpakaTune::makeQueue(
+      device, alpaka::queueKind::nonBlocking, alpakaTune::timing::enabled);
 
   // Allocate output buffer on the device
   auto outBins_d = alpaka::onHost::allocLike(device, outBins_h);
@@ -234,7 +236,7 @@ bool testRandomInitKernels(alpaka::onHost::concepts::Device auto host,
     while (alpakaTune::example::applicationRunsRemain(completedExecutions,
                                                       tuner)) {
       alpaka::onHost::memcpy(queue, outBins_d, outBins_h);
-      tuner.enqueue(queue, frameSpec, kernelBundle);
+      tuner.enqueue(tuningQueue, frameSpec, kernelBundle);
       ++completedExecutions;
     }
   };
