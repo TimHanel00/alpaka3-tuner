@@ -16,7 +16,7 @@ FetchContent, installed-package, launch-tuning, and compile-time-tuning
 examples, is built with Sphinx for Read the Docs under
 [`docs/source`](docs/source/index.rst).
 The executable examples separately document their application-owned 50,000
-launch minimum and the independent 40,000-execution tuner horizon in
+launch minimum and their explicitly configured, independent 40,000-execution tuner horizon in
 [`example/README.md`](example/README.md).
 
 Large exhaustive datasets, offline model training, evaluation, and HPC job

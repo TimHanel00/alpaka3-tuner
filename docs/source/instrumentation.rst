@@ -41,14 +41,17 @@ goal has been reached. A real application may use only its own loop bound and
 ignore ``completed()`` entirely.
 
 In ``online_fixed``, ``completed()`` reports a terminal tuning state and later
-launches replay the winner. In ``online_adaptive``, it reports only that the
-configured admission and cooling horizon has been reached. The tuner remains
-active: later calls still recommend, measure, revisit configurations, and
-update the residual adapter. Therefore ``completed()`` is policy information,
-not an instruction from the library to stop the application.
+launches replay the winner. In ``online_adaptive`` with a horizon, it reports
+only that the configured admission and cooling horizon has been reached. The
+tuner remains active: later calls still recommend, measure, revisit
+configurations, and update the residual adapter. Therefore ``completed()`` is
+policy information, not an instruction from the library to stop the
+application.
 ``isTuningComplete()`` reports the same adaptive horizon completion while the
 internal scheduler remains active. ``completionReason()`` stays unavailable
 because no terminal replay state was entered.
+Horizon-less adaptive mode never reports completion, so an application using
+the combined loop condition above must configure a horizon.
 
 Reuse one ``TunerConfig`` for several tuners when they should share settings
 and optional history access; every tuner still owns independent runtime state.
@@ -58,18 +61,23 @@ Instrumentation overhead
 
 Online measurement is not free. A measured ``Tuner::enqueue`` call performs
 strategy recommendation and admission, rebuilds the selected launch, submits
-the kernel, synchronizes the queue, updates the rolling statistics, and stages
-enabled history state. The synchronized launch path commonly adds
+the kernel between reusable Alpaka events, waits for those event boundaries,
+updates the rolling statistics, and stages enabled history state. The
+synchronized launch path commonly adds
 approximately 20--40 microseconds per call on GPU workloads once tuner and
 model state are initialized. This is a representative engineering estimate,
 not a backend-independent guarantee; device, driver, queue state, host load,
 strategy, and enabled application-side tracing can change it.
 
-``LaunchObservation::runtimeSeconds`` starts immediately before
-``queue.enqueue`` and ends after ``alpaka::onHost::wait(queue)``. It therefore
-contains launch submission and queue synchronization in addition to device
-execution. It can also include earlier work already resident in the same
-queue. Recommendation time is reported separately, while application-side
+Before timing, the tuner enqueues and waits for a reusable start event. It then
+starts the host clock, submits exactly the selected kernel, enqueues a reusable
+completion event, and waits for that event. Consequently,
+``LaunchObservation::runtimeSeconds`` excludes older work already resident in
+the queue, but still contains host launch submission and event-wait latency in
+addition to device execution. Alpaka currently exposes portable event ordering
+and completion, but not a generic elapsed-device-time query, so this is an
+event-delimited host observation rather than a CUDA- or HIP-specific device
+timestamp. Recommendation time is reported separately, while application-side
 logging outside ``Tuner::enqueue`` is not included.
 
 For a 200-microsecond kernel, a 20--40-microsecond measurement cost is already

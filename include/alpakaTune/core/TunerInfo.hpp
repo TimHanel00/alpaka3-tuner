@@ -73,7 +73,7 @@ struct TunerInfo {
   std::size_t executionCount{};
   /** Launches counted toward this process run's adaptive horizon. */
   std::size_t adaptiveHorizonExecutionCount{};
-  /** History-aware sigmoid/Boltzmann progress in the inclusive [0, 1] range. */
+  /** History-aware progress, or zero when no adaptive horizon is configured. */
   double adaptiveHorizonProgress{};
   /** Configured online-adaptive new-run horizon, when active. */
   std::optional<std::size_t> horizon;
@@ -85,9 +85,10 @@ struct TunerInfo {
   std::size_t consecutiveStrategyRetries{};
   /** Bounded refill attempts which reached the configured retry limit. */
   std::size_t strategyRetryLimitReachedCount{};
-  /** Measured adaptive fallbacks after bounded refill attempts were exhausted. */
+  /** Measured adaptive fallbacks after bounded refill attempts were exhausted.
+   */
   std::size_t adaptiveRetryFallbackCount{};
-  /** Policy completion; adaptive mode remains active after its horizon. */
+  /** Policy completion; horizon-less adaptive mode never signals completion. */
   bool tuningComplete{};
   /** Terminal reason when one exists; absent for an adaptive horizon. */
   std::optional<TunerCompletionReason> completionReason;

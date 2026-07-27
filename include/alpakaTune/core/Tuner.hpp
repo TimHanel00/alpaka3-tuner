@@ -204,6 +204,26 @@ inline auto fileFingerprint(std::filesystem::path const &path) -> std::string {
   return output.str();
 }
 
+/** Mix a stable context fingerprint into a configured base seed. */
+[[nodiscard]] inline auto contextSeed(std::uint64_t baseSeed,
+                                      std::string_view fingerprint) noexcept
+    -> std::uint64_t {
+  auto seed = std::uint64_t{14695981039346656037ull} ^ baseSeed;
+  for (auto const character : fingerprint) {
+    seed ^= static_cast<unsigned char>(character);
+    seed *= 1099511628211ull;
+  }
+  return seed;
+}
+
+/** Create the explicitly requested nondeterministic process-local base seed. */
+[[nodiscard]] inline auto nondeterministicSeed() -> std::uint64_t {
+  auto source = std::random_device{};
+  auto seed = std::uint64_t{source()};
+  seed = (seed << 32u) ^ std::uint64_t{source()};
+  return seed;
+}
+
 template <FixedString Name, typename Value> struct SelectedCompileValue {
   static constexpr auto name = Name;
   using value_type = Value;
@@ -293,6 +313,7 @@ public:
       Traits::template has<detail::numThreadsName>;
   static_assert(!(tunesFrameSpec && tunesThreadSpec),
                 "A tuner cannot combine FrameSpec and ThreadSpec parameters.");
+  using Event = decltype(std::declval<Device &>().makeEvent());
 
   /** @brief Construct a tuner from a validated policy and identity components.
    *
@@ -306,16 +327,22 @@ public:
       : m_defaults(std::move(defaults)), m_history(std::move(history)),
         m_completeHistory(std::move(completeHistory)),
         m_tunables(std::move(tunables)), m_device(std::move(device)),
+        m_measurementStartEvent(m_device.makeEvent()),
+        m_measurementEndEvent(m_device.makeEvent()),
         m_identityEntries(std::move(identityEntries)),
-        m_random(m_defaults.randomSeed) {
+        m_baseRandomSeed(m_defaults.randomSeed
+                             ? *m_defaults.randomSeed
+                             : detail::nondeterministicSeed()),
+        m_random(0u) {
     initialiseDimensions();
   }
 
   /** Whether the configured tuning-policy goal has been reached.
    *
    * Online-fixed and offline completion is terminal. Online-adaptive
-   * completion means that the horizon was reached; recommendation,
-   * measurement, and rolling-history updates continue afterward.
+   * completion means that its optional horizon was reached; recommendation,
+   * measurement, and rolling-history updates continue afterward. Adaptive
+   * mode without a horizon never signals policy completion.
    */
   [[nodiscard]] auto isTuningComplete() const noexcept -> bool {
     if (m_defaults.mode == TuningMode::onlineAdaptive)
@@ -400,7 +427,7 @@ public:
                                        ? adaptiveProgress()
                                        : 0.0,
         .horizon = m_defaults.mode == TuningMode::onlineAdaptive
-                       ? std::optional<std::size_t>{m_defaults.horizon}
+                       ? m_defaults.horizon
                        : std::nullopt,
         .maximumExecutions = m_defaults.maximumExecutions,
         .maximumConsecutiveStrategyRetries =
@@ -468,6 +495,9 @@ public:
    * first measured runtime below 200 microseconds, info() exposes a persistent
    * instrumentationOverheadWarning for this tuner context and the tuner emits
    * the same warning once through std::clog.
+   * @note Portable Alpaka events delimit measured launches. The reported
+   * runtime is host-observed because Alpaka does not expose a generic
+   * device-event elapsed-time query.
    */
   void enqueue(Queue const &queue, FrameSpec const &frameSpec,
                alpaka::KernelBundle<Kernel, Args...> const &prototype) {
@@ -1012,8 +1042,10 @@ private:
 
   /** @brief Clamped progress through the adaptive schedule horizon. */
   [[nodiscard]] auto adaptiveProgress() const -> double {
+    if (!m_defaults.horizon)
+      return 0.0;
     auto const progress = static_cast<double>(m_adaptiveHorizonExecutionCount) /
-                          static_cast<double>(m_defaults.horizon);
+                          static_cast<double>(*m_defaults.horizon);
     return detail::adaptiveProgressWithActiveHistory(
         progress, m_loadedFromCache, m_defaults.horizonOffsetWithActiveHistory);
   }
@@ -1049,26 +1081,28 @@ private:
       return RecommendationDisposition::revisitRejected;
     }
     if (revisit && m_defaults.mode == TuningMode::onlineAdaptive) {
-      auto const progress = adaptiveProgress();
-      auto const revisitProbability = detail::normalizedLogisticAdmission(
-          progress, m_defaults.revisitAdmissionSteepness);
-      if (m_admissionDistribution(m_random) >= revisitProbability) {
-        ++m_revisitRejectedCount;
-        return RecommendationDisposition::revisitRejected;
-      }
-      auto const best = currentBestCandidate();
-      if (!best)
-        throw std::logic_error{
-            "An adaptive revisit exists without a current best candidate."};
-      auto const temperature = detail::adaptiveScoreTemperature(
-          progress, m_defaults.scoreTemperatureStart,
-          m_defaults.scoreTemperatureEnd);
-      auto const scoreProbability = detail::relativeScoreAdmission(
-          history.statistics().estimate(),
-          m_histories.at(*best).statistics().estimate(), temperature);
-      if (m_admissionDistribution(m_random) >= scoreProbability) {
-        ++m_scoreRejectedCount;
-        return RecommendationDisposition::scoreRejected;
+      if (m_defaults.horizon) {
+        auto const progress = adaptiveProgress();
+        auto const revisitProbability = detail::normalizedLogisticAdmission(
+            progress, m_defaults.revisitAdmissionSteepness);
+        if (m_admissionDistribution(m_random) >= revisitProbability) {
+          ++m_revisitRejectedCount;
+          return RecommendationDisposition::revisitRejected;
+        }
+        auto const best = currentBestCandidate();
+        if (!best)
+          throw std::logic_error{
+              "An adaptive revisit exists without a current best candidate."};
+        auto const temperature = detail::adaptiveScoreTemperature(
+            progress, m_defaults.scoreTemperatureStart,
+            m_defaults.scoreTemperatureEnd);
+        auto const scoreProbability = detail::relativeScoreAdmission(
+            history.statistics().estimate(),
+            m_histories.at(*best).statistics().estimate(), temperature);
+        if (m_admissionDistribution(m_random) >= scoreProbability) {
+          ++m_scoreRejectedCount;
+          return RecommendationDisposition::scoreRejected;
+        }
       }
       history.reopen();
       ++m_revisitAcceptedCount;
@@ -1097,7 +1131,8 @@ private:
 
   /** @brief Whether this online-adaptive run reached its schedule horizon. */
   [[nodiscard]] auto adaptiveHorizonReached() const noexcept -> bool {
-    return m_adaptiveHorizonExecutionCount >= m_defaults.horizon;
+    return m_defaults.horizon &&
+           m_adaptiveHorizonExecutionCount >= *m_defaults.horizon;
   }
 
   /** @brief Whether the online-fixed execution guard has been reached. */
@@ -1239,6 +1274,12 @@ private:
         std::chrono::duration<double>{
             std::chrono::system_clock::now().time_since_epoch()}
             .count();
+    m_effectiveRandomSeed =
+        detail::contextSeed(m_baseRandomSeed, m_fingerprint);
+    m_random.seed(m_effectiveRandomSeed);
+    if (m_defaults.strategy == StrategyKind::learnedHybrid)
+      m_learnedModelDigest =
+          detail::fileFingerprint(m_defaults.learnedModelFile);
     m_histories.assign(m_candidateCount,
                        detail::RuntimeHistory{runtimeHistoryOptions()});
     m_scheduled.assign(m_candidateCount, false);
@@ -1265,7 +1306,7 @@ private:
           .candidatePoolSize = m_defaults.learnedCandidatePoolSize,
           .candidateBatchSize = m_defaults.learnedCandidateBatchSize};
       m_strategy =
-          makeParameterStrategy(m_defaults.strategy, m_defaults.randomSeed,
+          makeParameterStrategy(m_defaults.strategy, m_effectiveRandomSeed,
                                 &context, m_defaults.learnedModelFile, options);
       if (m_loadedLearnedAdapterState || m_loadedCompleteLearnedAdapterState) {
         if (auto *learned =
@@ -1283,7 +1324,7 @@ private:
       }
     } else {
       m_strategy =
-          makeParameterStrategy(m_defaults.strategy, m_defaults.randomSeed);
+          makeParameterStrategy(m_defaults.strategy, m_effectiveRandomSeed);
     }
     m_queue = std::make_unique<detail::CandidateQueue>(
         m_defaults.noiseCancellationWindow, m_defaults.maxConsecutiveRuns,
@@ -1708,9 +1749,12 @@ private:
     auto &history = m_histories.at(candidate);
     if (beginActivation)
       history.beginActivation();
+    queue.enqueue(m_measurementStartEvent);
+    alpaka::onHost::wait(m_measurementStartEvent);
     auto const start = std::chrono::steady_clock::now();
     launch();
-    alpaka::onHost::wait(queue);
+    queue.enqueue(m_measurementEndEvent);
+    alpaka::onHost::wait(m_measurementEndEvent);
     auto const elapsed = std::chrono::steady_clock::now() - start;
     runtimeSeconds = std::chrono::duration<double>{elapsed}.count();
     recordInstrumentationOverheadWarning(*runtimeSeconds);
@@ -2198,9 +2242,13 @@ private:
    */
   void stageCache(std::size_t candidate, bool schedulingChanged) {
 #if ALPAKA_TUNE_HAS_JSON
+    auto learning = std::optional<nlohmann::json>{};
+    if (m_defaults.strategy == StrategyKind::learnedHybrid &&
+        (schedulingChanged || !m_stagedCompleteHistory || !m_stagedHistory))
+      learning = serializedLearningStatus();
     if (!m_stagedCompleteHistory) {
       m_stagedCompleteHistory =
-          std::make_shared<nlohmann::json>(serializedCache());
+          std::make_shared<nlohmann::json>(serializedCache(learning));
     } else {
       auto &cache = *m_stagedCompleteHistory;
       cache["execution_count"] = m_executionCount;
@@ -2224,8 +2272,8 @@ private:
       if (schedulingChanged)
         cache["rejected_candidates"] = m_rejected;
       if (m_defaults.strategy == StrategyKind::learnedHybrid &&
-          schedulingChanged)
-        cache["learning"] = serializedLearningStatus();
+          schedulingChanged && learning)
+        cache["learning"] = *learning;
       cache["admission"] = serializedAdmissionStatus();
       while (cache["best_improvements"].size() < m_bestImprovements.size())
         cache["best_improvements"].push_back(serializedImprovement(
@@ -2233,7 +2281,7 @@ private:
     }
     m_completeHistory->stageCache(completeHistorySchemaVersion, m_fingerprint,
                                   m_stagedCompleteHistory);
-    stageHistoryCache(candidate, schedulingChanged);
+    stageHistoryCache(candidate, schedulingChanged, learning);
 #endif
   }
 
@@ -2443,8 +2491,7 @@ private:
       return std::nullopt;
     try {
       auto const &learning = compact ? serialized : serialized.at("learning");
-      if (learning.value("model_digest", std::string{}) !=
-          detail::fileFingerprint(m_defaults.learnedModelFile))
+      if (learning.value("model_digest", std::string{}) != m_learnedModelDigest)
         return std::nullopt;
       auto const &adapter =
           compact ? learning : learning.at("residual_adapter");
@@ -2481,7 +2528,7 @@ private:
     auto result = nlohmann::json{
         {"requested_strategy", std::string{strategyName(m_defaults.strategy)}},
         {"model_file", m_defaults.learnedModelFile.string()},
-        {"model_digest", detail::fileFingerprint(m_defaults.learnedModelFile)},
+        {"model_digest", m_learnedModelDigest},
         {"fallback_strategy",
          std::string{strategyName(m_defaults.learnedFallback)}}};
     auto const *learned =
@@ -2519,15 +2566,14 @@ private:
     return result;
   }
 
-  [[nodiscard]] auto serializedCompactAdapter() const
+  [[nodiscard]] auto
+  serializedCompactAdapter(nlohmann::json const &learning) const
       -> std::optional<nlohmann::json> {
     if (m_defaults.strategy != StrategyKind::learnedHybrid)
       return std::nullopt;
-    auto const *learned =
-        dynamic_cast<LearnedHybridStrategy const *>(m_strategy.get());
-    if (learned == nullptr || learned->status() != LearnedHybridStatus::active)
+    if (learning.value("status", std::string{}) != "active" ||
+        !learning.contains("residual_adapter"))
       return std::nullopt;
-    auto const learning = serializedLearningStatus();
     auto adapter = learning.at("residual_adapter");
     adapter["model_digest"] = learning.at("model_digest");
     return adapter;
@@ -2546,15 +2592,12 @@ private:
   }
 
   [[nodiscard]] auto historySamplingSeed() const noexcept -> std::uint64_t {
-    auto seed = std::uint64_t{14695981039346656037ull} ^ m_defaults.randomSeed;
-    for (auto const character : m_fingerprint) {
-      seed ^= static_cast<unsigned char>(character);
-      seed *= 1099511628211ull;
-    }
-    return seed;
+    return detail::contextSeed(m_effectiveRandomSeed, m_fingerprint);
   }
 
-  [[nodiscard]] auto serializedHistoryCache() const -> nlohmann::json {
+  [[nodiscard]] auto
+  serializedHistoryCache(std::optional<nlohmann::json> const &learning) const
+      -> nlohmann::json {
     auto cache = nlohmann::json{
         {"records", nlohmann::json::object()},
         {"sampling_seed", historySamplingSeed()},
@@ -2572,15 +2615,17 @@ private:
           {"median_runtime_seconds", statistics.estimate()},
           {"measurement_count", statistics.sampleCount}};
     }
-    if (auto adapter = serializedCompactAdapter())
-      cache["adapter"] = std::move(*adapter);
+    if (learning)
+      if (auto adapter = serializedCompactAdapter(*learning))
+        cache["adapter"] = std::move(*adapter);
     return cache;
   }
 
-  void stageHistoryCache(std::size_t candidate, bool schedulingChanged) {
+  void stageHistoryCache(std::size_t candidate, bool schedulingChanged,
+                         std::optional<nlohmann::json> const &learning) {
     if (!m_stagedHistory)
       m_stagedHistory =
-          std::make_shared<nlohmann::json>(serializedHistoryCache());
+          std::make_shared<nlohmann::json>(serializedHistoryCache(learning));
     else {
       auto &cache = *m_stagedHistory;
       auto const statistics = m_histories.at(candidate).statistics();
@@ -2590,16 +2635,22 @@ private:
           {"median_runtime_seconds", statistics.estimate()},
           {"measurement_count", statistics.sampleCount}};
       if (schedulingChanged) {
-        if (auto adapter = serializedCompactAdapter())
-          cache["adapter"] = std::move(*adapter);
-        else
+        if (learning) {
+          if (auto adapter = serializedCompactAdapter(*learning))
+            cache["adapter"] = std::move(*adapter);
+          else
+            cache.erase("adapter");
+        } else {
           cache.erase("adapter");
+        }
       }
     }
     m_history->stageCache(m_fingerprint, m_stagedHistory);
   }
 
-  [[nodiscard]] auto serializedCache() const -> nlohmann::json {
+  [[nodiscard]] auto
+  serializedCache(std::optional<nlohmann::json> const &learning) const
+      -> nlohmann::json {
     nlohmann::json cache;
     cache["fingerprint"] = m_fingerprint;
     cache["candidate_count"] = m_candidateCount;
@@ -2634,7 +2685,9 @@ private:
         {"maximum_consecutive_strategy_retries",
          m_defaults.maximumConsecutiveStrategyRetries}};
     if (m_defaults.mode == TuningMode::onlineAdaptive) {
-      cache["policy"]["horizon"] = m_defaults.horizon;
+      cache["policy"]["horizon"] = m_defaults.horizon
+                                       ? nlohmann::json{*m_defaults.horizon}
+                                       : nlohmann::json{nullptr};
       cache["policy"]["revisit_admission_steepness"] =
           m_defaults.revisitAdmissionSteepness;
       cache["policy"]["score_temperature_start"] =
@@ -2644,8 +2697,8 @@ private:
           m_defaults.horizonOffsetWithActiveHistory;
     }
     cache["admission"] = serializedAdmissionStatus();
-    if (m_defaults.strategy == StrategyKind::learnedHybrid)
-      cache["learning"] = serializedLearningStatus();
+    if (learning)
+      cache["learning"] = *learning;
     if (m_defaults.mode == TuningMode::onlineFixed) {
       if (m_defaults.maximumExecutions)
         cache["limits"]["maximum_executions"] = *m_defaults.maximumExecutions;
@@ -2688,14 +2741,17 @@ private:
   /** @brief Stage a complete snapshot without writing the persistence file. */
   void writeCache() {
 #if ALPAKA_TUNE_HAS_JSON
+    auto learning = std::optional<nlohmann::json>{};
+    if (m_defaults.strategy == StrategyKind::learnedHybrid)
+      learning = serializedLearningStatus();
     if (!m_stagedCompleteHistory)
       m_stagedCompleteHistory = std::make_shared<nlohmann::json>();
-    *m_stagedCompleteHistory = serializedCache();
+    *m_stagedCompleteHistory = serializedCache(learning);
     m_completeHistory->stageCache(completeHistorySchemaVersion, m_fingerprint,
                                   m_stagedCompleteHistory);
     if (!m_stagedHistory)
       m_stagedHistory = std::make_shared<nlohmann::json>();
-    *m_stagedHistory = serializedHistoryCache();
+    *m_stagedHistory = serializedHistoryCache(learning);
     m_history->stageCache(m_fingerprint, m_stagedHistory);
 #endif
   }
@@ -2705,9 +2761,13 @@ private:
   std::shared_ptr<detail::CompleteHistoryStore> m_completeHistory;
   TunablesType m_tunables;
   Device m_device;
+  Event m_measurementStartEvent;
+  Event m_measurementEndEvent;
   std::vector<std::string> m_identityEntries;
   std::vector<std::size_t> m_dimensionSizes;
   std::size_t m_candidateCount{1u};
+  std::uint64_t m_baseRandomSeed{};
+  std::uint64_t m_effectiveRandomSeed{};
   std::mt19937_64 m_random;
   std::uniform_real_distribution<double> m_admissionDistribution{0.0, 1.0};
   std::unique_ptr<ParameterStrategy> m_strategy;
@@ -2742,6 +2802,7 @@ private:
   std::unordered_map<std::string, std::size_t> m_compileVariantIndices;
   std::string m_compileVariantSignature;
   std::string m_fingerprint;
+  std::string m_learnedModelDigest{"unavailable"};
   std::string m_kernelName;
   std::string m_launchSpecification;
   std::size_t m_bestCandidate{std::numeric_limits<std::size_t>::max()};

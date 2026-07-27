@@ -132,13 +132,17 @@ and must not exceed ``historyWindowSize``. Lowering
 ``maxConsecutiveRuns`` must exceed ``warmupRuns``. In ``online_fixed``,
 ``maximumExecutions`` counts warm-up and measured launches, while
 ``maximumRetiredConfigurations`` limits completed candidate histories. These
-two guards are invalid in the other modes. ``online_adaptive`` instead requires
-``horizon``, which spans the current tuner process run without becoming a
-terminal budget. When compatible measured history is loaded,
+two guards are invalid in the other modes. ``online_adaptive`` optionally
+accepts ``horizon``, which spans the current tuner process run without becoming
+a terminal budget. With a horizon and compatible measured history,
 ``horizonOffsetWithActiveHistory`` selects the initial point in the normalized
 sigmoid/Boltzmann schedule. It is inclusive in ``[0, 1]`` and defaults to
-``0.8``; the remaining interval is stretched over all
-``horizon`` new launches.
+``0.8``; the remaining interval is stretched over all ``horizon`` new
+launches.
+Without ``horizon``, adaptive mode continuously accepts legal strategy
+revisits without the sigmoid or Boltzmann gates and never reports tuning-policy
+completion. ``horizon_offset_with_active_history`` is consequently invalid in
+YAML unless ``horizon`` is present.
 ``maximumConsecutiveStrategyRetries`` applies to both online modes and defaults
 to ``20``. Its YAML spelling is
 ``maximum_consecutive_strategy_retries``. A rejected strategy proposal is
@@ -162,6 +166,16 @@ their launch count independently and may optionally inspect
 admission/cooling horizon without stopping adaptation. See
 :doc:`execution_modes` for the complete lifecycle, ownership boundary, and
 probability definitions.
+
+``randomSeed`` defaults to the reproducible base seed zero. Each tuner mixes
+that base with its stable context fingerprint before constructing its strategy
+and admission random generator. Repeating the same context and numeric seed is
+therefore deterministic, while distinct kernels, launch specifications, or
+identity entries do not receive correlated random streams. YAML may use
+``random_seed: nondeterministic`` to request process-local entropy explicitly;
+the equivalent C++ opt-in is ``config.randomSeed.reset()``. The
+nondeterministic mode is intended for independent experiments and cannot
+reproduce an earlier proposal order from configuration alone.
 
 Selecting ``learned_hybrid`` leaves ``makeTuner`` and ``enqueue`` unchanged.
 If its model is missing, incompatible, or outside its supported feature

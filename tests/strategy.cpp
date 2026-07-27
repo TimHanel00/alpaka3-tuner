@@ -86,12 +86,18 @@ auto main() -> int {
       defaultConfig.maximumExecutions ||
       defaultConfig.maximumRetiredConfigurations ||
       defaultConfig.maximumConsecutiveStrategyRetries != 20u ||
-      defaultConfig.horizon != 40'000u || defaultConfig.history.file ||
+      defaultConfig.horizon || !defaultConfig.randomSeed ||
+      *defaultConfig.randomSeed != 0u || defaultConfig.history.file ||
       !defaultConfig.history.read || !defaultConfig.history.write ||
       defaultConfig.history.sampleCount || defaultConfig.completeHistory.file ||
       !defaultConfig.completeHistory.read ||
       !defaultConfig.completeHistory.write ||
       std::abs(defaultConfig.horizonOffsetWithActiveHistory - 0.8) > 1.0e-12)
+    return EXIT_FAILURE;
+  if (alpakaTune::detail::contextSeed(17u, "context-a") ==
+          alpakaTune::detail::contextSeed(17u, "context-b") ||
+      alpakaTune::detail::contextSeed(17u, "context-a") !=
+          alpakaTune::detail::contextSeed(17u, "context-a"))
     return EXIT_FAILURE;
   for (auto const invalidOffset : {-0.01, 1.01}) {
     auto invalidConfig = defaultConfig;
@@ -114,6 +120,18 @@ auto main() -> int {
     mixedAdaptiveConfigRejected = true;
   }
   if (!mixedAdaptiveConfigRejected)
+    return EXIT_FAILURE;
+  auto mixedFixedConfig = defaultConfig;
+  mixedFixedConfig.mode = alpakaTune::TuningMode::onlineFixed;
+  mixedFixedConfig.horizon = 10u;
+  mixedFixedConfig.maximumExecutions = 10u;
+  auto mixedFixedConfigRejected = false;
+  try {
+    mixedFixedConfig.validate();
+  } catch (std::invalid_argument const &) {
+    mixedFixedConfigRejected = true;
+  }
+  if (!mixedFixedConfigRejected)
     return EXIT_FAILURE;
   auto invalidRetryConfig = defaultConfig;
   invalidRetryConfig.maximumConsecutiveStrategyRetries = 0u;
@@ -405,6 +423,51 @@ auto main() -> int {
       std::abs(adaptiveDefaults.scoreTemperatureStart - 0.25) > 1.0e-12 ||
       std::abs(adaptiveDefaults.scoreTemperatureEnd - 0.05) > 1.0e-12 ||
       std::abs(adaptiveDefaults.horizonOffsetWithActiveHistory - 0.7) > 1.0e-12)
+    return EXIT_FAILURE;
+
+  auto const continuousAdaptiveConfiguration =
+      configurationDirectory / "continuous-adaptive-v3.yaml";
+  auto continuousAdaptiveYaml = std::ofstream{continuousAdaptiveConfiguration};
+  continuousAdaptiveYaml << "schema_version: 3\n"
+                            "tuning:\n"
+                            "  mode: online_adaptive\n"
+                            "  strategy: random\n"
+                            "  random_seed: nondeterministic\n"
+                            "  warmup_runs: 0\n"
+                            "  runs_per_candidate: 1\n"
+                            "  noise_cancellation_window: 1\n"
+                            "  max_consecutive_runs: 1\n";
+  continuousAdaptiveYaml.close();
+  auto const continuousAdaptiveDefaults =
+      alpakaTune::TunerConfig::fromYaml(continuousAdaptiveConfiguration);
+  if (continuousAdaptiveDefaults.mode !=
+          alpakaTune::TuningMode::onlineAdaptive ||
+      continuousAdaptiveDefaults.horizon ||
+      continuousAdaptiveDefaults.randomSeed)
+    return EXIT_FAILURE;
+
+  auto const offsetWithoutHorizonConfiguration =
+      configurationDirectory / "offset-without-horizon-v3.yaml";
+  auto offsetWithoutHorizonYaml =
+      std::ofstream{offsetWithoutHorizonConfiguration};
+  offsetWithoutHorizonYaml << "schema_version: 3\n"
+                              "tuning:\n"
+                              "  mode: online_adaptive\n"
+                              "  strategy: random\n"
+                              "  warmup_runs: 0\n"
+                              "  runs_per_candidate: 1\n"
+                              "  noise_cancellation_window: 1\n"
+                              "  max_consecutive_runs: 1\n"
+                              "  horizon_offset_with_active_history: 0.8\n";
+  offsetWithoutHorizonYaml.close();
+  auto offsetWithoutHorizonRejected = false;
+  try {
+    static_cast<void>(
+        alpakaTune::TunerConfig::fromYaml(offsetWithoutHorizonConfiguration));
+  } catch (std::runtime_error const &) {
+    offsetWithoutHorizonRejected = true;
+  }
+  if (!offsetWithoutHorizonRejected)
     return EXIT_FAILURE;
 
   auto const mixedAdaptiveConfiguration =

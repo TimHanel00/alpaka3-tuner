@@ -17,14 +17,15 @@ application lifetime.
 
 ``Tuner::completed()`` is optional policy information an application may
 consult. In ``online_fixed`` and ``offline`` it identifies a terminal tuner
-state. In ``online_adaptive`` it becomes true at ``horizon`` only to
-indicate that the admission sigmoid and cooling schedule reached their final
-state. It does not stop adaptation, measurement, revisits, or residual-adapter
-updates.
+state. In ``online_adaptive`` with a configured ``horizon`` it becomes true at
+that horizon only to indicate that the admission sigmoid and cooling schedule
+reached their final state. It does not stop adaptation, measurement, revisits,
+or residual-adapter updates. Without a horizon it remains false indefinitely.
 
-The examples demonstrate an application-owned combined condition: at least
-50,000 executions and ``completed()``. Their default adaptive horizon is
-40,000, intentionally leaving 10,000 launches at the final schedule state.
+The examples configure a horizon and demonstrate an application-owned combined
+condition: at least 50,000 executions and ``completed()``. Their shipped YAML
+uses an adaptive horizon of 40,000, intentionally leaving 10,000 launches at
+the final schedule state.
 Those numbers are independent. Applications that require exactly N launches
 should simply execute exactly N launches and need not inspect ``completed()``.
 ``isTuningComplete()`` reports the same policy completion. It becomes true at
@@ -108,9 +109,9 @@ winner replay.
 ``online_adaptive``
 -------------------
 
-``online_adaptive`` is a continuous mode. One admission gives a candidate one
-queue residency and therefore one activation burst. The burst still follows
-the queue configuration exactly. For example:
+``online_adaptive`` is a continuous mode. A horizon is optional. One admission
+gives a candidate one queue residency and therefore one activation burst. The
+burst still follows the queue configuration exactly. For example:
 
 .. code-block:: yaml
 
@@ -133,12 +134,22 @@ the current rolling window rather than an indefinitely growing history.
 On a second adaptive run, retained timings make candidates revisits from the
 first proposal onward, and the restored adapter supplies learned context.
 Candidate run counts and both execution counters restart at zero. The loaded
-history activates ``horizon_offset_with_active_history`` but never shortens the
-new run's configured ``horizon``.
+history activates ``horizon_offset_with_active_history`` when a horizon is
+configured but never shortens the new run's configured ``horizon``.
 
-Unseen legal candidates are admitted directly. An already measured candidate
-must pass two independent gates after active-queue duplicates and restrictions
-have been rejected:
+Without ``horizon``, every legal revisit proposed by the strategy is reopened
+directly after active-queue and restriction checks. The tuner does not apply
+the sigmoid revisit gate or relative-score Boltzmann gate; exploration and
+exploitation are entirely strategy-driven. This is often the clearest choice
+for ``learned_hybrid`` because the learned strategy already ranks candidates
+and adapts from runtime observations. Measurement, rolling-history updates,
+and residual-adapter updates continue for the application's full lifetime,
+while ``completed()`` and ``isTuningComplete()`` remain false. Applications
+must not use either query as an exit condition in this horizon-less form.
+
+With ``horizon`` configured, unseen legal candidates are admitted directly. An
+already measured candidate must pass two independent gates after active-queue
+duplicates and restrictions have been rejected:
 
 .. math::
 
@@ -191,7 +202,7 @@ The second gate prefers candidates close to the current best robust runtime:
 0.05. The current best therefore always passes the score gate, while slower
 configurations become less likely as the temperature cools.
 
-In this mode ``horizon`` is the admission and temperature schedule inside the
+When present, ``horizon`` is the admission and temperature schedule inside the
 tuner. After that many launches in the current tuner process run,
 ``completed()``, ``isTuningComplete()``, ``TunerInfo::tuningComplete``, and the
 corresponding ``LaunchObservation`` field become true, but the horizon itself

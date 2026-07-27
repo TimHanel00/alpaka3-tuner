@@ -175,11 +175,41 @@ auto main() -> int {
   };
   auto const tunables =
       alpakaTune::TunableBundle{runtimeValue(alpakaTune::RVals{1, 2, 3})};
+  auto const bundle =
+      alpaka::KernelBundle{WriteKernel{}, output.getMdSpan(), runtimeValue};
+
+  // A numeric seed reproduces one context while the fingerprint separates
+  // otherwise identical random strategies belonging to different contexts.
+  auto contextSeedConfig = oneRunConfig();
+  contextSeedConfig.mode = alpakaTune::TuningMode::onlineAdaptive;
+  contextSeedConfig.strategy = alpakaTune::StrategyKind::random;
+  contextSeedConfig.horizon.reset();
+  contextSeedConfig.maximumExecutions.reset();
+  contextSeedConfig.maximumRetiredConfigurations.reset();
+  contextSeedConfig.history.file.reset();
+  contextSeedConfig.history.read = false;
+  contextSeedConfig.history.write = false;
+  contextSeedConfig.completeHistory.file.reset();
+  contextSeedConfig.completeHistory.read = false;
+  contextSeedConfig.completeHistory.write = false;
+  auto randomSequence = [&](std::string_view identity) {
+    auto sequenceTuner =
+        alpakaTune::makeTuner(contextSeedConfig, tunables, device, identity);
+    auto sequence = std::vector<std::size_t>{};
+    for (std::size_t launch = 0u; launch < 8u; ++launch) {
+      sequenceTuner.enqueue(queue, frameSpec, bundle);
+      sequence.push_back(sequenceTuner.lastCandidateIndex());
+    }
+    return sequence;
+  };
+  auto const firstContextSequence = randomSequence("seed-context-a");
+  if (firstContextSequence != randomSequence("seed-context-a") ||
+      firstContextSequence == randomSequence("seed-context-b"))
+    return EXIT_FAILURE;
+
   auto tuner = alpakaTune::makeTuner(
       alpakaTune::TunerConfig::fromYaml(configuration), tunables, device,
       alpaka::deviceKind::cpu, alpaka::api::host, executor, "tuner-test");
-  auto const bundle =
-      alpaka::KernelBundle{WriteKernel{}, output.getMdSpan(), runtimeValue};
 
   auto firstObservation = tuner.enqueueObserved(queue, frameSpec, bundle);
   if (!firstObservation.measured || !firstObservation.runtimeSeconds ||
@@ -519,6 +549,7 @@ auto main() -> int {
       adaptiveRetryTuner.enqueueObserved(queue, frameSpec, bundle);
   if (!firstAdaptiveRetry.measured || firstAdaptiveRetry.tuningComplete ||
       adaptiveRetryTuner.isTuningComplete() ||
+      adaptiveRetryTuner.info().scheduledCandidateCount != 1u ||
       adaptiveRetryTuner.info().strategyRetryLimitReachedCount != 1u ||
       adaptiveRetryTuner.info().adaptiveRetryFallbackCount != 1u)
     return EXIT_FAILURE;
@@ -528,6 +559,7 @@ auto main() -> int {
       secondAdaptiveRetry.tuningComplete ||
       secondAdaptiveRetry.candidateIndex != firstAdaptiveRetry.candidateIndex ||
       adaptiveRetryTuner.isTuningComplete() ||
+      adaptiveRetryTuner.info().scheduledCandidateCount != 1u ||
       adaptiveRetryTuner.info().strategyRetryLimitReachedCount != 2u ||
       adaptiveRetryTuner.info().adaptiveRetryFallbackCount != 2u ||
       adaptiveRetryTuner.candidateRuntimeSamples(0u).size() != 2u)
@@ -617,6 +649,27 @@ auto main() -> int {
   if (!adaptiveReasonRejected)
     return EXIT_FAILURE;
 
+  // Without an explicit horizon, adaptive mode continuously admits legal
+  // strategy revisits and never emits a finite-schedule completion signal.
+  auto continuousAdaptiveConfig = adaptiveRetryConfig;
+  continuousAdaptiveConfig.horizon.reset();
+  continuousAdaptiveConfig.maximumConsecutiveStrategyRetries = 20u;
+  auto continuousAdaptiveTuner =
+      alpakaTune::makeTuner(continuousAdaptiveConfig, singleCandidateTunables,
+                            device, "continuous-adaptive-test");
+  for (std::size_t launch = 0u; launch < 2u; ++launch)
+    continuousAdaptiveTuner.enqueue(queue, frameSpec, bundle);
+  auto const continuousAdaptiveInfo = continuousAdaptiveTuner.info();
+  if (continuousAdaptiveTuner.isTuningComplete() ||
+      continuousAdaptiveTuner.completed() ||
+      continuousAdaptiveInfo.tuningComplete || continuousAdaptiveInfo.horizon ||
+      continuousAdaptiveInfo.adaptiveHorizonProgress != 0.0 ||
+      continuousAdaptiveInfo.revisitAcceptedCount == 0u ||
+      continuousAdaptiveInfo.revisitRejectedCount != 0u ||
+      continuousAdaptiveInfo.scoreRejectedCount != 0u ||
+      continuousAdaptiveTuner.candidateRuntimeSamples(0u).size() != 2u)
+    return EXIT_FAILURE;
+
   // horizon is an adaptive schedule, not a stop.
   // At and after the horizon the single current-best candidate passes both
   // admission gates with probability one and may be visited indefinitely.
@@ -661,6 +714,7 @@ auto main() -> int {
   // collect a timing sample or instantiate a strategy.
   auto offlineConfig = adaptiveConfig;
   offlineConfig.mode = alpakaTune::TuningMode::offline;
+  offlineConfig.horizon.reset();
   auto offlineTuner = alpakaTune::makeTuner(offlineConfig, adaptiveTunables,
                                             device, "adaptive-burst-test");
   auto const offlineObservation =

@@ -23,8 +23,8 @@ The mode-specific fields are deliberately disjoint:
    * - ``online_adaptive``
      - ``horizon`` and
        ``horizon_offset_with_active_history``
-     - Schedule length and history-aware starting point. Neither is a
-       terminal application budget.
+     - Optional schedule length and its history-aware starting point. Neither
+       is a terminal application budget; the offset requires the horizon.
    * - ``offline``
      - none
      - Replays the best configuration from compatible measured history.
@@ -33,6 +33,13 @@ Mixing these fields is a configuration error. In particular,
 ``maximum_executions`` no longer doubles as an adaptive schedule parameter.
 The surrounding application still owns its total number of kernel launches in
 every mode.
+
+Omitting ``horizon`` selects continuous strategy-driven adaptive admission.
+Legal revisits bypass the sigmoid and Boltzmann gates, measurement and adapter
+updates continue, and the tuner never reports policy completion. This can be
+useful for ``learned_hybrid`` when the strategy itself should own the
+exploration/exploitation balance. The examples below retain an explicit
+horizon because they demonstrate the history-aware admission schedule.
 
 The sampling fields also have different roles. In ``online_fixed``,
 ``runs_per_candidate`` is a hard per-candidate measurement cap. In

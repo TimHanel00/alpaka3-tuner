@@ -88,6 +88,12 @@ Select one in YAML:
      strategy: bayesian_optimization
      random_seed: 17
 
+A numeric seed is a deterministic base seed. The tuner mixes it with the
+stable tuning-context fingerprint, so the same context is reproducible while
+different kernels and identity entries do not receive identical random or
+learned candidate streams. Use ``random_seed: nondeterministic`` only when a
+fresh, non-reproducible stream is explicitly desired.
+
 Custom strategies derive from ``alpakaTune::ParameterStrategy`` and implement
 ``recommend(StrategyContext const&)``. The only required output is a valid
 normalized vector. They may override ``recommendationResult`` when their state

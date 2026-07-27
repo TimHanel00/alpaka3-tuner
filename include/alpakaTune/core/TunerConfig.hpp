@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <initializer_list>
@@ -117,8 +118,8 @@ struct TunerConfig {
   std::optional<std::size_t> maximumExecutions;
   /** Alternative online-fixed completion guard on retired configurations. */
   std::optional<std::size_t> maximumRetiredConfigurations;
-  /** New-run launch horizon used exclusively by online-adaptive mode. */
-  std::size_t horizon{40'000u};
+  /** Optional new-run launch horizon used by online-adaptive mode. */
+  std::optional<std::size_t> horizon;
   /** Maximum number of newest timing records retained per configuration. */
   std::size_t historyWindowSize{10u};
   /** Shape of the normalized-logistic adaptive revisit-admission ramp. */
@@ -131,8 +132,8 @@ struct TunerConfig {
   double horizonOffsetWithActiveHistory{0.8};
   /** Parameter-proposal algorithm; admission remains tuner-owned. */
   StrategyKind strategy{StrategyKind::exhaustive};
-  /** Reproducible seed shared by strategy and tuner admission randomness. */
-  std::uint64_t randomSeed{0u};
+  /** Base seed; disengage for a nondeterministic process-local seed. */
+  std::optional<std::uint64_t> randomSeed{0u};
   /** Compact sampled history policy. */
   HistoryConfig history;
   /** Complete raw-sample history policy. */
@@ -309,8 +310,24 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
   auto const strategy =
       tuning["strategy"] ? tuning["strategy"].as<std::string>() : "exhaustive";
   defaults.strategy = strategyFromName(strategy);
-  defaults.randomSeed =
-      tuning["random_seed"] ? tuning["random_seed"].as<std::uint64_t>() : 0u;
+  if (auto const seed = tuning["random_seed"]; seed.IsDefined()) {
+    if (seed.IsNull())
+      throw std::runtime_error{
+          "YAML random_seed must be an unsigned integer or "
+          "'nondeterministic'."};
+    auto const spelling = seed.as<std::string>();
+    if (spelling == "nondeterministic")
+      defaults.randomSeed.reset();
+    else {
+      try {
+        defaults.randomSeed = seed.as<std::uint64_t>();
+      } catch (YAML::Exception const &) {
+        throw std::runtime_error{
+            "YAML random_seed must be an unsigned integer or "
+            "'nondeterministic'."};
+      }
+    }
+  }
   defaults.warmupRuns =
       tuning["warmup_runs"] ? tuning["warmup_runs"].as<std::size_t>() : 1u;
   defaults.runsPerCandidate = requirePositive(tuning, "runs_per_candidate");
@@ -360,7 +377,16 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
       throw std::runtime_error{
           "YAML online_adaptive accepts horizon, not maximum_executions or "
           "maximum_retired_configurations."};
-    defaults.horizon = requirePositive(tuning, "horizon");
+    if (auto const horizon = tuning["horizon"]; horizon.IsDefined()) {
+      if (horizon.IsNull())
+        defaults.horizon.reset();
+      else
+        defaults.horizon = requirePositive(tuning, "horizon");
+    }
+    if (!defaults.horizon &&
+        tuning["horizon_offset_with_active_history"].IsDefined())
+      throw std::runtime_error{
+          "YAML horizon_offset_with_active_history requires horizon."};
   } else {
     if (tuning["horizon"].IsDefined() ||
         tuning["horizon_offset_with_active_history"].IsDefined())
@@ -514,12 +540,16 @@ inline void TunerConfig::validate() const {
         "TunerConfig::onlineFixed requires maximumExecutions or "
         "maximumRetiredConfigurations."};
   if (mode == TuningMode::onlineAdaptive) {
-    positive(horizon, "TunerConfig::horizon");
+    if (horizon)
+      positive(*horizon, "TunerConfig::horizon");
     if (maximumExecutions || maximumRetiredConfigurations)
       throw std::invalid_argument{
           "TunerConfig::onlineAdaptive uses horizon and does not accept "
           "online-fixed completion guards."};
   }
+  if (mode != TuningMode::onlineAdaptive && horizon)
+    throw std::invalid_argument{
+        "TunerConfig::horizon is exclusive to online-adaptive mode."};
   if (mode == TuningMode::offline &&
       (maximumExecutions || maximumRetiredConfigurations)) {
     throw std::invalid_argument{
