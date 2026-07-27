@@ -43,7 +43,8 @@ void appendUnique(auto &values, auto const &candidate) {
     values.push_back(candidate);
 }
 
-[[nodiscard]] auto splitCandidates(std::integral auto upperLimit) {
+[[nodiscard]] auto splitCandidates(std::integral auto upperLimit,
+                                   std::size_t refinementLevels) {
   if (upperLimit < ALPAKA_TYPEOF(upperLimit){1})
     throw std::invalid_argument{
         "A default numFrames upper limit must be positive."};
@@ -58,17 +59,25 @@ void appendUnique(auto &values, auto const &candidate) {
   std::ranges::reverse(splits);
 
   auto values = splits;
-  for (std::size_t index = 1u; index < splits.size(); ++index) {
-    auto const lower = splits[index - 1u];
-    auto const upper = splits[index];
-    ALPAKA_TYPEOF(upperLimit)
-    const midpoint = lower + (upper - lower) / ALPAKA_TYPEOF(upperLimit){2};
-    if (midpoint != lower && midpoint != upper)
-      values.push_back(midpoint);
+  for (std::size_t level = 0u; level < refinementLevels; ++level) {
+    auto const current = values;
+    auto added = false;
+    for (std::size_t index = 1u; index < current.size(); ++index) {
+      auto const lower = current[index - 1u];
+      auto const upper = current[index];
+      ALPAKA_TYPEOF(upperLimit)
+      const midpoint = lower + (upper - lower) / ALPAKA_TYPEOF(upperLimit){2};
+      if (midpoint != lower && midpoint != upper) {
+        values.push_back(midpoint);
+        added = true;
+      }
+    }
+    if (!added)
+      break;
+    std::ranges::sort(values);
+    auto const uniqueEnd = std::ranges::unique(values).begin();
+    values.erase(uniqueEnd, values.end());
   }
-  std::ranges::sort(values);
-  auto const uniqueEnd = std::ranges::unique(values).begin();
-  values.erase(uniqueEnd, values.end());
   return values;
 }
 
@@ -252,12 +261,15 @@ preserveCoverage(alpaka::onHost::concepts::FrameSpec auto const &frameSpec) {
 
 /** Runtime numFrames defaults from one through a caller-provided upper limit.
  *
- * Each component contains repeated halves of its upper limit and the integer
- * midpoint between adjacent splits. Multidimensional candidates are their
- * Cartesian product, with the final Alpaka index varying fastest.
+ * Each component contains repeated halves of its upper limit. Every refinement
+ * level inserts the integer midpoint between adjacent values; one level keeps
+ * the original default, while three levels approximate eighth-interval spacing
+ * between successive halvings. Multidimensional candidates are their Cartesian
+ * product, with the final Alpaka index varying fastest.
  */
-[[nodiscard]] auto defaultNumFramesCandidates(
-    alpaka::concepts::Vector auto const &upperLimitValue) {
+[[nodiscard]] auto
+defaultNumFramesCandidates(alpaka::concepts::Vector auto const &upperLimitValue,
+                           std::size_t refinementLevels = 1u) {
   using NumFrames = ALPAKA_TYPEOF(upperLimitValue);
   using Scalar = ALPAKA_TYPEOF(upperLimitValue[0u]);
   using RuntimeNumFrames = alpaka::Vec<Scalar, NumFrames::dim()>;
@@ -266,7 +278,8 @@ preserveCoverage(alpaka::onHost::concepts::FrameSpec auto const &frameSpec) {
   auto candidateCount = std::size_t{1u};
   for (std::size_t dimension = 0u; dimension < RuntimeNumFrames::dim();
        ++dimension) {
-    components[dimension] = detail::splitCandidates(upperLimit[dimension]);
+    components[dimension] =
+        detail::splitCandidates(upperLimit[dimension], refinementLevels);
     if (candidateCount >
         std::numeric_limits<std::size_t>::max() / components[dimension].size())
       throw std::overflow_error{

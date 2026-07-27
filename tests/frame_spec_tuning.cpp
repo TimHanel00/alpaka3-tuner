@@ -91,6 +91,15 @@ int main() {
   if (numFrames1 != expectedNumFrames1)
     return EXIT_FAILURE;
 
+  auto const refinedNumFrames =
+      alpakaTune::defaultNumFramesCandidates(Vector1{16u}, 2u).values();
+  auto const expectedRefinedNumFrames = std::vector<Vector1>{
+      Vector1{1u},  Vector1{2u},  Vector1{3u},  Vector1{4u},
+      Vector1{5u},  Vector1{6u},  Vector1{7u},  Vector1{8u},
+      Vector1{10u}, Vector1{12u}, Vector1{14u}, Vector1{16u}};
+  if (refinedNumFrames != expectedRefinedNumFrames)
+    return EXIT_FAILURE;
+
   auto const numFrames2 =
       alpakaTune::defaultNumFramesCandidates(Vector2{4u, 2u}).values();
   auto const expectedNumFrames2 = std::vector<Vector2>{

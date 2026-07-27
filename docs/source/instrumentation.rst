@@ -158,6 +158,13 @@ For example, an upper limit of 1024 includes 256, 512, 768, and 1024. In
 multiple dimensions, Alpaka ``mapToND`` ordering forms their Cartesian product,
 with the final component varying fastest.
 
+``defaultNumFramesCandidates`` accepts an optional refinement-level argument.
+The default value of one inserts the midpoints above. Each additional level
+inserts another midpoint between every adjacent value; for example,
+``defaultNumFramesCandidates(upperNumFrames, 3u)`` approximates eighth-interval
+spacing between successive halvings. This provides a denser runtime space
+without changing the FrameSpec tunable's dimensionality.
+
 The complete default factory applies two lazy relations: only the documented
 extent factorizations are legal after vector-component recombination, and each
 candidate's logical coverage must be less than or equal to the original
