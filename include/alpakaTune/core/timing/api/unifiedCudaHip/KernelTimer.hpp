@@ -29,8 +29,7 @@ namespace alpakaTune::detail::timing::unifiedCudaHip {
 template <alpaka::concepts::Api Api> struct NativeRuntime;
 
 #if ALPAKA_LANG_CUDA
-template <>
-struct NativeRuntime<alpaka::api::Cuda> : alpaka::ApiCudaRt {
+template <> struct NativeRuntime<alpaka::api::Cuda> : alpaka::ApiCudaRt {
   static auto elapsedMilliseconds(float *milliseconds, Event_t start,
                                   Event_t end) {
     return cudaEventElapsedTime(milliseconds, start, end);
@@ -39,8 +38,7 @@ struct NativeRuntime<alpaka::api::Cuda> : alpaka::ApiCudaRt {
 #endif
 
 #if ALPAKA_LANG_HIP
-template <>
-struct NativeRuntime<alpaka::api::Hip> : alpaka::ApiHipRt {
+template <> struct NativeRuntime<alpaka::api::Hip> : alpaka::ApiHipRt {
   static auto elapsedMilliseconds(float *milliseconds, Event_t start,
                                   Event_t end) {
     return hipEventElapsedTime(milliseconds, start, end);
@@ -56,40 +54,53 @@ public:
     ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK(Interface,
                                      Interface::setDevice(m_deviceIndex));
     ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK(
-        Interface, Interface::eventCreateWithFlags(&m_event,
-                                                   Interface::eventDefault));
+        Interface,
+        Interface::eventCreateWithFlags(&m_event, Interface::eventDefault));
   }
 
   NativeEvent(NativeEvent const &) = delete;
   auto operator=(NativeEvent const &) -> NativeEvent & = delete;
-  NativeEvent(NativeEvent &&) = delete;
-  auto operator=(NativeEvent &&) -> NativeEvent & = delete;
+  NativeEvent(NativeEvent &&other) noexcept
+      : m_deviceIndex(other.m_deviceIndex),
+        m_event(std::exchange(other.m_event, typename Interface::Event_t{})) {}
 
-  ~NativeEvent() noexcept {
-    ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK_NOEXCEPT(
-        Interface, Interface::setDevice(m_deviceIndex));
-    ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK_NOEXCEPT(
-        Interface, Interface::eventDestroy(m_event));
+  auto operator=(NativeEvent &&other) noexcept -> NativeEvent & {
+    if (this != &other) {
+      destroy();
+      m_deviceIndex = other.m_deviceIndex;
+      m_event = std::exchange(other.m_event, typename Interface::Event_t{});
+    }
+    return *this;
   }
 
-  [[nodiscard]] auto get() const noexcept {
-    return m_event;
-  }
+  ~NativeEvent() noexcept { destroy(); }
+
+  [[nodiscard]] auto get() const noexcept { return m_event; }
 
 private:
+  void destroy() noexcept {
+    if (m_event == typename Interface::Event_t{})
+      return;
+    ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK_NOEXCEPT(
+        Interface, Interface::setDevice(m_deviceIndex));
+    ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK_NOEXCEPT(Interface,
+                                              Interface::eventDestroy(m_event));
+    m_event = typename Interface::Event_t{};
+  }
+
   int m_deviceIndex;
   typename Interface::Event_t m_event{};
 };
 
 /** CUDA/HIP device-event timer using an Alpaka non-blocking launch queue. */
-template <alpaka::concepts::Api Api,
-          alpaka::onHost::concepts::Device Device>
+template <alpaka::concepts::Api Api, alpaka::onHost::concepts::Device Device>
 class KernelTimer {
   using Interface = NativeRuntime<Api>;
 
 public:
   explicit KernelTimer(Device &device)
-      : m_boundaryEvent(device.makeEvent()), m_startEvent(device.getNativeHandle()),
+      : m_boundaryEvent(device.makeEvent()),
+        m_startEvent(device.getNativeHandle()),
         m_endEvent(device.getNativeHandle()) {}
 
   [[nodiscard]] static constexpr auto measurementSource() noexcept
@@ -106,12 +117,12 @@ public:
     alpaka::onHost::wait(m_boundaryEvent);
 
     ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK(
-        Interface, Interface::eventRecord(m_startEvent.get(),
-                                          queue.getNativeHandle()));
+        Interface,
+        Interface::eventRecord(m_startEvent.get(), queue.getNativeHandle()));
     ALPAKA_FORWARD(launch)(queue);
     ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK(
-        Interface, Interface::eventRecord(m_endEvent.get(),
-                                          queue.getNativeHandle()));
+        Interface,
+        Interface::eventRecord(m_endEvent.get(), queue.getNativeHandle()));
     ALPAKA_UNIFORM_CUDA_HIP_RT_CHECK(
         Interface, Interface::eventSynchronize(m_endEvent.get()));
 
@@ -136,18 +147,16 @@ namespace alpakaTune::detail::timing::internal {
 
 #if ALPAKA_LANG_CUDA
 template <>
-struct MakeKernelTimer::Op<alpaka::api::Cuda,
-                           alpaka::deviceKind::NvidiaGpu> {
-  [[nodiscard]] auto operator()(alpaka::onHost::concepts::Device auto &device)
-      const {
+struct MakeKernelTimer::Op<alpaka::api::Cuda, alpaka::deviceKind::NvidiaGpu> {
+  [[nodiscard]] auto
+  operator()(alpaka::onHost::concepts::Device auto &device) const {
     return unifiedCudaHip::KernelTimer<alpaka::api::Cuda,
                                        ALPAKA_TYPEOF(device)>{device};
   }
 };
 
 template <>
-struct MakeTuningQueue::Op<alpaka::api::Cuda,
-                           alpaka::deviceKind::NvidiaGpu> {
+struct MakeTuningQueue::Op<alpaka::api::Cuda, alpaka::deviceKind::NvidiaGpu> {
   [[nodiscard]] auto operator()(alpaka::onHost::concepts::Device auto &device,
                                 alpaka::concepts::QueueKind auto kind,
                                 ::alpakaTune::timing::Enabled) const {
@@ -159,10 +168,10 @@ struct MakeTuningQueue::Op<alpaka::api::Cuda,
 #if ALPAKA_LANG_HIP
 template <>
 struct MakeKernelTimer::Op<alpaka::api::Hip, alpaka::deviceKind::AmdGpu> {
-  [[nodiscard]] auto operator()(alpaka::onHost::concepts::Device auto &device)
-      const {
-    return unifiedCudaHip::KernelTimer<alpaka::api::Hip,
-                                       ALPAKA_TYPEOF(device)>{device};
+  [[nodiscard]] auto
+  operator()(alpaka::onHost::concepts::Device auto &device) const {
+    return unifiedCudaHip::KernelTimer<alpaka::api::Hip, ALPAKA_TYPEOF(device)>{
+        device};
   }
 };
 
