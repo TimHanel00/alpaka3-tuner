@@ -261,13 +261,20 @@ candidate. The shared tuner admission policy then reports one disposition back
 to the strategy: scheduled, accepted active duplicate, restriction rejection,
 revisit rejection, or score rejection. A candidate already resident in the
 active queue satisfies the recommendation, so refill stops and queue execution
-continues without asking the strategy for a substitute. Only an actual policy
-rejection requests an entirely new proposal; the tuner does not mutate it or
-search locally for a nearby substitute.
+continues without asking the strategy for a substitute. A newly scheduled
+candidate likewise ends the refill attempt. Only an actual policy rejection
+requests an entirely new proposal; the tuner does not mutate it or search
+locally for a nearby substitute.
+
+Learned hybrid commits its selection cycle only when a recommendation starts a
+new queue activation. Active duplicates do not consume selection slots, while
+rejections advance to another candidate within the same phase. Its default
+cycle contains ten predicted-fast activations followed by one
+uncertainty/diversity activation.
 
 Strategies may deliberately recommend previously measured points. They must
 not hide duplicate ownership inside their own candidate bookkeeping. Regression
 tests also require every built-in strategy, including learned hybrid, to expose
-at least ten distinct raw candidates among 100 recommendations in a
+at least ten distinct raw candidates among 132 admitted recommendations in a
 100-candidate space. Fixed seeds make this strategy contract deterministic.
 This is proposal diversity, not a promise to exhaust the entire space.

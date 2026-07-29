@@ -1432,6 +1432,7 @@ private:
       if (!m_queue->insert(recommendation->candidate))
         throw std::logic_error{
             "An admitted candidate could not enter the active queue."};
+      return;
     }
   }
 

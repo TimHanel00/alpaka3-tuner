@@ -226,7 +226,7 @@ auto main() -> int {
       strategy.cachedCandidateCount() > 6u ||
       strategy.peakCachedCandidateCount() != 6u ||
       strategy.lastSelectionReason() !=
-          alpakaTune::LearnedSelectionReason::uncertaintyDiversity) {
+          alpakaTune::LearnedSelectionReason::predictedFast) {
     std::cerr << "small-space learned behavior mismatch: first="
               << first.front() << " updates=" << strategy.adapterUpdateCount()
               << " observations=" << strategy.incorporatedObservationCount()
@@ -237,6 +237,29 @@ auto main() -> int {
               << " fourth=" << fourth.front() << '\n';
     return EXIT_FAILURE;
   }
+
+  auto cycleStrategy = alpakaTune::LearnedHybridStrategy{
+      loaded.artifact, descriptor(), 29u, options};
+  for (std::size_t selection = 0u; selection < 10u; ++selection) {
+    auto const candidate = cycleStrategy.recommend(context);
+    if (cycleStrategy.lastSelectionReason() !=
+        alpakaTune::LearnedSelectionReason::predictedFast)
+      return EXIT_FAILURE;
+    cycleStrategy.recommendationResult(
+        candidate, alpakaTune::RecommendationDisposition::scheduled);
+  }
+  auto const explorationCandidate = cycleStrategy.recommend(context);
+  if (cycleStrategy.lastSelectionReason() !=
+      alpakaTune::LearnedSelectionReason::uncertaintyDiversity)
+    return EXIT_FAILURE;
+  cycleStrategy.recommendationResult(
+      explorationCandidate,
+      alpakaTune::RecommendationDisposition::activeDuplicate);
+  auto const repeatedExplorationCandidate = cycleStrategy.recommend(context);
+  if (repeatedExplorationCandidate != explorationCandidate ||
+      cycleStrategy.lastSelectionReason() !=
+          alpakaTune::LearnedSelectionReason::uncertaintyDiversity)
+    return EXIT_FAILURE;
 
   auto const adapterState = strategy.residualAdapterState();
   if (adapterState.coefficients.empty() ||
@@ -267,12 +290,17 @@ auto main() -> int {
   auto deterministic = alpakaTune::LearnedHybridStrategy{
       loaded.artifact, descriptor(24u), 31u, boundedOptions};
   auto seen = std::vector<alpakaTune::ParameterConfiguration>{};
-  for (std::size_t index = 0u; index < 24u; ++index) {
+  for (std::size_t index = 0u; index < 44u; ++index) {
     auto const candidate = bounded.recommend(boundedContext);
-    if (candidate != deterministic.recommend(boundedContext)) {
+    auto const repeatedCandidate = deterministic.recommend(boundedContext);
+    if (candidate != repeatedCandidate) {
       std::cerr << "bounded sequence mismatch at " << index << '\n';
       return EXIT_FAILURE;
     }
+    bounded.recommendationResult(
+        candidate, alpakaTune::RecommendationDisposition::scheduled);
+    deterministic.recommendationResult(
+        repeatedCandidate, alpakaTune::RecommendationDisposition::scheduled);
     if (std::ranges::find(seen, candidate) == seen.end())
       seen.push_back(candidate);
   }
@@ -302,11 +330,18 @@ auto main() -> int {
       loaded.artifact, descriptor(100u), deterministicDiversitySeed,
       diversityOptions};
   auto rawRecommendations = std::set<std::size_t>{};
-  for (std::size_t recommendation = 0u; recommendation < 100u;
+  for (std::size_t recommendation = 0u; recommendation < 132u;
        ++recommendation) {
     auto const configuration = diversity.recommend(diversityContext);
-    if (configuration != repeatedDiversity.recommend(diversityContext))
+    auto const repeatedConfiguration =
+        repeatedDiversity.recommend(diversityContext);
+    if (configuration != repeatedConfiguration)
       return EXIT_FAILURE;
+    diversity.recommendationResult(
+        configuration, alpakaTune::RecommendationDisposition::scheduled);
+    repeatedDiversity.recommendationResult(
+        repeatedConfiguration,
+        alpakaTune::RecommendationDisposition::scheduled);
     rawRecommendations.insert(static_cast<std::size_t>(
         std::lround(static_cast<double>(configuration.front()) * 99.0)));
   }

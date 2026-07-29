@@ -64,11 +64,11 @@ enum class LearnedSelectionReason {
 
 /** @brief Bounds learned inference and configures residual adaptation. */
 struct LearnedHybridOptions {
-  /** Four exploitation selections followed by one uncertainty/diversity pick.
+  /** Ten exploitation activations followed by one uncertainty/diversity pick.
    */
-  std::size_t exploitationSelectionsPerCycle{4u};
+  std::size_t exploitationSelectionsPerCycle{10u};
   /** Total selections per exploitation/exploration cycle. */
-  std::size_t selectionsPerCycle{5u};
+  std::size_t selectionsPerCycle{11u};
   /** Newly retired observations required before refitting the adapter. */
   std::size_t adapterBatchSize{16u};
   /** L2 regularization for the small residual linear regression. */
@@ -101,7 +101,8 @@ struct LearnedResidualAdapterState {
  *
  * Candidates enter a bounded, deterministically sampled pool and their model
  * predictions and embeddings are evaluated exactly once in batches. The model
- * chooses 80% predicted-fast points and 20% uncertainty/diversity points. A
+ * chooses ten predicted-fast activations for every uncertainty/diversity
+ * activation. A
  * ridge adapter is refit after each batch of retired RuntimeObservations and
  * only the active pool is re-sorted. When loading or compatibility fails, the
  * same object explicitly reports fallback status and traverses the same seeded
@@ -183,16 +184,27 @@ public:
 
     auto &selected = m_candidates.at(position);
     m_lastRecommended = selected;
-    ++m_selectionCount;
     return selected.configuration;
   }
 
-  /** @brief Track only admitted model candidates for residual observation. */
+  /** @brief Commit proposal state only when admission starts an activation. */
   void recommendationResult(ParameterConfiguration const &,
                             RecommendationDisposition disposition) override {
-    if (disposition == RecommendationDisposition::scheduled &&
-        m_status == LearnedHybridStatus::active && m_lastRecommended)
-      m_pendingCandidates.push_back(*m_lastRecommended);
+    if (!m_lastRecommended)
+      return;
+    if (disposition == RecommendationDisposition::scheduled) {
+      if (m_status == LearnedHybridStatus::active)
+        m_pendingCandidates.push_back(*m_lastRecommended);
+      if (m_lastSelectionReason == LearnedSelectionReason::uncertaintyDiversity)
+        ++m_explorationCursor;
+      m_exploitationCursor = 0u;
+      ++m_selectionCount;
+    } else if (disposition != RecommendationDisposition::activeDuplicate) {
+      if (m_lastSelectionReason == LearnedSelectionReason::uncertaintyDiversity)
+        ++m_explorationCursor;
+      else if (m_lastSelectionReason == LearnedSelectionReason::predictedFast)
+        ++m_exploitationCursor;
+    }
     m_lastRecommended.reset();
   }
 
@@ -583,16 +595,14 @@ private:
       return selectAnyActive();
     // Exploitation is deliberately allowed to recommend the current predicted
     // best again. Tuner-owned admission decides whether it may be remeasured.
-    return m_exploitationOrder.front();
+    return m_exploitationOrder[m_exploitationCursor %
+                               m_exploitationOrder.size()];
   }
 
   [[nodiscard]] auto selectExploration() -> std::size_t {
     if (m_explorationOrder.empty())
       return selectAnyActive();
-    auto const position =
-        m_explorationOrder[m_explorationCursor % m_explorationOrder.size()];
-    ++m_explorationCursor;
-    return position;
+    return m_explorationOrder[m_explorationCursor % m_explorationOrder.size()];
   }
 
   [[nodiscard]] auto selectFallback() -> std::size_t {
