@@ -258,10 +258,12 @@ Strategy and queue boundary
 
 Every strategy recommendation is mapped once to the exact nearest discrete
 candidate. The shared tuner admission policy then reports one disposition back
-to the strategy: scheduled, active duplicate, restriction rejection, revisit
-rejection, or score rejection. A rejection requests an entirely new proposal
-from the strategy; the tuner does not mutate it or search locally for a nearby
-substitute.
+to the strategy: scheduled, accepted active duplicate, restriction rejection,
+revisit rejection, or score rejection. A candidate already resident in the
+active queue satisfies the recommendation, so refill stops and queue execution
+continues without asking the strategy for a substitute. Only an actual policy
+rejection requests an entirely new proposal; the tuner does not mutate it or
+search locally for a nearby substitute.
 
 Strategies may deliberately recommend previously measured points. They must
 not hide duplicate ownership inside their own candidate bookkeeping. Regression

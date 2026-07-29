@@ -451,7 +451,7 @@ public:
         .learnedAdapterUpdateCount = 0u,
         .unseenAcceptedCount = m_unseenAcceptedCount,
         .revisitAcceptedCount = m_revisitAcceptedCount,
-        .activeDuplicateRejectedCount = m_activeDuplicateRejectedCount,
+        .activeDuplicateAcceptedCount = m_activeDuplicateAcceptedCount,
         .restrictionRejectedCount = m_restrictionRejectedCount,
         .revisitRejectedCount = m_revisitRejectedCount,
         .scoreRejectedCount = m_scoreRejectedCount};
@@ -1063,8 +1063,8 @@ private:
    */
   [[nodiscard]] auto admitCandidate(std::size_t candidate)
       -> RecommendationDisposition {
-    if (m_scheduled.at(candidate)) {
-      ++m_activeDuplicateRejectedCount;
+    if (m_queue->contains(candidate)) {
+      ++m_activeDuplicateAcceptedCount;
       return RecommendationDisposition::activeDuplicate;
     }
     if (m_rejected.at(candidate)) {
@@ -1250,8 +1250,14 @@ private:
     Tuner const &m_tuner;
   };
 
+  struct CandidateRecommendation {
+    std::size_t candidate{};
+    RecommendationDisposition disposition{};
+  };
+
   /** @brief Request and process exactly one strategy recommendation. */
-  [[nodiscard]] auto recommendCandidate() -> std::optional<std::size_t> {
+  [[nodiscard]] auto recommendCandidate()
+      -> std::optional<CandidateRecommendation> {
     if (m_defaults.mode == TuningMode::onlineFixed &&
         m_scheduledCount + m_rejectedCount == m_candidateCount)
       return std::nullopt;
@@ -1265,9 +1271,7 @@ private:
     m_recommendationSecondsSinceLastLaunch +=
         std::chrono::duration<double>{std::chrono::steady_clock::now() - start}
             .count();
-    return disposition == RecommendationDisposition::scheduled
-               ? std::optional<std::size_t>{candidate}
-               : std::nullopt;
+    return CandidateRecommendation{candidate, disposition};
   }
 
   /** @brief Lazily bind persistence, histories, strategy, and active queue. */
@@ -1358,7 +1362,7 @@ private:
     m_retiredConfigurationCount = 0u;
     m_unseenAcceptedCount = 0u;
     m_revisitAcceptedCount = 0u;
-    m_activeDuplicateRejectedCount = 0u;
+    m_activeDuplicateAcceptedCount = 0u;
     m_restrictionRejectedCount = 0u;
     m_revisitRejectedCount = 0u;
     m_scoreRejectedCount = 0u;
@@ -1405,8 +1409,20 @@ private:
         }
         return;
       }
-      auto const candidate = recommendCandidate();
-      if (!candidate) {
+      auto const recommendation = recommendCandidate();
+      if (!recommendation) {
+        ++m_consecutiveStrategyRetries;
+        if (m_consecutiveStrategyRetries ==
+            m_defaults.maximumConsecutiveStrategyRetries)
+          ++m_strategyRetryLimitReachedCount;
+        continue;
+      }
+      if (recommendation->disposition ==
+          RecommendationDisposition::activeDuplicate) {
+        m_consecutiveStrategyRetries = 0u;
+        return;
+      }
+      if (recommendation->disposition != RecommendationDisposition::scheduled) {
         ++m_consecutiveStrategyRetries;
         if (m_consecutiveStrategyRetries ==
             m_defaults.maximumConsecutiveStrategyRetries)
@@ -1414,7 +1430,7 @@ private:
         continue;
       }
       m_consecutiveStrategyRetries = 0u;
-      if (!m_queue->insert(*candidate))
+      if (!m_queue->insert(recommendation->candidate))
         throw std::logic_error{
             "An admitted candidate could not enter the active queue."};
     }
@@ -2141,8 +2157,8 @@ private:
           admission != cache.end() && admission->is_object()) {
         m_unseenAcceptedCount = admission->value("unseen_accepted", 0u);
         m_revisitAcceptedCount = admission->value("revisit_accepted", 0u);
-        m_activeDuplicateRejectedCount =
-            admission->value("active_duplicate_rejected", 0u);
+        m_activeDuplicateAcceptedCount =
+            admission->value("active_duplicate_accepted", 0u);
         m_restrictionRejectedCount =
             admission->value("restriction_rejected", 0u);
         m_revisitRejectedCount = admission->value("revisit_rejected", 0u);
@@ -2580,7 +2596,7 @@ private:
   [[nodiscard]] auto serializedAdmissionStatus() const -> nlohmann::json {
     return {{"unseen_accepted", m_unseenAcceptedCount},
             {"revisit_accepted", m_revisitAcceptedCount},
-            {"active_duplicate_rejected", m_activeDuplicateRejectedCount},
+            {"active_duplicate_accepted", m_activeDuplicateAcceptedCount},
             {"restriction_rejected", m_restrictionRejectedCount},
             {"revisit_rejected", m_revisitRejectedCount},
             {"score_rejected", m_scoreRejectedCount},
@@ -2783,7 +2799,7 @@ private:
   std::size_t m_retiredConfigurationCount{};
   std::size_t m_unseenAcceptedCount{};
   std::size_t m_revisitAcceptedCount{};
-  std::size_t m_activeDuplicateRejectedCount{};
+  std::size_t m_activeDuplicateAcceptedCount{};
   std::size_t m_restrictionRejectedCount{};
   std::size_t m_revisitRejectedCount{};
   std::size_t m_scoreRejectedCount{};

@@ -3,6 +3,11 @@ target_link_libraries(alpakaTune_tuner_tests PRIVATE alpakaTune::alpakaTune)
 alpaka_finalize(alpakaTune_tuner_tests)
 add_test(NAME alpakaTune_tuner_tests COMMAND alpakaTune_tuner_tests)
 
+add_executable(alpakaTune_active_recommendation_tests active_recommendation.cpp)
+target_link_libraries(alpakaTune_active_recommendation_tests PRIVATE alpakaTune::alpakaTune Catch2::Catch2WithMain)
+alpaka_finalize(alpakaTune_active_recommendation_tests)
+add_test(NAME alpakaTune_active_recommendation_tests COMMAND alpakaTune_active_recommendation_tests)
+
 add_executable(alpakaTune_frame_spec_tuning_tests frame_spec_tuning.cpp)
 target_link_libraries(alpakaTune_frame_spec_tuning_tests PRIVATE alpakaTune::alpakaTune)
 alpaka_finalize(alpakaTune_frame_spec_tuning_tests)

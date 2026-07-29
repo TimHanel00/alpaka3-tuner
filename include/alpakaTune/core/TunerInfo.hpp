@@ -132,8 +132,8 @@ struct TunerInfo {
   std::size_t unseenAcceptedCount{};
   /** Previously measured candidates readmitted in adaptive mode. */
   std::size_t revisitAcceptedCount{};
-  /** Proposals rejected because the candidate was already queue-resident. */
-  std::size_t activeDuplicateRejectedCount{};
+  /** Accepted proposals already represented by a queue-resident candidate. */
+  std::size_t activeDuplicateAcceptedCount{};
   /** Proposals rejected by a tuning-space restriction. */
   std::size_t restrictionRejectedCount{};
   /** Revisit proposals rejected by the adaptive sigmoid gate. */

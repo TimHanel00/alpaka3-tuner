@@ -154,7 +154,7 @@ public:
 /** @brief Tuner-owned result of applying legality and admission policy. */
 enum class RecommendationDisposition {
   scheduled,           ///< Candidate entered the active queue.
-  activeDuplicate,     ///< Candidate was already queue-resident.
+  activeDuplicate,     ///< Accepted: candidate was already queue-resident.
   restrictionRejected, ///< Candidate violated a tuning-space restriction.
   revisitRejected,     ///< Adaptive revisit-probability gate rejected it.
   scoreRejected,       ///< Adaptive relative-runtime gate rejected it.
@@ -164,6 +164,7 @@ enum class RecommendationDisposition {
  *
  * Strategies do not own duplicate suppression, legality, queue state, or
  * application lifetime. The tuner reports each proposal's disposition once.
+ * Both scheduled and activeDuplicate are accepted recommendations.
  */
 class ParameterStrategy {
 public:
