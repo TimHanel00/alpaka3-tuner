@@ -21,8 +21,8 @@ if(NOT TARGET alpaka::alpaka)
     include(FetchContent)
     FetchContent_Declare(
         alpaka3
-        GIT_REPOSITORY https://github.com/alpaka-group/alpaka3.git
-        GIT_TAG 2c7ec1e2c27a006de6c26f1368c4718f12827727
+        GIT_REPOSITORY https://github.com/TimHanel00/alpaka3.git
+        GIT_TAG 176dcc921041328f891d58e80614585e7848ef95
         # The pinned Alpaka revision is not necessarily the remote tip, so a
         # shallow clone cannot reliably resolve it.
         GIT_SHALLOW FALSE

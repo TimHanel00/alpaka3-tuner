@@ -159,7 +159,8 @@ int exampleDispatch(auto const cfg, uint32_t numElements, auto const &mean,
                                      "randomInit/normal");
   assert(tuner.info().candidateCount >= 2000u);
 
-  onHost::Queue queue = device.makeQueue();
+  auto queue =
+      device.makeQueue(alpaka::queueKind::nonBlocking, alpaka::timing::enabled);
 
   std::cout << "- Testing RandomInitKernelNormal with a grid of " << frameSpec
             << "\n";

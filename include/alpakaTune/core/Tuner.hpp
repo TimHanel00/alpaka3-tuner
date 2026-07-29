@@ -314,8 +314,7 @@ public:
       Traits::template has<detail::numThreadsName>;
   static_assert(!(tunesFrameSpec && tunesThreadSpec),
                 "A tuner cannot combine FrameSpec and ThreadSpec parameters.");
-  using MeasurementTimer = ALPAKA_TYPEOF(
-      detail::timing::internal::makeKernelTimer(std::declval<Device &>()));
+  using MeasurementTimer = detail::timing::KernelTimer<Device>;
 
   /** @brief Construct a tuner from a validated policy and identity components.
    *
@@ -329,7 +328,7 @@ public:
       : m_defaults(std::move(defaults)), m_history(std::move(history)),
         m_completeHistory(std::move(completeHistory)),
         m_tunables(std::move(tunables)), m_device(std::move(device)),
-        m_measurementTimer(detail::timing::internal::makeKernelTimer(m_device)),
+        m_measurementTimer(m_device),
         m_identityEntries(std::move(identityEntries)),
         m_baseRandomSeed(m_defaults.randomSeed
                              ? *m_defaults.randomSeed
@@ -500,8 +499,8 @@ public:
    * @note CUDA and HIP report timing-enabled device-event durations. Host and
    * SYCL CPU use an explicitly reported synchronized host-clock fallback.
    * SYCL GPUs report command-profiling timestamps. Construct the queue passed
-   * here with alpakaTune::makeQueue(device, alpaka::queueKind::nonBlocking,
-   * alpakaTune::timing::enabled).
+   * here with device.makeQueue(alpaka::queueKind::nonBlocking,
+   * alpaka::timing::enabled).
    */
   void enqueue(Queue const &queue, FrameSpec const &frameSpec,
                alpaka::KernelBundle<Kernel, Args...> const &prototype) {

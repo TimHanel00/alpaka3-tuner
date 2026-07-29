@@ -3,24 +3,17 @@
 
 #pragma once
 
-#include <type_traits>
+#include <alpaka/tag.hpp>
 
 namespace alpakaTune::timing {
 
-namespace detail {
-struct TimingBase {};
-} // namespace detail
+using Enabled = alpaka::timing::Enabled;
+using Disabled = alpaka::timing::Disabled;
 
-/** Request backend timing support from a queue or event. */
-struct Enabled : detail::TimingBase {};
-
-/** Do not request backend timing support. */
-struct Disabled : detail::TimingBase {};
-
-inline constexpr auto enabled = Enabled{};
-inline constexpr auto disabled = Disabled{};
+inline constexpr auto enabled = alpaka::timing::enabled;
+inline constexpr auto disabled = alpaka::timing::disabled;
 
 template <typename Type>
-concept Timing = std::is_base_of_v<detail::TimingBase, Type>;
+concept Timing = alpaka::concepts::Timing<Type>;
 
 } // namespace alpakaTune::timing

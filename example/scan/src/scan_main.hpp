@@ -57,7 +57,7 @@ auto example(auto const deviceSpec, auto const exec, IdxType numElements,
   onHost::Device devAcc = devSelector.makeDevice(0);
 
   // Create a queue on the device
-  onHost::Queue queue = devAcc.makeQueue();
+  auto queue = devAcc.makeQueue(queueKind::nonBlocking, timing::enabled);
 
   auto inputData = onHost::allocHost<Data>(extent);
 
