@@ -104,11 +104,12 @@ tuning:
   mode: online_fixed
   strategy: exhaustive
   random_seed: 0
-  warmup_runs: 0
   runs_per_candidate: 2
+  maximum_executions: 100000
+queue:
+  warmup_runs: 0
   noise_cancellation_window: 3
   max_consecutive_runs: 1
-  maximum_executions: 100000
 history:
   file: )"
          << (directory / "history.json").string() << R"(
@@ -493,9 +494,64 @@ auto main() -> int {
       lazyInfo.measuredCandidateCount != 6u || restrictionCalls.load() != 9u)
     return EXIT_FAILURE;
 
+  // With no queue, every accepted strategy recommendation launches directly,
+  // but tuning-space constraints remain mandatory.
+  auto directFixedConfig = oneRunConfig();
+  directFixedConfig.queue.reset();
+  directFixedConfig.history.file.reset();
+  directFixedConfig.history.read = false;
+  directFixedConfig.history.write = false;
+  directFixedConfig.completeHistory.file.reset();
+  directFixedConfig.completeHistory.read = false;
+  directFixedConfig.completeHistory.write = false;
+  auto const directFixedTunables = alpakaTune::constrain(
+      alpakaTune::TunableBundle{
+          alpakaTune::named(runtimeValue, alpakaTune::RVals{1, 2, 3})},
+      alpakaTune::restrict(
+          runtimeValue, [](alpaka::concepts::VectorOrScalar auto const &value) {
+            return value != 2;
+          }));
+  auto directFixedTuner = alpakaTune::makeTuner(
+      directFixedConfig, directFixedTunables, device, "direct-fixed-test");
+  for (std::size_t launch = 0u; launch < 2u; ++launch)
+    directFixedTuner.enqueue(queue, frameSpec, bundle);
+  auto const directFixedInfo = directFixedTuner.info();
+  if (!directFixedTuner.completed() ||
+      directFixedInfo.measuredCandidateCount != 2u ||
+      directFixedInfo.restrictionRejectedCount != 1u ||
+      directFixedInfo.activeDuplicateAcceptedCount != 0u ||
+      directFixedInfo.executionCount != 2u)
+    return EXIT_FAILURE;
+
+  // A present but disabled queue has the same direct path. Its activation
+  // parameters are deliberately ignored.
+  auto directAdaptiveConfig = directFixedConfig;
+  directAdaptiveConfig.mode = alpakaTune::TuningMode::onlineAdaptive;
+  directAdaptiveConfig.queue =
+      alpakaTune::QueueConfig{.disable = true,
+                              .warmupRuns = 99u,
+                              .noiseCancellationWindow = 0u,
+                              .maxConsecutiveRuns = 0u};
+  directAdaptiveConfig.maximumExecutions.reset();
+  directAdaptiveConfig.maximumRetiredConfigurations.reset();
+  directAdaptiveConfig.horizon = 1u;
+  auto const directAdaptiveTunables = alpakaTune::TunableBundle{
+      alpakaTune::named(runtimeValue, alpakaTune::RVals{7})};
+  auto directAdaptiveTuner =
+      alpakaTune::makeTuner(directAdaptiveConfig, directAdaptiveTunables,
+                            device, "direct-adaptive-test");
+  auto const directAdaptiveObservation =
+      directAdaptiveTuner.enqueueObserved(queue, frameSpec, bundle);
+  if (!directAdaptiveObservation.measured ||
+      !directAdaptiveObservation.runtimeSeconds ||
+      !directAdaptiveObservation.tuningComplete ||
+      directAdaptiveTuner.info().retiredConfigurationCount != 1u ||
+      directAdaptiveTuner.candidateRuntimeSamples(0u).size() != 1u)
+    return EXIT_FAILURE;
+
   auto retryLimitConfig = oneRunConfig();
   retryLimitConfig.maximumConsecutiveStrategyRetries = 3u;
-  retryLimitConfig.noiseCancellationWindow = 1u;
+  retryLimitConfig.queue->noiseCancellationWindow = 1u;
   retryLimitConfig.history.file.reset();
   retryLimitConfig.history.read = false;
   retryLimitConfig.history.write = false;
@@ -635,9 +691,9 @@ auto main() -> int {
   adaptiveConfig.maximumExecutions.reset();
   adaptiveConfig.maximumRetiredConfigurations.reset();
   adaptiveConfig.horizon = 4u;
-  adaptiveConfig.warmupRuns = 1u;
-  adaptiveConfig.maxConsecutiveRuns = 4u;
-  adaptiveConfig.noiseCancellationWindow = 1u;
+  adaptiveConfig.queue->warmupRuns = 1u;
+  adaptiveConfig.queue->maxConsecutiveRuns = 4u;
+  adaptiveConfig.queue->noiseCancellationWindow = 1u;
   adaptiveConfig.historyWindowSize = 3u;
   auto const adaptiveTunables =
       alpakaTune::TunableBundle{runtimeValue(alpakaTune::RVals{7})};

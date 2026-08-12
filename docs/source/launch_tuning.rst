@@ -136,6 +136,8 @@ Noise-cancelling scheduling
 
 Each ``tuner.enqueue`` performs one launch. The internal queue keeps up to 50
 active candidates and measures a candidate no more than three consecutive
-times while alternatives exist. These YAML defaults reduce thermal, frequency,
-and operating-system noise. Warm-up launches are scheduled but excluded from
-the measured result.
+times while alternatives exist when a ``queue`` section enables it. These YAML
+defaults reduce thermal, frequency, and operating-system noise. Warm-up
+launches are scheduled but excluded from the measured result. Without a queue,
+accepted strategy recommendations are measured directly after mandatory
+constraints and optional horizon rejection.

@@ -41,10 +41,13 @@ DEFAULT_MAXIMUM_RETIRED_CONFIGURATIONS = 100_000
 FULL_COVERAGE_MAXIMUM_EXECUTIONS = 1_000_000
 
 FULL_COVERAGE_TUNING = {
-    "warmup_runs": 1,
     "runs_per_candidate": 3,
     "minimum_runs_per_candidate": 3,
     "mann_whitney_early_stop": False,
+}
+FULL_COVERAGE_QUEUE = {
+    "disable": False,
+    "warmup_runs": 1,
     "max_consecutive_runs": 4,
 }
 
@@ -183,6 +186,7 @@ def benchmark_configuration(
     tuning.pop("horizon_offset_with_active_history", None)
     if full_coverage:
         tuning.update(FULL_COVERAGE_TUNING)
+        configuration.setdefault("queue", {}).update(FULL_COVERAGE_QUEUE)
         tuning["maximum_executions"] = (
             FULL_COVERAGE_MAXIMUM_EXECUTIONS
             if maximum_executions is None
@@ -728,16 +732,22 @@ def main() -> int:
         print(f"Cannot load benchmark configuration: {exception}", file=sys.stderr)
         return 2
 
-    warmup_runs = configuration["tuning"].get("warmup_runs", 0)
+    queue = configuration.get("queue")
+    queue_enabled = isinstance(queue, dict) and not queue.get("disable", False)
+    warmup_runs = queue.get("warmup_runs", 1) if queue_enabled else 0
     if not isinstance(warmup_runs, int) or warmup_runs < 0:
-        print("Cannot load benchmark configuration: tuning.warmup_runs must be a non-negative integer", file=sys.stderr)
+        print(
+            "Cannot load benchmark configuration: queue.warmup_runs must be "
+            "a non-negative integer",
+            file=sys.stderr,
+        )
         return 2
     if (
         arguments.maximum_executions is not None
         and arguments.maximum_executions <= warmup_runs
     ):
         print(
-            "--maximum-executions must exceed tuning.warmup_runs "
+            "--maximum-executions must exceed queue.warmup_runs "
             f"({warmup_runs}) so that at least one timing sample is recorded.",
             file=sys.stderr,
         )

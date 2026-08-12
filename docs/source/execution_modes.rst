@@ -1,9 +1,11 @@
 Execution modes
 ===============
 
-The execution mode owns candidate admission, queue residency, measurement
-lifetime, and the transition to production launches. The strategy only
-proposes a normalized parameter vector. This separation applies uniformly to
+The execution mode owns candidate admission, measurement lifetime, and the
+transition to production launches. The strategy only proposes a normalized
+parameter vector. Every proposal follows the same ordered pipeline: mandatory
+constraints, optional adaptive horizon rejection, optional queue scheduling,
+and one launch. This separation applies uniformly to
 exhaustive, random, simulated annealing, Bayesian optimization, learned hybrid,
 and custom strategies.
 
@@ -79,11 +81,14 @@ rolling window and replace its oldest timings when
 ``online_fixed``
 ----------------
 
-``online_fixed`` is the finite tuning mode and preserves the original queue
-lifecycle. Admitted candidates remain in the active queue and are interleaved.
-Every activation runs up to ``max_consecutive_runs`` launches, of which the
-first ``warmup_runs`` are not recorded. A candidate retires at its confidence
-criterion, Mann-Whitney early-stop criterion, or ``runs_per_candidate`` cap.
+``online_fixed`` is the finite tuning mode. With a ``queue`` section, admitted
+candidates remain resident and are interleaved. Every activation runs up to
+``max_consecutive_runs`` launches, of which the first ``warmup_runs`` are not
+recorded. Without a queue, each accepted strategy recommendation launches and
+records directly; the strategy must recommend a candidate again when its
+fixed-mode record needs more samples. In either form, a candidate retires at
+its confidence criterion, Mann-Whitney early-stop criterion, or
+``runs_per_candidate`` cap.
 
 The tuner finishes after all legal candidates retire, or when either
 ``maximum_executions`` or ``maximum_retired_configurations`` is reached. At
@@ -109,15 +114,16 @@ winner replay.
 ``online_adaptive``
 -------------------
 
-``online_adaptive`` is a continuous mode. A horizon is optional. One admission
-gives a candidate one queue residency and therefore one activation burst. The
-burst still follows the queue configuration exactly. For example:
+``online_adaptive`` is a continuous mode. Both the horizon and queue are
+optional. With a queue, one admission gives a candidate one residency and
+therefore one activation burst. For example:
 
 .. code-block:: yaml
 
    tuning:
      mode: online_adaptive
      horizon: 40000
+   queue:
      warmup_runs: 1
      max_consecutive_runs: 4
 
@@ -125,6 +131,11 @@ This records three timings per admitted residency: the first launch is a
 warm-up and the remaining three are measurements. The candidate leaves the
 active queue after that burst. It may be admitted again later; the number of
 visits is not limited by the number of retained timings.
+
+Without a queue, each accepted recommendation is one measured adaptive visit.
+Queue activation parameters are not applied. An absent queue and
+``queue: {disable: true}`` are equivalent for execution; the latter retains
+saved parameters for easy switching.
 
 Each candidate retains only its newest ``history_window_size`` measurements.
 When another measurement exceeds that capacity, the oldest measurement is
@@ -138,7 +149,7 @@ history activates ``horizon_offset_with_active_history`` when a horizon is
 configured but never shortens the new run's configured ``horizon``.
 
 Without ``horizon``, every legal revisit proposed by the strategy is reopened
-directly after active-queue and restriction checks. The tuner does not apply
+directly after mandatory constraint checks. The tuner does not apply
 the sigmoid revisit gate or relative-score Boltzmann gate; exploration and
 exploitation are entirely strategy-driven. This is often the clearest choice
 for ``learned_hybrid`` because the learned strategy already ranks candidates
@@ -148,8 +159,8 @@ while ``completed()`` and ``isTuningComplete()`` remain false. Applications
 must not use either query as an exit condition in this horizon-less form.
 
 With ``horizon`` configured, unseen legal candidates are admitted directly. An
-already measured candidate must pass two independent gates after active-queue
-duplicates and restrictions have been rejected:
+already measured candidate must pass two independent gates after constraints
+have accepted it and before an enabled queue handles active duplicates:
 
 .. math::
 
@@ -218,25 +229,26 @@ temperature of 0.05, a candidate that is two percent slower than the current
 best is accepted by the score gate with probability
 ``exp(-0.02 / 0.05)``, approximately 0.67.
 
-Rejected recommendations are retried synchronously. This includes active
-duplicates, restrictions, the adaptive revisit gate, and the relative-score
-gate. ``maximum_consecutive_strategy_retries`` defaults to 20 and bounds that
-work in one refill attempt. Admission resets the streak. When active queue
-entries remain, reaching the limit pauses refill until an activation completes
-and changes the scheduler context.
+Rejected recommendations are retried synchronously. This includes constraints,
+the adaptive revisit gate, and the relative-score gate. An active queue
+duplicate is accepted instead. ``maximum_consecutive_strategy_retries``
+defaults to 20 and bounds that work in one admission attempt. Admission resets
+the streak. When active queue entries remain, reaching the limit pauses refill
+until an activation completes and changes the scheduler context.
 
-If the adaptive queue is empty after one bounded refill attempt, the tuner
-reopens the current best measured history entry as a progress fallback. This is
-not a terminal winner: it is scheduled through the normal queue, synchronized,
-measured, and written into the rolling window. Its execution advances the
-horizon, and subsequent refills call the strategy again with access to all
-current runtime observations. ``adaptiveRetryFallbackCount`` in ``TunerInfo``
-reports how often this path was required. If no configuration has ever been
-accepted or restored, there is no safe fallback and the triggering call throws
-an explicit initialization error without marking the adaptive tuner complete.
+If an adaptive admission attempt exhausts that bound with no candidate ready
+to run, the tuner reopens the current best measured history entry as a progress
+fallback. This is not a terminal winner: it is queued when the queue is active
+and launched directly otherwise, then measured and written into the rolling
+window. Its execution advances the horizon, and the next admission calls the
+strategy again with access to current runtime observations.
+``adaptiveRetryFallbackCount`` in ``TunerInfo`` reports how often this path was
+required. If no configuration has ever been accepted or restored, there is no
+safe fallback and the triggering call throws an explicit initialization error
+without marking the adaptive tuner complete.
 
-In ``online_fixed`` only, an empty queue at the same retry limit remains a
-terminal state with
+In ``online_fixed`` only, the same retry limit without a runnable candidate is
+a terminal state with
 ``TunerCompletionReason::maximumConsecutiveStrategyRetries``. Later fixed-mode
 calls replay its best measured configuration without instrumentation.
 
@@ -253,18 +265,19 @@ does not begin a new measurement lifecycle, it simply consumes the persisted
 timing window. An offline first run without readable measured history is an
 error.
 
-Strategy and queue boundary
----------------------------
+Strategy and execution boundary
+-------------------------------
 
 Every strategy recommendation is mapped once to the exact nearest discrete
-candidate. The shared tuner admission policy then reports one disposition back
-to the strategy: scheduled, accepted active duplicate, restriction rejection,
-revisit rejection, or score rejection. A candidate already resident in the
-active queue satisfies the recommendation, so refill stops and queue execution
-continues without asking the strategy for a substitute. A newly scheduled
-candidate likewise ends the refill attempt. Only an actual policy rejection
-requests an entirely new proposal; the tuner does not mutate it or search
-locally for a nearby substitute.
+candidate. Mandatory constraints run first, followed by optional adaptive
+horizon rejection and optional queue handling. The tuner then reports one
+disposition back to the strategy: scheduled, accepted active duplicate,
+restriction rejection, revisit rejection, or score rejection. A candidate
+already resident in an enabled queue satisfies the recommendation, so refill
+stops and queue execution continues without asking for a substitute. Without
+a queue, a scheduled candidate launches directly. Only an actual policy
+rejection requests an entirely new proposal; the tuner does not mutate it or
+search locally for a nearby substitute.
 
 Learned hybrid commits its selection cycle only when a recommendation starts a
 new queue activation. Active duplicates do not consume selection slots, while

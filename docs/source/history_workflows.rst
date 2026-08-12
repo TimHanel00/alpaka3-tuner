@@ -43,11 +43,12 @@ horizon because they demonstrate the history-aware admission schedule.
 
 The sampling fields also have different roles. In ``online_fixed``,
 ``runs_per_candidate`` is a hard per-candidate measurement cap. In
-``online_adaptive``, one admitted residency records
+``online_adaptive`` with an enabled queue, one admitted residency records
 ``max_consecutive_runs - warmup_runs`` timings. For example, a warm-up count of
 one and a consecutive-run count of four record exactly three timings during
 each residency. A later revisit starts another residency and may replace old
-samples in the rolling ``history_window_size``.
+samples in the rolling ``history_window_size``. Without a queue, each accepted
+recommendation records one timing directly.
 
 Collect a fresh learned history
 -------------------------------
@@ -62,11 +63,12 @@ once at normal process shutdown:
      mode: online_adaptive
      strategy: learned_hybrid
      random_seed: 17
-     warmup_runs: 1
-     max_consecutive_runs: 4
      history_window_size: 12
      horizon: 40000
      horizon_offset_with_active_history: 0.8
+   queue:
+     warmup_runs: 1
+     max_consecutive_runs: 4
    history:
      file: learned-history.json
      read: false
@@ -99,11 +101,12 @@ path, but changes only the access policy:
    tuning:
      mode: online_adaptive
      strategy: learned_hybrid
-     warmup_runs: 1
-     max_consecutive_runs: 4
      history_window_size: 12
      horizon: 40000
      horizon_offset_with_active_history: 0.8
+   queue:
+     warmup_runs: 1
+     max_consecutive_runs: 4
    history:
      file: learned-history.json
      read: true
@@ -153,14 +156,15 @@ mode and limits; only the history access policy needs to change:
    tuning:
      mode: online_fixed
      strategy: learned_hybrid
-     warmup_runs: 1
      runs_per_candidate: 4
      minimum_runs_per_candidate: 4
-     noise_cancellation_window: 20
-     max_consecutive_runs: 5
      maximum_executions: 20000
      maximum_retired_configurations: null
      history_window_size: 12
+   queue:
+     warmup_runs: 1
+     noise_cancellation_window: 20
+     max_consecutive_runs: 5
    history:
      file: fixed-history.json
      read: true
@@ -194,11 +198,12 @@ A strategy-independent history can first be collected with random proposals:
      mode: online_adaptive
      strategy: random
      random_seed: 17
-     warmup_runs: 1
-     max_consecutive_runs: 4
      history_window_size: 12
      horizon: 40000
      horizon_offset_with_active_history: 0.8
+   queue:
+     warmup_runs: 1
+     max_consecutive_runs: 4
    history:
      file: random-history.json
      read: false

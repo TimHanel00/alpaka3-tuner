@@ -153,7 +153,7 @@ public:
 
 /** @brief Tuner-owned result of applying legality and admission policy. */
 enum class RecommendationDisposition {
-  scheduled,           ///< Candidate entered the active queue.
+  scheduled,           ///< Candidate was accepted for queued or direct launch.
   activeDuplicate,     ///< Accepted: candidate was already queue-resident.
   restrictionRejected, ///< Candidate violated a tuning-space restriction.
   revisitRejected,     ///< Adaptive revisit-probability gate rejected it.
@@ -162,9 +162,10 @@ enum class RecommendationDisposition {
 
 /** @brief Base interface for algorithms that propose normalized parameters.
  *
- * Strategies do not own duplicate suppression, legality, queue state, or
- * application lifetime. The tuner reports each proposal's disposition once.
- * Both scheduled and activeDuplicate are accepted recommendations.
+ * Strategies do not own mandatory constraints, optional horizon admission,
+ * queue state, or application lifetime. The tuner reports each proposal's
+ * disposition once. Both scheduled and activeDuplicate are accepted
+ * recommendations.
  */
 class ParameterStrategy {
 public:
@@ -177,7 +178,7 @@ public:
   /** @brief Observe the tuner-owned result of the preceding recommendation.
    *
    * Called exactly once for every vector returned by recommend(). Strategies
-   * may use this to track only proposals that actually entered the queue.
+   * may use this to track only proposals accepted for execution.
    */
   virtual void recommendationResult(ParameterConfiguration const &,
                                     RecommendationDisposition) {}

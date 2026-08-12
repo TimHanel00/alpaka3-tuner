@@ -1,11 +1,14 @@
 Strategies
 ==========
 
-The queue, execution mode, and strategy have separate responsibilities.
-``CandidateQueue`` interleaves active candidates and limits consecutive runs.
-The selected :doc:`execution_modes` policy owns admission, measurement
-lifetime, revisits, and production launches. A ``ParameterStrategy`` only
-recommends a configuration for admission.
+Constraints, the horizon gate, the optional queue, the execution mode, and the
+strategy have separate responsibilities. A ``ParameterStrategy`` recommends a
+configuration. The tuner always applies constraints, then applies adaptive
+horizon rejection when configured. A configured ``CandidateQueue`` next
+interleaves accepted candidates and limits consecutive runs; without it, the
+accepted recommendation launches directly. The selected
+:doc:`execution_modes` policy owns measurement lifetime, revisits, and
+production launches.
 
 Strategy interface
 ------------------
@@ -20,9 +23,11 @@ in ``[0, 1]`` per tuning dimension. A strategy receives a read-only
 
 The strategy object owns all other state. It does not access the Alpaka queue,
 kernel, device, cache, or tuning internals. ``Tuner`` validates the returned
-vector, maps it once to the nearest discrete Cartesian candidate, applies the
-shared admission gates, and reports the recommendation disposition. A repeated
-or rejected point is not silently replaced with another configuration.
+vector, maps it once to the nearest discrete Cartesian candidate, applies
+mandatory constraints and the optional horizon gates, and then either queues
+or directly launches it. The tuner reports that disposition to the strategy.
+A repeated or rejected point is not silently changed into another
+configuration.
 
 The observation exposes the robust runtime estimate, raw and accepted sample
 counts, record state, confidence status, and the result of a rank comparison to

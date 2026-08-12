@@ -83,7 +83,7 @@ auto main() -> int {
   auto defaultConfig = alpakaTune::TunerConfig{};
   defaultConfig.validate();
   if (defaultConfig.mode != alpakaTune::TuningMode::onlineAdaptive ||
-      defaultConfig.maximumExecutions ||
+      defaultConfig.queue || defaultConfig.maximumExecutions ||
       defaultConfig.maximumRetiredConfigurations ||
       defaultConfig.maximumConsecutiveStrategyRetries != 20u ||
       defaultConfig.horizon || !defaultConfig.randomSeed ||
@@ -398,10 +398,7 @@ auto main() -> int {
                   "tuning:\n"
                   "  mode: online_adaptive\n"
                   "  strategy: random\n"
-                  "  warmup_runs: 1\n"
                   "  runs_per_candidate: 1\n"
-                  "  noise_cancellation_window: 2\n"
-                  "  max_consecutive_runs: 4\n"
                   "  maximum_consecutive_strategy_retries: 7\n"
                   "  horizon: 4000\n"
                   "  history_window_size: 10\n"
@@ -409,12 +406,20 @@ auto main() -> int {
                   "  score_temperature_start: 0.25\n"
                   "  score_temperature_end: 0.05\n"
                   "  horizon_offset_with_active_history: 0.7\n"
+                  "queue:\n"
+                  "  warmup_runs: 1\n"
+                  "  noise_cancellation_window: 2\n"
+                  "  max_consecutive_runs: 4\n"
                   "history:\n"
                   "  file: adaptive-history.json\n";
   adaptiveYaml.close();
   auto const adaptiveDefaults =
       alpakaTune::TunerConfig::fromYaml(adaptiveConfiguration);
   if (adaptiveDefaults.mode != alpakaTune::TuningMode::onlineAdaptive ||
+      !adaptiveDefaults.queue || adaptiveDefaults.queue->disable ||
+      adaptiveDefaults.queue->warmupRuns != 1u ||
+      adaptiveDefaults.queue->noiseCancellationWindow != 2u ||
+      adaptiveDefaults.queue->maxConsecutiveRuns != 4u ||
       adaptiveDefaults.horizon != 4000u || adaptiveDefaults.maximumExecutions ||
       adaptiveDefaults.maximumRetiredConfigurations ||
       adaptiveDefaults.maximumConsecutiveStrategyRetries != 7u ||
@@ -442,8 +447,30 @@ auto main() -> int {
       alpakaTune::TunerConfig::fromYaml(continuousAdaptiveConfiguration);
   if (continuousAdaptiveDefaults.mode !=
           alpakaTune::TuningMode::onlineAdaptive ||
-      continuousAdaptiveDefaults.horizon ||
+      continuousAdaptiveDefaults.queue || continuousAdaptiveDefaults.horizon ||
       continuousAdaptiveDefaults.randomSeed)
+    return EXIT_FAILURE;
+
+  auto const disabledQueueConfiguration =
+      configurationDirectory / "disabled-queue-v3.yaml";
+  auto disabledQueueYaml = std::ofstream{disabledQueueConfiguration};
+  disabledQueueYaml << "schema_version: 3\n"
+                       "tuning:\n"
+                       "  mode: online_adaptive\n"
+                       "  strategy: random\n"
+                       "  runs_per_candidate: 1\n"
+                       "queue:\n"
+                       "  disable: true\n"
+                       "  warmup_runs: 9\n"
+                       "  noise_cancellation_window: 0\n"
+                       "  max_consecutive_runs: 0\n";
+  disabledQueueYaml.close();
+  auto const disabledQueueDefaults =
+      alpakaTune::TunerConfig::fromYaml(disabledQueueConfiguration);
+  if (!disabledQueueDefaults.queue || !disabledQueueDefaults.queue->disable ||
+      disabledQueueDefaults.queue->warmupRuns != 9u ||
+      disabledQueueDefaults.queue->noiseCancellationWindow != 0u ||
+      disabledQueueDefaults.queue->maxConsecutiveRuns != 0u)
     return EXIT_FAILURE;
 
   auto const offsetWithoutHorizonConfiguration =

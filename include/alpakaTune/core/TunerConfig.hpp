@@ -80,6 +80,18 @@ struct CompleteHistoryConfig {
   bool write{true};
 };
 
+/** @brief Optional active-candidate scheduler configuration. */
+struct QueueConfig {
+  /** Explicitly bypass the queue while retaining its saved parameters. */
+  bool disable{false};
+  /** Untimed launches at the beginning of every queue activation. */
+  std::size_t warmupRuns{1u};
+  /** Maximum number of distinct candidates interleaved in the active queue. */
+  std::size_t noiseCancellationWindow{50u};
+  /** Launches in one queue activation, including warm-up launches. */
+  std::size_t maxConsecutiveRuns{3u};
+};
+
 /** @brief Complete, copyable policy used to construct one or more tuners.
  *
  * A tuner snapshots this aggregate at construction. Configuration controls
@@ -88,8 +100,8 @@ struct CompleteHistoryConfig {
 struct TunerConfig {
   /** Persistence reuse and online measurement lifecycle. */
   TuningMode mode{TuningMode::onlineAdaptive};
-  /** Untimed launches at the beginning of every queue activation. */
-  std::size_t warmupRuns{1u};
+  /** Optional active-candidate scheduler; omission launches directly. */
+  std::optional<QueueConfig> queue;
   /** Maximum new-run measurements per configuration in online-fixed mode. */
   std::size_t runsPerCandidate{1u};
   /** New-run measurements required before fixed-mode CI retirement. */
@@ -108,11 +120,7 @@ struct TunerConfig {
   std::size_t mannWhitneyMinimumSamples{8u};
   /** One-sided significance level for Mann-Whitney retirement. */
   double mannWhitneyAlpha{0.05};
-  /** Maximum number of distinct candidates interleaved in the active queue. */
-  std::size_t noiseCancellationWindow{50u};
-  /** Launches in one queue activation, including warm-up launches. */
-  std::size_t maxConsecutiveRuns{3u};
-  /** Consecutive rejected proposals allowed in one bounded refill attempt. */
+  /** Consecutive rejected proposals allowed in one admission attempt. */
   std::size_t maximumConsecutiveStrategyRetries{20u};
   /** Online-fixed completion guard on launches in the current online run. */
   std::optional<std::size_t> maximumExecutions;
@@ -236,10 +244,10 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
   if (!root.IsMap())
     throw std::runtime_error{
         "alpakaTune YAML configuration must contain a map."};
-  rejectUnknown(
-      root,
-      {"schema_version", "tuning", "history", "complete_history", "learning"},
-      "root");
+  rejectUnknown(root,
+                {"schema_version", "tuning", "queue", "history",
+                 "complete_history", "learning"},
+                "root");
   if (!root["schema_version"])
     throw std::runtime_error{"Missing YAML key: schema_version"};
   auto const schemaVersion = root["schema_version"].as<int>();
@@ -248,12 +256,15 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
         "Unsupported alpakaTune YAML schema_version; expected 1, 2, or 3."};
   if (!root["tuning"] || !root["tuning"].IsMap())
     throw std::runtime_error{"Missing YAML map: tuning"};
+  if (root["queue"] && !root["queue"].IsMap())
+    throw std::runtime_error{"YAML queue must contain a map."};
   if (root["history"] && !root["history"].IsMap())
     throw std::runtime_error{"YAML history must contain a map."};
   if (root["complete_history"] && !root["complete_history"].IsMap())
     throw std::runtime_error{"YAML complete_history must contain a map."};
 
   auto const tuning = root["tuning"];
+  auto const queue = root["queue"];
   auto const history = root["history"];
   auto const completeHistory = root["complete_history"];
   auto const learning = root["learning"];
@@ -288,6 +299,11 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
                  "score_temperature_end",
                  "horizon_offset_with_active_history"},
                 "tuning");
+  if (queue)
+    rejectUnknown(queue,
+                  {"disable", "warmup_runs", "noise_cancellation_window",
+                   "max_consecutive_runs"},
+                  "queue");
   if ((history || completeHistory) && schemaVersion < 3)
     throw std::runtime_error{
         "YAML history configuration requires schema_version: 3."};
@@ -307,6 +323,19 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
   defaults.mode = tuning["mode"]
                       ? tuningModeFromName(tuning["mode"].as<std::string>())
                       : defaults.mode;
+  if (queue) {
+    defaults.queue.emplace();
+    defaults.queue->disable =
+        queue["disable"] ? queue["disable"].as<bool>() : false;
+    if (queue["warmup_runs"])
+      defaults.queue->warmupRuns = queue["warmup_runs"].as<std::size_t>();
+    if (queue["noise_cancellation_window"])
+      defaults.queue->noiseCancellationWindow =
+          queue["noise_cancellation_window"].as<std::size_t>();
+    if (queue["max_consecutive_runs"])
+      defaults.queue->maxConsecutiveRuns =
+          queue["max_consecutive_runs"].as<std::size_t>();
+  }
   auto const strategy =
       tuning["strategy"] ? tuning["strategy"].as<std::string>() : "exhaustive";
   defaults.strategy = strategyFromName(strategy);
@@ -328,8 +357,6 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
       }
     }
   }
-  defaults.warmupRuns =
-      tuning["warmup_runs"] ? tuning["warmup_runs"].as<std::size_t>() : 1u;
   defaults.runsPerCandidate = requirePositive(tuning, "runs_per_candidate");
   defaults.minimumRunsPerCandidate = optionalPositive(
       tuning, "minimum_runs_per_candidate", defaults.runsPerCandidate);
@@ -350,9 +377,6 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
       optionalPositive(tuning, "mann_whitney_min_samples", 8u);
   defaults.mannWhitneyAlpha =
       optionalProbability(tuning, "mann_whitney_alpha", 0.05);
-  defaults.noiseCancellationWindow =
-      requirePositive(tuning, "noise_cancellation_window");
-  defaults.maxConsecutiveRuns = requirePositive(tuning, "max_consecutive_runs");
   defaults.maximumConsecutiveStrategyRetries =
       optionalPositive(tuning, "maximum_consecutive_strategy_retries",
                        defaults.maximumConsecutiveStrategyRetries);
@@ -412,9 +436,6 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
   defaults.horizonOffsetWithActiveHistory =
       optionalUnitInterval(tuning, "horizon_offset_with_active_history",
                            defaults.horizonOffsetWithActiveHistory);
-  if (defaults.maxConsecutiveRuns <= defaults.warmupRuns)
-    throw std::runtime_error{"YAML max_consecutive_runs must exceed "
-                             "warmup_runs so every activation is measured."};
   if (history && history["file"]) {
     auto const file = history["file"].as<std::string>();
     if (file.empty())
@@ -507,8 +528,16 @@ inline void TunerConfig::validate() const {
       mannWhitneyAlpha >= 1.0)
     throw std::invalid_argument{
         "TunerConfig::mannWhitneyAlpha must be finite and in (0, 1)."};
-  positive(noiseCancellationWindow, "TunerConfig::noiseCancellationWindow");
-  positive(maxConsecutiveRuns, "TunerConfig::maxConsecutiveRuns");
+  if (queue && !queue->disable) {
+    positive(queue->noiseCancellationWindow,
+             "TunerConfig::queue.noiseCancellationWindow");
+    positive(queue->maxConsecutiveRuns,
+             "TunerConfig::queue.maxConsecutiveRuns");
+    if (queue->maxConsecutiveRuns <= queue->warmupRuns)
+      throw std::invalid_argument{
+          "TunerConfig::queue.maxConsecutiveRuns must exceed "
+          "queue.warmupRuns."};
+  }
   positive(maximumConsecutiveStrategyRetries,
            "TunerConfig::maximumConsecutiveStrategyRetries");
   positive(historyWindowSize, "TunerConfig::historyWindowSize");
@@ -526,9 +555,6 @@ inline void TunerConfig::validate() const {
     throw std::invalid_argument{
         "TunerConfig::scoreTemperatureEnd must not exceed "
         "scoreTemperatureStart."};
-  if (maxConsecutiveRuns <= warmupRuns)
-    throw std::invalid_argument{
-        "TunerConfig::maxConsecutiveRuns must exceed warmupRuns."};
   if (maximumExecutions)
     positive(*maximumExecutions, "TunerConfig::maximumExecutions");
   if (maximumRetiredConfigurations)

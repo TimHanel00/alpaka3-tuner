@@ -562,7 +562,7 @@ public:
         &call, candidate, selection.measure, selection.beginActivation,
         selection.endActivation);
 
-    if (m_defaults.mode == TuningMode::onlineFixed && !m_terminal &&
+    if (m_defaults.mode == TuningMode::onlineFixed && !m_terminal && m_queue &&
         m_queue->empty() &&
         m_scheduledCount + m_rejectedCount == m_candidateCount)
       finishTuning();
@@ -1056,16 +1056,13 @@ private:
 
   /** @brief Apply the single shared legality and mode-specific admission path.
    *
-   * Unseen legal candidates are scheduled directly. Adaptive revisits must
-   * pass the normalized sigmoid and relative-score gates. Fixed mode rejects
-   * measured proposals because its records are single-lifecycle.
+   * Every recommendation first passes the mandatory tuning-space constraints.
+   * Adaptive revisits then pass the optional horizon gates. An enabled queue
+   * handles active duplicates only after both admission stages; without one,
+   * an accepted recommendation is launched directly.
    */
   [[nodiscard]] auto admitCandidate(std::size_t candidate)
       -> RecommendationDisposition {
-    if (m_queue->contains(candidate)) {
-      ++m_activeDuplicateAcceptedCount;
-      return RecommendationDisposition::activeDuplicate;
-    }
     if (m_rejected.at(candidate)) {
       ++m_restrictionRejectedCount;
       return RecommendationDisposition::restrictionRejected;
@@ -1108,13 +1105,21 @@ private:
           return RecommendationDisposition::scoreRejected;
         }
       }
+    }
+    if (m_queue && m_queue->contains(candidate)) {
+      ++m_activeDuplicateAcceptedCount;
+      return RecommendationDisposition::activeDuplicate;
+    }
+    if (revisit && m_defaults.mode == TuningMode::onlineAdaptive) {
       history.reopen();
       ++m_revisitAcceptedCount;
-    } else {
+    } else if (!revisit) {
       ++m_unseenAcceptedCount;
     }
-    m_scheduled.at(candidate) = true;
-    ++m_scheduledCount;
+    if (!m_scheduled.at(candidate)) {
+      m_scheduled.at(candidate) = true;
+      ++m_scheduledCount;
+    }
     return RecommendationDisposition::scheduled;
   }
 
@@ -1122,7 +1127,10 @@ private:
    */
   [[nodiscard]] auto runtimeHistoryOptions() const
       -> detail::RuntimeHistoryOptions {
-    return {m_defaults.warmupRuns,
+    auto const warmupRuns = m_defaults.queue && !m_defaults.queue->disable
+                                ? m_defaults.queue->warmupRuns
+                                : 0u;
+    return {warmupRuns,
             m_defaults.minimumRunsPerCandidate,
             m_defaults.runsPerCandidate,
             m_defaults.ciCheckInterval,
@@ -1257,7 +1265,7 @@ private:
   /** @brief Request and process exactly one strategy recommendation. */
   [[nodiscard]] auto recommendCandidate()
       -> std::optional<CandidateRecommendation> {
-    if (m_defaults.mode == TuningMode::onlineFixed &&
+    if (m_queue && m_defaults.mode == TuningMode::onlineFixed &&
         m_scheduledCount + m_rejectedCount == m_candidateCount)
       return std::nullopt;
     auto const start = std::chrono::steady_clock::now();
@@ -1273,10 +1281,12 @@ private:
     return CandidateRecommendation{candidate, disposition};
   }
 
-  /** @brief Lazily bind persistence, histories, strategy, and active queue. */
+  /** @brief Lazily bind persistence, histories, strategy, and optional queue.
+   */
   void initialiseScheduling() {
-    if (m_queue || m_terminal)
+    if (m_schedulingInitialised || m_terminal)
       return;
+    m_schedulingInitialised = true;
     m_tuningStarted = std::chrono::steady_clock::now();
     m_startedAtUnixSeconds =
         std::chrono::duration<double>{
@@ -1334,17 +1344,19 @@ private:
       m_strategy =
           makeParameterStrategy(m_defaults.strategy, m_effectiveRandomSeed);
     }
-    m_queue = std::make_unique<detail::CandidateQueue>(
-        m_defaults.noiseCancellationWindow, m_defaults.maxConsecutiveRuns,
-        false, m_random);
-    refillQueue();
-    if (m_terminal && !currentBestCandidate())
-      throw std::invalid_argument{
-          "The strategy retry limit was reached before any candidate was "
-          "accepted and measured."};
-    if (!m_terminal && m_queue->empty())
-      throw std::invalid_argument{
-          "The tuning-space restrictions rejected every candidate."};
+    if (m_defaults.queue && !m_defaults.queue->disable) {
+      m_queue = std::make_unique<detail::CandidateQueue>(
+          m_defaults.queue->noiseCancellationWindow,
+          m_defaults.queue->maxConsecutiveRuns, false, m_random);
+      refillQueue();
+      if (m_terminal && !currentBestCandidate())
+        throw std::invalid_argument{
+            "The strategy retry limit was reached before any candidate was "
+            "accepted and measured."};
+      if (!m_terminal && m_queue->empty())
+        throw std::invalid_argument{
+            "The tuning-space constraints rejected every candidate."};
+    }
   }
 
   /** @brief Start a new online run while retaining one timing history. */
@@ -1400,8 +1412,13 @@ private:
           m_defaults.maximumConsecutiveStrategyRetries) {
         if (m_queue->empty()) {
           if (m_defaults.mode == TuningMode::onlineAdaptive) {
-            if (scheduleAdaptiveRetryFallback())
+            if (auto const fallback = prepareAdaptiveRetryFallback()) {
+              if (!m_queue->insert(*fallback))
+                throw std::logic_error{
+                    "The adaptive retry fallback could not enter the active "
+                    "queue."};
               return;
+            }
           } else {
             finishTuningAtStrategyRetryLimit();
           }
@@ -1443,25 +1460,71 @@ private:
    * activation, advances the adaptive horizon, and leaves the strategy active
    * for the next refill.
    */
-  [[nodiscard]] auto scheduleAdaptiveRetryFallback() -> bool {
+  [[nodiscard]] auto prepareAdaptiveRetryFallback()
+      -> std::optional<std::size_t> {
     auto const best = currentBestCandidate();
     if (!best)
-      return false;
+      return std::nullopt;
     if (m_scheduled.at(*best) || m_rejected.at(*best))
       throw std::logic_error{"The adaptive retry fallback is not schedulable."};
-    if (!m_queue->insert(*best))
-      throw std::logic_error{
-          "The adaptive retry fallback could not enter the active queue."};
     m_histories.at(*best).reopen();
     m_scheduled.at(*best) = true;
     ++m_scheduledCount;
     m_consecutiveStrategyRetries = 0u;
     ++m_adaptiveRetryFallbackCount;
+    return best;
+  }
+
+  /** @brief Whether every legal fixed-mode history has retired. */
+  [[nodiscard]] auto allFixedCandidatesResolved() const -> bool {
+    for (std::size_t candidate = 0u; candidate < m_candidateCount;
+         ++candidate) {
+      if (!m_rejected.at(candidate) && !m_histories.at(candidate).isFinished())
+        return false;
+    }
     return true;
+  }
+
+  /** @brief Obtain one accepted strategy result without queue residency. */
+  [[nodiscard]] auto nextDirectCandidate()
+      -> detail::CandidateQueue::Selection {
+    while (!m_terminal) {
+      if (m_defaults.mode == TuningMode::onlineFixed &&
+          allFixedCandidatesResolved()) {
+        finishTuning();
+        break;
+      }
+      if (m_consecutiveStrategyRetries >=
+          m_defaults.maximumConsecutiveStrategyRetries) {
+        if (m_defaults.mode == TuningMode::onlineAdaptive) {
+          if (auto const fallback = prepareAdaptiveRetryFallback())
+            return {*fallback, true, true, true};
+        } else {
+          finishTuningAtStrategyRetryLimit();
+        }
+        break;
+      }
+      auto const recommendation = recommendCandidate();
+      if (recommendation &&
+          recommendation->disposition == RecommendationDisposition::scheduled) {
+        m_consecutiveStrategyRetries = 0u;
+        return {recommendation->candidate, true, true, true};
+      }
+      ++m_consecutiveStrategyRetries;
+      if (m_consecutiveStrategyRetries ==
+          m_defaults.maximumConsecutiveStrategyRetries)
+        ++m_strategyRetryLimitReachedCount;
+    }
+    if (m_bestCandidate == std::numeric_limits<std::size_t>::max())
+      throw std::invalid_argument{
+          "The tuning-space constraints rejected every candidate."};
+    return {m_bestCandidate, false, false, false};
   }
 
   /** @brief Select an admitted candidate or a terminal winner replay. */
   [[nodiscard]] auto nextCandidate() -> detail::CandidateQueue::Selection {
+    if (!m_queue)
+      return nextDirectCandidate();
     refillQueue();
     if (m_terminal) {
       if (m_bestCandidate == std::numeric_limits<std::size_t>::max())
@@ -1780,7 +1843,7 @@ private:
     auto const schedulingChanged = history.isFinished();
     if (schedulingChanged) {
       recordRetiredConfiguration(candidate);
-      if (!m_queue->retire(candidate))
+      if (m_queue && !m_queue->retire(candidate))
         throw std::logic_error{
             "The completed configuration was not active in the queue."};
       if (m_defaults.mode == TuningMode::onlineAdaptive) {
@@ -1798,9 +1861,14 @@ private:
       finishTuningAtBudget(TunerCompletionReason::maximumRetiredConfigurations);
       return;
     }
-    if (schedulingChanged) {
+    if (schedulingChanged && m_queue) {
       m_consecutiveStrategyRetries = 0u;
       refillQueue();
+    }
+    if (m_defaults.mode == TuningMode::onlineFixed && !m_queue &&
+        allFixedCandidatesResolved()) {
+      finishTuning();
+      return;
     }
     stageCache(candidate, schedulingChanged);
   }
@@ -2691,13 +2759,18 @@ private:
         {"mode", std::string{tuningModeName(m_defaults.mode)}},
         {"strategy", std::string{strategyName(m_defaults.strategy)}},
         {"model_context", serializedLearnedModelContext()}};
-    cache["policy"] = {
-        {"history_window_size", m_defaults.historyWindowSize},
-        {"warmup_runs", m_defaults.warmupRuns},
-        {"noise_cancellation_window", m_defaults.noiseCancellationWindow},
-        {"max_consecutive_runs", m_defaults.maxConsecutiveRuns},
-        {"maximum_consecutive_strategy_retries",
-         m_defaults.maximumConsecutiveStrategyRetries}};
+    cache["policy"] = {{"history_window_size", m_defaults.historyWindowSize},
+                       {"maximum_consecutive_strategy_retries",
+                        m_defaults.maximumConsecutiveStrategyRetries}};
+    cache["policy"]["queue"] = nullptr;
+    if (m_defaults.queue) {
+      cache["policy"]["queue"] = {
+          {"disable", m_defaults.queue->disable},
+          {"warmup_runs", m_defaults.queue->warmupRuns},
+          {"noise_cancellation_window",
+           m_defaults.queue->noiseCancellationWindow},
+          {"max_consecutive_runs", m_defaults.queue->maxConsecutiveRuns}};
+    }
     if (m_defaults.mode == TuningMode::onlineAdaptive) {
       cache["policy"]["horizon"] = m_defaults.horizon
                                        ? nlohmann::json{*m_defaults.horizon}
@@ -2824,6 +2897,7 @@ private:
   TunerCompletionReason m_completionReason{TunerCompletionReason::none};
   /** Terminal replay state, intentionally independent of adaptive horizon. */
   bool m_terminal{};
+  bool m_schedulingInitialised{};
   bool m_loadedFromCache{};
   bool m_executionBudgetReached{};
   std::optional<InstrumentationOverheadWarning>

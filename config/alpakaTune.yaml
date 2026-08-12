@@ -6,8 +6,6 @@ tuning:
   # exhaustive, random, simulated_annealing, bayesian_optimization, or learned_hybrid
   strategy: exhaustive
   random_seed: 0
-  # run one configuration X times before recording measurements
-  warmup_runs: 1
   # Hard cap; a record may retire earlier when its CI criterion is met or if it was retired by the Mann Whitney U test
   runs_per_candidate: 20
   # Defaults to runs_per_candidate, preserving fixed-budget measurements.
@@ -23,13 +21,7 @@ tuning:
   mann_whitney_early_stop: true
   mann_whitney_min_samples: 8
   mann_whitney_alpha: 0.05
-  # The candidate queue window - The queue allows interleaved candidate selection to mitigate transient system behavior
-  # the windows specifies how many slots can be occupied by distinct candidate configurations at once
-  noise_cancellation_window: 50
-  # how many times in the row does the same config run (warning: this has to be higher than warmup_runs)
-  max_consecutive_runs: 2
-  # Stop online tuning when an empty scheduler cannot admit a strategy proposal
-  # after this many consecutive retries.
+  # Bound consecutive rejected strategy proposals in one admission attempt.
   maximum_consecutive_strategy_retries: 20
   # online_adaptive-only revisit-probability and temperature horizon. It does
   # not terminate tuning. The surrounding application owns its run count.
@@ -42,6 +34,16 @@ tuning:
   score_temperature_start: 0.25
   score_temperature_end: 0.05
   horizon_offset_with_active_history: 0.8
+queue:
+  # A present queue is active unless explicitly disabled. Remove this section
+  # or set disable: true to launch accepted recommendations directly.
+  disable: false
+  # Run one configuration X times before recording measurements.
+  warmup_runs: 1
+  # Interleave this many distinct candidate configurations.
+  noise_cancellation_window: 50
+  # Consecutive launches per activation; must exceed warmup_runs.
+  max_consecutive_runs: 2
 history:
   file: .alpakaTune/history.json
   read: true

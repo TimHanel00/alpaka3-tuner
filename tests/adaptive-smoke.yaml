@@ -3,13 +3,14 @@ tuning:
   mode: online_adaptive
   strategy: exhaustive
   random_seed: 0
-  warmup_runs: 0
   runs_per_candidate: 1
   minimum_runs_per_candidate: 1
-  noise_cancellation_window: 1
-  max_consecutive_runs: 1
   horizon: 1
   history_window_size: 1
+queue:
+  warmup_runs: 0
+  noise_cancellation_window: 1
+  max_consecutive_runs: 1
 history:
   read: false
   write: false

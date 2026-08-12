@@ -76,8 +76,11 @@ public:
     m_configurations.emplace(strategy, queueWindow, consecutiveRuns);
     auto config = m_config;
     config.strategy = strategy;
-    config.noiseCancellationWindow = queueWindow;
-    config.maxConsecutiveRuns = consecutiveRuns;
+    config.queue =
+        alpakaTune::QueueConfig{.disable = false,
+                                .warmupRuns = 0u,
+                                .noiseCancellationWindow = queueWindow,
+                                .maxConsecutiveRuns = consecutiveRuns};
     auto const name = std::string{alpakaTune::strategyName(strategy)} + "-" +
                       std::to_string(queueWindow) + "-" +
                       std::to_string(consecutiveRuns);
@@ -164,11 +167,12 @@ TEST_CASE("a host tuner can tune the configuration of another tuner",
   auto const directory = testDirectory();
   auto const innerConfig = alpakaTune::TunerConfig{
       .mode = alpakaTune::TuningMode::onlineFixed,
-      .warmupRuns = 0u,
+      .queue = alpakaTune::QueueConfig{.disable = false,
+                                       .warmupRuns = 0u,
+                                       .noiseCancellationWindow = 1u,
+                                       .maxConsecutiveRuns = 1u},
       .runsPerCandidate = 10u,
       .minimumRunsPerCandidate = 1u,
-      .noiseCancellationWindow = 1u,
-      .maxConsecutiveRuns = 1u,
       .maximumExecutions = NumberOfInsideSteps,
       .strategy = alpakaTune::StrategyKind::exhaustive,
       .completeHistory = {.file = directory / "inner.json"}};

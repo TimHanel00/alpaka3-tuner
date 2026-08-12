@@ -179,15 +179,18 @@ class FullCoverageConfigurationTest(unittest.TestCase):
             "schema_version": 1,
             "tuning": {
                 "strategy": "random",
-                "warmup_runs": 9,
                 "runs_per_candidate": 20,
                 "minimum_runs_per_candidate": 1,
                 "mann_whitney_early_stop": True,
-                "max_consecutive_runs": 10,
                 "horizon": 40_000,
                 "horizon_offset_with_active_history": 0.8,
                 "maximum_executions": 4000,
                 "maximum_retired_configurations": 2000,
+            },
+            "queue": {
+                "disable": True,
+                "warmup_runs": 9,
+                "max_consecutive_runs": 10,
             },
             "persistence": {"file": "old.json"},
         }
@@ -204,6 +207,8 @@ class FullCoverageConfigurationTest(unittest.TestCase):
         self.assertEqual(generated["tuning"]["mode"], "online_fixed")
         for key, value in run.FULL_COVERAGE_TUNING.items():
             self.assertEqual(generated["tuning"][key], value)
+        for key, value in run.FULL_COVERAGE_QUEUE.items():
+            self.assertEqual(generated["queue"][key], value)
         self.assertEqual(
             generated["tuning"]["maximum_executions"],
             250_000,

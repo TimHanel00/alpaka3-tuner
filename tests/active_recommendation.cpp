@@ -45,12 +45,13 @@ TEST_CASE("an active strategy recommendation is accepted", "[scheduler]") {
 
   auto config = alpakaTune::TunerConfig{};
   config.mode = alpakaTune::TuningMode::onlineAdaptive;
+  config.queue = alpakaTune::QueueConfig{.disable = false,
+                                         .warmupRuns = 0u,
+                                         .noiseCancellationWindow = 50u,
+                                         .maxConsecutiveRuns = 3u};
   config.strategy = alpakaTune::StrategyKind::exhaustive;
-  config.warmupRuns = 0u;
   config.runsPerCandidate = 3u;
   config.minimumRunsPerCandidate = 3u;
-  config.noiseCancellationWindow = 50u;
-  config.maxConsecutiveRuns = 3u;
   config.maximumConsecutiveStrategyRetries = 1u;
   config.horizon.reset();
   config.maximumExecutions.reset();

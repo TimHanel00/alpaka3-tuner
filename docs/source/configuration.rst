@@ -11,6 +11,11 @@ selected by ``ALPAKA_TUNE_CONFIG`` when set.
    auto config = alpakaTune::TunerConfig::fromYaml("tuning.yaml");
    config.mode = alpakaTune::TuningMode::onlineAdaptive;
    config.strategy = alpakaTune::StrategyKind::random;
+   config.queue = alpakaTune::QueueConfig{
+       .disable = false,
+       .warmupRuns = 1u,
+       .noiseCancellationWindow = 20u,
+       .maxConsecutiveRuns = 4u};
    config.horizon = 4'000u;
    config.horizonOffsetWithActiveHistory = 0.8;
    config.maximumConsecutiveStrategyRetries = 20u;
@@ -29,11 +34,13 @@ The type is an aggregate, so direct construction is also supported:
 
    auto config = alpakaTune::TunerConfig{
        .mode = alpakaTune::TuningMode::onlineFixed,
-       .warmupRuns = 0u,
+       .queue = alpakaTune::QueueConfig{
+           .disable = false,
+           .warmupRuns = 0u,
+           .noiseCancellationWindow = 20u,
+           .maxConsecutiveRuns = 2u},
        .runsPerCandidate = 10u,
        .minimumRunsPerCandidate = 3u,
-       .noiseCancellationWindow = 20u,
-       .maxConsecutiveRuns = 2u,
        .maximumConsecutiveStrategyRetries = 20u,
        .maximumExecutions = 100u,
        .strategy = alpakaTune::StrategyKind::exhaustive,
@@ -59,7 +66,6 @@ YAML schema version 3 adds independent compact and complete histories. Schemas
      mode: online_adaptive
      strategy: exhaustive
      random_seed: 0
-     warmup_runs: 1
      runs_per_candidate: 20
      minimum_runs_per_candidate: 5
      ci_check_interval: 10
@@ -69,8 +75,6 @@ YAML schema version 3 adds independent compact and complete histories. Schemas
      mann_whitney_early_stop: true
      mann_whitney_min_samples: 8
      mann_whitney_alpha: 0.05
-     noise_cancellation_window: 50
-     max_consecutive_runs: 3
      maximum_consecutive_strategy_retries: 20
      horizon: 40000
      history_window_size: 20
@@ -78,6 +82,12 @@ YAML schema version 3 adds independent compact and complete histories. Schemas
      score_temperature_start: 0.25
      score_temperature_end: 0.05
      horizon_offset_with_active_history: 0.8
+   queue:
+     # A present section is enabled unless disable is true.
+     disable: false
+     warmup_runs: 1
+     noise_cancellation_window: 50
+     max_consecutive_runs: 3
    history:
      file: .alpakaTune/history.json
      read: true
@@ -129,7 +139,17 @@ Unknown keys and invalid values are rejected. ``online_adaptive`` is the
 default. In ``online_fixed``, ``runsPerCandidate`` is the hard measurement cap
 and must not exceed ``historyWindowSize``. Lowering
 ``minimumRunsPerCandidate`` enables confidence-interval retirement.
-``maxConsecutiveRuns`` must exceed ``warmupRuns``. In ``online_fixed``,
+The queue is opt-in for both online modes. A present ``queue`` map constructs
+the scheduler and defaults ``disable`` to ``false``. Omitting the map, setting
+``disable: true``, resetting ``TunerConfig::queue``, or setting
+``QueueConfig::disable`` bypasses it. The resulting path is strategy,
+mandatory constraints, optional horizon rejection, then one direct launch.
+When the queue is active, it follows horizon rejection and precedes the launch.
+Disabled queue parameters are retained but ignored. Legacy
+``warmup_runs``, ``noise_cancellation_window``, and ``max_consecutive_runs``
+keys under ``tuning`` remain accepted for compatibility but do not enable or
+configure a queue. In an active queue, ``maxConsecutiveRuns`` must exceed
+``warmupRuns``. In ``online_fixed``,
 ``maximumExecutions`` counts warm-up and measured launches, while
 ``maximumRetiredConfigurations`` limits completed candidate histories. These
 two guards are invalid in the other modes. ``online_adaptive`` optionally
