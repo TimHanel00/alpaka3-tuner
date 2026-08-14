@@ -83,7 +83,8 @@ auto main() -> int {
   auto defaultConfig = alpakaTune::TunerConfig{};
   defaultConfig.validate();
   if (defaultConfig.mode != alpakaTune::TuningMode::onlineAdaptive ||
-      defaultConfig.queue || defaultConfig.maximumExecutions ||
+      defaultConfig.replayFastPath || defaultConfig.queue ||
+      defaultConfig.maximumExecutions ||
       defaultConfig.maximumRetiredConfigurations ||
       defaultConfig.maximumConsecutiveStrategyRetries != 20u ||
       defaultConfig.horizon || !defaultConfig.randomSeed ||
@@ -120,6 +121,16 @@ auto main() -> int {
     mixedAdaptiveConfigRejected = true;
   }
   if (!mixedAdaptiveConfigRejected)
+    return EXIT_FAILURE;
+  auto adaptiveFastReplayConfig = defaultConfig;
+  adaptiveFastReplayConfig.replayFastPath = true;
+  auto adaptiveFastReplayRejected = false;
+  try {
+    adaptiveFastReplayConfig.validate();
+  } catch (std::invalid_argument const &) {
+    adaptiveFastReplayRejected = true;
+  }
+  if (!adaptiveFastReplayRejected)
     return EXIT_FAILURE;
   auto mixedFixedConfig = defaultConfig;
   mixedFixedConfig.mode = alpakaTune::TuningMode::onlineFixed;
@@ -314,6 +325,7 @@ auto main() -> int {
   accessYaml << "schema_version: 3\n"
                 "tuning:\n"
                 "  mode: offline\n"
+                "  replay_fast_path: true\n"
                 "  strategy: random\n"
                 "  warmup_runs: 0\n"
                 "  runs_per_candidate: 1\n"
@@ -331,7 +343,8 @@ auto main() -> int {
   accessYaml.close();
   auto const accessDefaults =
       alpakaTune::TunerConfig::fromYaml(accessConfiguration);
-  if (accessDefaults.history.file != "read-only-history.json" ||
+  if (!accessDefaults.replayFastPath ||
+      accessDefaults.history.file != "read-only-history.json" ||
       !accessDefaults.history.read || accessDefaults.history.write ||
       accessDefaults.history.sampleCount != 5u ||
       accessDefaults.completeHistory.file != "complete.json" ||
@@ -495,6 +508,25 @@ auto main() -> int {
     offsetWithoutHorizonRejected = true;
   }
   if (!offsetWithoutHorizonRejected)
+    return EXIT_FAILURE;
+
+  auto const adaptiveFastReplayConfiguration =
+      configurationDirectory / "adaptive-fast-replay-v3.yaml";
+  auto adaptiveFastReplayYaml = std::ofstream{adaptiveFastReplayConfiguration};
+  adaptiveFastReplayYaml << "schema_version: 3\n"
+                            "tuning:\n"
+                            "  mode: online_adaptive\n"
+                            "  replay_fast_path: true\n"
+                            "  runs_per_candidate: 1\n";
+  adaptiveFastReplayYaml.close();
+  auto adaptiveFastReplayYamlRejected = false;
+  try {
+    static_cast<void>(
+        alpakaTune::TunerConfig::fromYaml(adaptiveFastReplayConfiguration));
+  } catch (std::invalid_argument const &) {
+    adaptiveFastReplayYamlRejected = true;
+  }
+  if (!adaptiveFastReplayYamlRejected)
     return EXIT_FAILURE;
 
   auto const mixedAdaptiveConfiguration =

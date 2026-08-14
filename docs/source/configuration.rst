@@ -10,6 +10,7 @@ selected by ``ALPAKA_TUNE_CONFIG`` when set.
 
    auto config = alpakaTune::TunerConfig::fromYaml("tuning.yaml");
    config.mode = alpakaTune::TuningMode::onlineAdaptive;
+   config.replayFastPath = false;
    config.strategy = alpakaTune::StrategyKind::random;
    config.queue = alpakaTune::QueueConfig{
        .disable = false,
@@ -139,6 +140,14 @@ Unknown keys and invalid values are rejected. ``online_adaptive`` is the
 default. In ``online_fixed``, ``runsPerCandidate`` is the hard measurement cap
 and must not exceed ``historyWindowSize``. Lowering
 ``minimumRunsPerCandidate`` enables confidence-interval retirement.
+``replay_fast_path`` maps to ``TunerConfig::replayFastPath`` and defaults to
+``false`` for compatibility. It is valid only in ``offline`` and
+``online_fixed``. When enabled, a terminal winner is launched without timing
+events, execution-counter updates, strategy recommendations, queue work,
+runtime-history mutation, or persistence staging. This also permits the replay
+call to use a timing-disabled queue. The fixed learning mode retains its public
+``online_fixed`` spelling; the option applies only after that mode reaches a
+terminal completion guard.
 The queue is opt-in for both online modes. A present ``queue`` map constructs
 the scheduler and defaults ``disable`` to ``false``. Omitting the map, setting
 ``disable: true``, resetting ``TunerConfig::queue``, or setting

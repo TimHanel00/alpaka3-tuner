@@ -3,6 +3,9 @@ schema_version: 3
 tuning:
   # offline, online_fixed, or online_adaptive
   mode: online_adaptive
+  # Offline and post-completion online_fixed replay may opt into a production
+  # path with no timing events, observations, or history bookkeeping.
+  replay_fast_path: false
   # exhaustive, random, simulated_annealing, bayesian_optimization, or learned_hybrid
   strategy: exhaustive
   random_seed: 0

@@ -328,7 +328,6 @@ public:
       : m_defaults(std::move(defaults)), m_history(std::move(history)),
         m_completeHistory(std::move(completeHistory)),
         m_tunables(std::move(tunables)), m_device(std::move(device)),
-        m_measurementTimer(m_device),
         m_identityEntries(std::move(identityEntries)),
         m_baseRandomSeed(m_defaults.randomSeed
                              ? *m_defaults.randomSeed
@@ -504,6 +503,10 @@ public:
    */
   void enqueue(Queue const &queue, FrameSpec const &frameSpec,
                alpaka::KernelBundle<Kernel, Args...> const &prototype) {
+    if (m_defaults.replayFastPath &&
+        (m_terminal || m_defaults.mode == TuningMode::offline) &&
+        tryFastReplay(queue, frameSpec, prototype))
+      return;
     static_cast<void>(enqueueObserved(queue, frameSpec, prototype));
   }
 
@@ -537,6 +540,14 @@ public:
       throw std::logic_error{
           "The tuner terminated without a measured candidate to launch."};
 
+    if constexpr (!std::same_as<ALPAKA_TYPEOF(queue.getTiming()),
+                                alpaka::timing::Enabled>) {
+      if (!m_defaults.replayFastPath || !m_terminal)
+        throw std::invalid_argument{
+            "A timing-disabled queue requires replayFastPath and a terminal "
+            "offline or online-fixed winner."};
+    }
+
     if (m_defaults.mode == TuningMode::onlineFixed && !m_terminal &&
         executionBudgetReached())
       finishTuningAtBudget(TunerCompletionReason::maximumExecutions);
@@ -560,7 +571,7 @@ public:
     auto const key = compileVariantKey(indicesFor(candidate));
     m_compileVariants.at(m_compileVariantIndices.at(key))(
         &call, candidate, selection.measure, selection.beginActivation,
-        selection.endActivation);
+        selection.endActivation, !(m_defaults.replayFastPath && m_terminal));
 
     if (m_defaults.mode == TuningMode::onlineFixed && !m_terminal && m_queue &&
         m_queue->empty() &&
@@ -589,6 +600,45 @@ public:
   }
 
 private:
+  template <typename Queue, typename FrameSpec, typename Kernel,
+            typename... Args>
+  [[nodiscard]] auto
+  tryFastReplay(Queue const &queue, FrameSpec const &frameSpec,
+                alpaka::KernelBundle<Kernel, Args...> const &prototype)
+      -> bool {
+    if (!(queue.getDevice() == m_device))
+      throw std::invalid_argument{
+          "The queue device does not match this tuner's device."};
+    validatePrototype(prototype);
+    auto const fingerprint =
+        makeFingerprint<FrameSpec, decltype(prototype)>(frameSpec, prototype);
+    bindFingerprint(
+        fingerprint,
+        detail::typeName<
+            typename std::remove_cvref_t<decltype(prototype)>::KernelFn>(),
+        launchDescription(frameSpec));
+    initialiseScheduling();
+    if (!m_terminal)
+      return false;
+    if (m_bestCandidate == std::numeric_limits<std::size_t>::max())
+      throw std::logic_error{
+          "The tuner terminated without a measured candidate to launch."};
+
+    using Bundle = std::remove_cvref_t<decltype(prototype)>;
+    initialiseCompileVariants<Queue, FrameSpec, Bundle>();
+    auto const candidate = m_bestCandidate;
+    m_lastCandidate = candidate;
+    LaunchCall<Queue, FrameSpec, Bundle> call{.tuner = this,
+                                              .queue = &queue,
+                                              .frameSpec = &frameSpec,
+                                              .prototype = &prototype,
+                                              .runtimeSeconds = std::nullopt};
+    auto const key = compileVariantKey(indicesFor(candidate));
+    m_compileVariants.at(m_compileVariantIndices.at(key))(
+        &call, candidate, false, false, false, false);
+    return true;
+  }
+
   template <typename Bundle>
   void validatePrototype(Bundle const &prototype) const {
     std::vector<std::string_view> markers;
@@ -1550,7 +1600,7 @@ private:
   };
 
   using CompileVariantFunctor =
-      std::function<void(void *, std::size_t, bool, bool, bool)>;
+      std::function<void(void *, std::size_t, bool, bool, bool, bool)>;
 
   [[nodiscard]] auto compileVariantKey(
       std::array<std::size_t, dimensionCount> const &indices) const
@@ -1580,11 +1630,16 @@ private:
 
   template <typename Queue, typename FrameSpec, typename Bundle>
   void initialiseCompileVariants() {
-    auto const signature = detail::typeName<Bundle>();
+    auto const signature =
+        detail::typeName<Bundle>() + "|" + detail::typeName<Queue>();
     if (!m_compileVariants.empty()) {
-      if (m_compileVariantSignature != signature)
-        throw std::logic_error{"A tuner is bound to one KernelBundle type."};
-      return;
+      if (m_compileVariantSignature == signature)
+        return;
+      if (!m_defaults.replayFastPath || !m_terminal)
+        throw std::logic_error{
+            "A tuner is bound to one KernelBundle and queue type."};
+      m_compileVariants.clear();
+      m_compileVariantIndices.clear();
     }
     std::array<std::size_t, dimensionCount> indices{};
     appendCompileVariants<Queue, FrameSpec, Bundle, 0u, 0u>(indices);
@@ -1598,15 +1653,16 @@ private:
     if constexpr (EntryIndex == std::tuple_size_v<Entries>) {
       auto const key = compileVariantKey(indices);
       m_compileVariantIndices.emplace(key, m_compileVariants.size());
-      m_compileVariants.emplace_back([](void *rawCall, std::size_t candidate,
-                                        bool measure, bool beginActivation,
-                                        bool endActivation) {
-        auto &call =
-            *static_cast<LaunchCall<Queue, FrameSpec, Bundle> *>(rawCall);
-        call.tuner->template launchCandidate<CompileValues...>(
-            *call.queue, *call.frameSpec, *call.prototype, candidate, measure,
-            beginActivation, endActivation, call.runtimeSeconds);
-      });
+      m_compileVariants.emplace_back(
+          [](void *rawCall, std::size_t candidate, bool measure,
+             bool beginActivation, bool endActivation, bool trackExecution) {
+            auto &call =
+                *static_cast<LaunchCall<Queue, FrameSpec, Bundle> *>(rawCall);
+            call.tuner->template launchCandidate<CompileValues...>(
+                *call.queue, *call.frameSpec, *call.prototype, candidate,
+                measure, beginActivation, endActivation, trackExecution,
+                call.runtimeSeconds);
+          });
     } else {
       using Entry = std::tuple_element_t<EntryIndex, Entries>;
       using Values = typename Entry::values_type;
@@ -1748,6 +1804,7 @@ private:
   void launchCandidate(Queue const &queue, LaunchSpec const &prototypeLaunch,
                        Bundle const &prototype, std::size_t candidate,
                        bool measure, bool beginActivation, bool endActivation,
+                       bool trackExecution,
                        std::optional<double> &runtimeSeconds) {
     auto const indices = indicesFor(candidate);
     auto const bundle = rebuildBundle<CompileValues...>(prototype, indices);
@@ -1823,9 +1880,11 @@ private:
       }
     };
 
-    ++m_executionCount;
-    if (m_defaults.mode == TuningMode::onlineAdaptive)
-      ++m_adaptiveHorizonExecutionCount;
+    if (trackExecution) {
+      ++m_executionCount;
+      if (m_defaults.mode == TuningMode::onlineAdaptive)
+        ++m_adaptiveHorizonExecutionCount;
+    }
     if (!measure) {
       launch(queue);
       return;
@@ -1833,7 +1892,15 @@ private:
     auto &history = m_histories.at(candidate);
     if (beginActivation)
       history.beginActivation();
-    runtimeSeconds = m_measurementTimer.measure(queue, launch);
+    if constexpr (std::same_as<ALPAKA_TYPEOF(queue.getTiming()),
+                               alpaka::timing::Enabled>) {
+      if (!m_measurementTimer)
+        m_measurementTimer.emplace(m_device);
+      runtimeSeconds = m_measurementTimer->measure(queue, launch);
+    } else {
+      throw std::invalid_argument{
+          "A measured tuning launch requires a timing-enabled queue."};
+    }
     recordInstrumentationOverheadWarning(*runtimeSeconds);
     static_cast<void>(history.record(*runtimeSeconds));
     if (m_defaults.mode == TuningMode::onlineFixed)
@@ -2848,7 +2915,7 @@ private:
   std::shared_ptr<detail::CompleteHistoryStore> m_completeHistory;
   TunablesType m_tunables;
   Device m_device;
-  MeasurementTimer m_measurementTimer;
+  std::optional<MeasurementTimer> m_measurementTimer;
   std::vector<std::string> m_identityEntries;
   std::vector<std::size_t> m_dimensionSizes;
   std::size_t m_candidateCount{1u};

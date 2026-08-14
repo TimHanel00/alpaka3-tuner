@@ -141,3 +141,8 @@ defaults reduce thermal, frequency, and operating-system noise. Warm-up
 launches are scheduled but excluded from the measured result. Without a queue,
 accepted strategy recommendations are measured directly after mandatory
 constraints and optional horizon rejection.
+
+Measured tuning calls require a timing-enabled non-blocking queue. An
+``offline`` winner or a completed ``online_fixed`` winner may instead use a
+timing-disabled queue when ``replay_fast_path`` is explicitly enabled; that
+production replay bypasses the timer and runtime-history instrumentation.

@@ -97,6 +97,12 @@ least one of these two limits is required. Once tuning finishes, later
 more samples. The application may still continue until its external run count
 is reached.
 
+Setting ``tuning.replay_fast_path: true`` (or
+``TunerConfig::replayFastPath = true``) makes those post-completion launches a
+production fast path. They may use a timing-disabled queue and bypass timing
+events, execution counters, strategy and scheduler work, history mutation, and
+persistence staging. The option does not change the measured learning phase.
+
 ``maximum_executions`` and ``maximum_retired_configurations`` are exclusive to
 this mode. ``runs_per_candidate`` is the maximum number of new retained
 measurements contributed by each candidate in the current run;
@@ -264,6 +270,12 @@ the launch, update the adapter, or update persistence. Because offline mode
 does not begin a new measurement lifecycle, it simply consumes the persisted
 timing window. An offline first run without readable measured history is an
 error.
+
+Offline mode accepts the same ``replay_fast_path`` option. The compatible
+history is still read to identify the winner, but the subsequent kernel launch
+does not construct or enqueue timing events and does not mutate the loaded
+history. Without the option, the established timing-enabled-queue API remains
+the default.
 
 Strategy and execution boundary
 -------------------------------

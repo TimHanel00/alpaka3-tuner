@@ -100,6 +100,8 @@ struct QueueConfig {
 struct TunerConfig {
   /** Persistence reuse and online measurement lifecycle. */
   TuningMode mode{TuningMode::onlineAdaptive};
+  /** Launch a terminal replay winner without runtime instrumentation. */
+  bool replayFastPath{false};
   /** Optional active-candidate scheduler; omission launches directly. */
   std::optional<QueueConfig> queue;
   /** Maximum new-run measurements per configuration in online-fixed mode. */
@@ -275,6 +277,7 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
     throw std::runtime_error{"YAML learning must contain a map."};
   rejectUnknown(tuning,
                 {"mode",
+                 "replay_fast_path",
                  "strategy",
                  "random_seed",
                  "warmup_runs",
@@ -323,6 +326,9 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
   defaults.mode = tuning["mode"]
                       ? tuningModeFromName(tuning["mode"].as<std::string>())
                       : defaults.mode;
+  defaults.replayFastPath = tuning["replay_fast_path"]
+                                ? tuning["replay_fast_path"].as<bool>()
+                                : defaults.replayFastPath;
   if (queue) {
     defaults.queue.emplace();
     defaults.queue->disable =
@@ -566,6 +572,10 @@ inline void TunerConfig::validate() const {
         "TunerConfig::onlineFixed requires maximumExecutions or "
         "maximumRetiredConfigurations."};
   if (mode == TuningMode::onlineAdaptive) {
+    if (replayFastPath)
+      throw std::invalid_argument{
+          "TunerConfig::replayFastPath is exclusive to offline and "
+          "online-fixed modes."};
     if (horizon)
       positive(*horizon, "TunerConfig::horizon");
     if (maximumExecutions || maximumRetiredConfigurations)

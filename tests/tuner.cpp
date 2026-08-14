@@ -658,6 +658,39 @@ auto main() -> int {
           alpakaTune::TunerCompletionReason::maximumExecutions)
     return EXIT_FAILURE;
 
+  // The compatible default terminal replay remains observable in the
+  // execution count and continues to use the timing-enabled queue type.
+  budgetTuner.enqueue(queue, frameSpec, bundle);
+  if (budgetTuner.info().executionCount != 2u ||
+      budgetTuner.candidateRuntimeSamples(budgetTuner.bestCandidateIndex())
+              .size() != 1u)
+    return EXIT_FAILURE;
+
+  // The opt-in fast path may switch to a timing-disabled production queue
+  // after fixed-mode completion and leaves all runtime bookkeeping unchanged.
+  auto fastBudgetConfig = budgetConfig;
+  fastBudgetConfig.replayFastPath = true;
+  auto fastBudgetTuner = alpakaTune::makeTuner(
+      fastBudgetConfig, tunables, device, "fast-execution-budget-test");
+  fastBudgetTuner.enqueue(queue, frameSpec, bundle);
+  auto const fastBudgetInfo = fastBudgetTuner.info();
+  auto const fastBudgetSamples =
+      fastBudgetTuner
+          .candidateRuntimeSamples(fastBudgetTuner.bestCandidateIndex())
+          .size();
+  fastBudgetTuner.enqueue(untimedQueue, frameSpec, bundle);
+  auto const fastBudgetReplay =
+      fastBudgetTuner.enqueueObserved(untimedQueue, frameSpec, bundle);
+  if (!fastBudgetTuner.completed() || fastBudgetReplay.measured ||
+      fastBudgetReplay.runtimeSeconds ||
+      fastBudgetTuner.info().executionCount != fastBudgetInfo.executionCount ||
+      fastBudgetTuner.info().retiredConfigurationCount !=
+          fastBudgetInfo.retiredConfigurationCount ||
+      fastBudgetTuner
+              .candidateRuntimeSamples(fastBudgetTuner.bestCandidateIndex())
+              .size() != fastBudgetSamples)
+    return EXIT_FAILURE;
+
 #if ALPAKA_TUNE_HAS_JSON
   auto reloadedBudget = alpakaTune::makeTuner(budgetConfig, tunables, device,
                                               "execution-budget-test");
@@ -798,6 +831,25 @@ auto main() -> int {
       offlineObservation.runtimeSeconds ||
       offlineTuner.info().mode != alpakaTune::TuningMode::offline ||
       offlineTuner.candidateRuntimeSamples(0u).size() != 3u)
+    return EXIT_FAILURE;
+
+  // Offline fast replay loads only enough persisted state to identify the
+  // winner, then launches it on an untimed queue without updating counters,
+  // samples, strategy state, queue state, or staged persistence.
+  auto offlineFastConfig = offlineConfig;
+  offlineFastConfig.replayFastPath = true;
+  auto offlineFastTuner = alpakaTune::makeTuner(
+      offlineFastConfig, adaptiveTunables, device, "adaptive-burst-test");
+  offlineFastTuner.enqueue(untimedQueue, frameSpec, bundle);
+  auto const offlineFastInfo = offlineFastTuner.info();
+  if (!offlineFastTuner.loadedFromCache() || !offlineFastTuner.completed() ||
+      offlineFastTuner.completionReason() !=
+          alpakaTune::TunerCompletionReason::offlineReplay ||
+      offlineFastInfo.executionCount !=
+          resumedAdaptiveTuner.info().executionCount ||
+      offlineFastInfo.retiredConfigurationCount !=
+          resumedAdaptiveTuner.info().retiredConfigurationCount ||
+      offlineFastTuner.candidateRuntimeSamples(0u).size() != 3u)
     return EXIT_FAILURE;
 
   auto const oldHistoryPath = configuration.parent_path() / "history-v10.json";
