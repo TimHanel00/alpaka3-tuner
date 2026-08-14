@@ -6,10 +6,79 @@
 #include "alpakaTune/core/TunerConfig.hpp"
 
 #include <cstddef>
+#include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace alpakaTune {
+
+template <typename TunablesType, typename Device> class Tuner;
+
+namespace detail {
+struct ConfigurationValidityState {
+  bool valid{true};
+  bool invalidationConsumed{};
+};
+} // namespace detail
+
+/**
+ * @brief Mutable application-owned validity flag for one tuner candidate.
+ *
+ * Copies share state, so every execution-history entry for the same candidate
+ * changes together. An invalidation may be undone until the tuner consumes it
+ * at the next enqueue. Once consumed, the candidate remains invalid for the
+ * lifetime of the tuner.
+ */
+class ConfigurationValidity {
+public:
+  ConfigurationValidity()
+      : m_state(std::make_shared<detail::ConfigurationValidityState>()) {}
+
+  /** @brief Read the application's current validity decision. */
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return m_state->valid;
+  }
+
+  /** @brief Change the decision before it is consumed by the tuner.
+   * @throws std::logic_error when attempting to restore a consumed
+   * invalidation.
+   */
+  auto operator=(bool valid) -> ConfigurationValidity & {
+    if (valid && m_state->invalidationConsumed)
+      throw std::logic_error{
+          "A consumed configuration invalidation cannot be restored."};
+    m_state->valid = valid;
+    return *this;
+  }
+
+private:
+  template <typename TunablesType, typename Device> friend class Tuner;
+
+  explicit ConfigurationValidity(
+      std::shared_ptr<detail::ConfigurationValidityState> state)
+      : m_state(std::move(state)) {}
+
+  std::shared_ptr<detail::ConfigurationValidityState> m_state;
+};
+
+/** @brief One successfully submitted tuner launch in process execution order.
+ */
+struct ExecutedConfiguration {
+  /** Zero-based position in Tuner::history(). */
+  std::size_t executionIndex{};
+  /** Exact Cartesian candidate selected for the launch. */
+  std::size_t candidateIndex{};
+  /** Normalized parameter vector mapped to candidateIndex. */
+  ParameterConfiguration configuration;
+  /** Synchronized launch duration when timing was enabled. */
+  std::optional<double> runtimeSeconds;
+  /** Whether runtimeSeconds contains a measured tuning sample. */
+  bool measured{};
+  /** Application decision, shared by all entries for this candidate. */
+  mutable ConfigurationValidity valid;
+};
 
 /** @brief Clock source used for synchronized kernel runtime observations. */
 enum class RuntimeMeasurementSource {
@@ -39,6 +108,8 @@ enum class TunerCompletionReason {
   maximumRetiredConfigurations, ///< Fixed-mode retirement guard was reached.
   /** Fixed-mode admission could not accept repeated strategy proposals. */
   maximumConsecutiveStrategyRetries,
+  /** Every measured candidate was invalidated or rejected. */
+  noValidConfiguration,
 };
 
 /** @brief Diagnostic emitted when timing overhead may dominate a short kernel.
@@ -70,6 +141,8 @@ completionReasonName(TunerCompletionReason reason) noexcept -> char const * {
     return "maximum_retired_configurations";
   case TunerCompletionReason::maximumConsecutiveStrategyRetries:
     return "maximum_consecutive_strategy_retries";
+  case TunerCompletionReason::noValidConfiguration:
+    return "no_valid_configuration";
   }
   return "none";
 }
@@ -82,6 +155,8 @@ struct TunerInfo {
   std::size_t candidateCount{};
   /** Candidates permanently rejected by tuning-space restrictions. */
   std::size_t rejectedCandidateCount{};
+  /** Executed candidates permanently invalidated by the application. */
+  std::size_t userInvalidatedCandidateCount{};
   /** Candidates currently owned by the active scheduler or fixed history. */
   std::size_t scheduledCandidateCount{};
   /** Non-rejected candidates with at least one retained timing sample. */
@@ -136,6 +211,8 @@ struct TunerInfo {
   std::size_t activeDuplicateAcceptedCount{};
   /** Proposals rejected by a tuning-space restriction. */
   std::size_t restrictionRejectedCount{};
+  /** Proposals rejected because the application invalidated the candidate. */
+  std::size_t userInvalidatedRejectedCount{};
   /** Revisit proposals rejected by the adaptive sigmoid gate. */
   std::size_t revisitRejectedCount{};
   /** Revisit proposals rejected by the relative-score gate. */

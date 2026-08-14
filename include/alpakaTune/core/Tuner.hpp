@@ -305,7 +305,7 @@ public:
   static constexpr std::size_t dimensionCount = Traits::dimensionCount;
   // The executor is part of the launch identity. Histories produced before
   // that identity was persisted must not be reused by a newer tuner.
-  static constexpr int completeHistorySchemaVersion = 11;
+  static constexpr int completeHistorySchemaVersion = 12;
   static constexpr bool tunesFrameSpec =
       Traits::template has<detail::numFramesName> ||
       Traits::template has<detail::frameExtentName>;
@@ -383,10 +383,11 @@ public:
    * @throws std::logic_error before completion or after winnerless termination.
    */
   [[nodiscard]] auto bestCandidateIndex() const -> std::size_t {
-    if (!m_terminal ||
-        m_bestCandidate == std::numeric_limits<std::size_t>::max())
+    if (!m_terminal)
       throw std::logic_error{"The tuner has no measured winner."};
-    return m_bestCandidate;
+    if (auto const best = currentBestCandidate())
+      return *best;
+    throw std::logic_error{"The tuner has no measured winner."};
   }
   /** @brief Return the terminal winner's normalized parameter vector. */
   [[nodiscard]] auto bestConfiguration() const -> ParameterConfiguration {
@@ -401,9 +402,27 @@ public:
       throw std::out_of_range{"The candidate index is outside this tuner."};
     return normalizedConfiguration(candidate);
   }
-  /** @brief Cartesian index used by the most recent enqueue call. */
+  /** @brief Ordered successfully submitted launches in this process.
+   *
+   * Record metadata is read-only; each record's validity flag remains mutable.
+   */
+  [[nodiscard]] auto history() const noexcept
+      -> std::span<ExecutedConfiguration const> {
+    return m_executionHistory;
+  }
+  /** @brief Most recent configuration that was successfully submitted.
+   * @throws std::logic_error before the first successful enqueue.
+   */
+  [[nodiscard]] auto lastConfig() const -> ExecutedConfiguration const & {
+    if (m_executionHistory.empty())
+      throw std::logic_error{"The tuner has not launched a configuration."};
+    return m_executionHistory.back();
+  }
+  /** @brief Cartesian index used by the most recent successful enqueue call. */
   [[nodiscard]] auto lastCandidateIndex() const noexcept -> std::size_t {
-    return m_lastCandidate;
+    return m_executionHistory.empty()
+               ? std::numeric_limits<std::size_t>::max()
+               : m_executionHistory.back().candidateIndex;
   }
   /** @brief Snapshot current coverage, policy, best, and admission counters. */
   [[nodiscard]] auto info() const -> TunerInfo {
@@ -411,12 +430,14 @@ public:
     for (std::size_t candidate = 0u; candidate < m_histories.size();
          ++candidate)
       if (!m_rejected.empty() && !m_rejected.at(candidate) &&
+          candidateUserValid(candidate) &&
           !m_histories.at(candidate).empty())
         ++measured;
     auto result = TunerInfo{
         .mode = m_defaults.mode,
         .candidateCount = m_candidateCount,
         .rejectedCandidateCount = m_rejectedCount,
+        .userInvalidatedCandidateCount = m_userInvalidatedCount,
         .scheduledCandidateCount = m_scheduledCount,
         .measuredCandidateCount = measured,
         .retiredConfigurationCount = m_retiredConfigurationCount,
@@ -451,12 +472,14 @@ public:
         .revisitAcceptedCount = m_revisitAcceptedCount,
         .activeDuplicateAcceptedCount = m_activeDuplicateAcceptedCount,
         .restrictionRejectedCount = m_restrictionRejectedCount,
+        .userInvalidatedRejectedCount = m_userInvalidatedRejectedCount,
         .revisitRejectedCount = m_revisitRejectedCount,
         .scoreRejectedCount = m_scoreRejectedCount};
     if (auto const best = currentBestCandidate()) {
       result.bestCandidateIndex = *best;
       result.bestConfiguration = normalizedConfiguration(*best);
-    } else if (m_bestCandidate != std::numeric_limits<std::size_t>::max()) {
+    } else if (m_bestCandidate != std::numeric_limits<std::size_t>::max() &&
+               candidateUserValid(m_bestCandidate)) {
       result.bestCandidateIndex = m_bestCandidate;
       result.bestConfiguration = normalizedConfiguration(m_bestCandidate);
     }
@@ -535,6 +558,7 @@ public:
             typename std::remove_cvref_t<decltype(prototype)>::KernelFn>(),
         launchDescription(frameSpec));
     initialiseScheduling();
+    reconcileUserInvalidations();
     if (m_terminal &&
         m_bestCandidate == std::numeric_limits<std::size_t>::max())
       throw std::logic_error{
@@ -562,7 +586,6 @@ public:
                                                        false, false}
                    : nextCandidate();
     auto const candidate = selection.candidateIndex;
-    m_lastCandidate = candidate;
     LaunchCall<Queue, FrameSpec, Bundle> call{.tuner = this,
                                               .queue = &queue,
                                               .frameSpec = &frameSpec,
@@ -572,10 +595,10 @@ public:
     m_compileVariants.at(m_compileVariantIndices.at(key))(
         &call, candidate, selection.measure, selection.beginActivation,
         selection.endActivation, !(m_defaults.replayFastPath && m_terminal));
+    recordExecution(candidate, call.runtimeSeconds);
 
     if (m_defaults.mode == TuningMode::onlineFixed && !m_terminal && m_queue &&
-        m_queue->empty() &&
-        m_scheduledCount + m_rejectedCount == m_candidateCount)
+        m_queue->empty() && allFixedCandidatesAdmitted())
       finishTuning();
 
     auto const tunerInfo = info();
@@ -618,6 +641,7 @@ private:
             typename std::remove_cvref_t<decltype(prototype)>::KernelFn>(),
         launchDescription(frameSpec));
     initialiseScheduling();
+    reconcileUserInvalidations();
     if (!m_terminal)
       return false;
     if (m_bestCandidate == std::numeric_limits<std::size_t>::max())
@@ -627,7 +651,6 @@ private:
     using Bundle = std::remove_cvref_t<decltype(prototype)>;
     initialiseCompileVariants<Queue, FrameSpec, Bundle>();
     auto const candidate = m_bestCandidate;
-    m_lastCandidate = candidate;
     LaunchCall<Queue, FrameSpec, Bundle> call{.tuner = this,
                                               .queue = &queue,
                                               .frameSpec = &frameSpec,
@@ -636,6 +659,7 @@ private:
     auto const key = compileVariantKey(indicesFor(candidate));
     m_compileVariants.at(m_compileVariantIndices.at(key))(
         &call, candidate, false, false, false, false);
+    recordExecution(candidate, call.runtimeSeconds);
     return true;
   }
 
@@ -823,7 +847,8 @@ private:
       for (std::size_t candidate = 0u; candidate < m_candidateCount;
            ++candidate)
         descriptor.legalCandidates[candidate] =
-            static_cast<std::uint8_t>(candidateAccepted(indicesFor(candidate)));
+            static_cast<std::uint8_t>(candidateUserValid(candidate) &&
+                                      candidateAccepted(indicesFor(candidate)));
     }
     return descriptor;
   }
@@ -1104,6 +1129,63 @@ private:
         progress, m_loadedFromCache, m_defaults.horizonOffsetWithActiveHistory);
   }
 
+  [[nodiscard]] auto candidateUserValid(std::size_t candidate) const noexcept
+      -> bool {
+    return m_candidateValidity.empty() ||
+           m_candidateValidity.at(candidate)->valid;
+  }
+
+  void recordExecution(std::size_t candidate,
+                       std::optional<double> runtimeSeconds) {
+    m_executionHistory.push_back(ExecutedConfiguration{
+        .executionIndex = m_executionHistory.size(),
+        .candidateIndex = candidate,
+        .configuration = normalizedConfiguration(candidate),
+        .runtimeSeconds = runtimeSeconds,
+        .measured = runtimeSeconds.has_value(),
+        .valid = ConfigurationValidity{m_candidateValidity.at(candidate)}});
+  }
+
+  /** @brief Consume application validity decisions before selecting work. */
+  void reconcileUserInvalidations() {
+    auto changed = false;
+    for (std::size_t candidate = 0u; candidate < m_candidateCount;
+         ++candidate) {
+      auto &state = *m_candidateValidity.at(candidate);
+      if (state.valid || m_userInvalidated.at(candidate))
+        continue;
+      state.invalidationConsumed = true;
+      m_userInvalidated.at(candidate) = true;
+      ++m_userInvalidatedCount;
+      changed = true;
+
+      if (m_queue)
+        static_cast<void>(m_queue->retire(candidate));
+      if (m_defaults.mode == TuningMode::onlineAdaptive &&
+          m_scheduled.at(candidate)) {
+        m_scheduled.at(candidate) = false;
+        --m_scheduledCount;
+      }
+      if (m_strategy)
+        m_strategy->configurationInvalidated(
+            normalizedConfiguration(candidate));
+    }
+    if (!changed)
+      return;
+
+    m_bestImprovements.clear();
+    m_bestRetiredRuntime = std::numeric_limits<double>::infinity();
+    if (auto const best = currentBestCandidate()) {
+      m_bestRetiredRuntime = m_histories.at(*best).statistics().estimate();
+      if (m_terminal)
+        m_bestCandidate = *best;
+    } else if (m_terminal) {
+      m_bestCandidate = std::numeric_limits<std::size_t>::max();
+      m_completionReason = TunerCompletionReason::noValidConfiguration;
+    }
+    writeCache();
+  }
+
   /** @brief Apply the single shared legality and mode-specific admission path.
    *
    * Every recommendation first passes the mandatory tuning-space constraints.
@@ -1113,6 +1195,10 @@ private:
    */
   [[nodiscard]] auto admitCandidate(std::size_t candidate)
       -> RecommendationDisposition {
+    if (!candidateUserValid(candidate)) {
+      ++m_userInvalidatedRejectedCount;
+      return RecommendationDisposition::userInvalidated;
+    }
     if (m_rejected.at(candidate)) {
       ++m_restrictionRejectedCount;
       return RecommendationDisposition::restrictionRejected;
@@ -1218,7 +1304,7 @@ private:
     for (std::size_t candidate = 0u; candidate < m_histories.size();
          ++candidate) {
       auto const &history = m_histories.at(candidate);
-      if (history.empty())
+      if (!candidateUserValid(candidate) || history.empty())
         continue;
       auto const estimate = history.statistics().estimate();
       if (estimate < bestEstimate) {
@@ -1267,7 +1353,8 @@ private:
       -> std::optional<RuntimeObservation> {
     try {
       auto const candidate = candidateForConfiguration(configuration);
-      if (m_histories.empty() || m_histories.at(candidate).empty())
+      if (!candidateUserValid(candidate) || m_histories.empty() ||
+          m_histories.at(candidate).empty())
         return std::nullopt;
       auto const &history = m_histories.at(candidate);
       auto const statistics = history.statistics();
@@ -1316,7 +1403,7 @@ private:
   [[nodiscard]] auto recommendCandidate()
       -> std::optional<CandidateRecommendation> {
     if (m_queue && m_defaults.mode == TuningMode::onlineFixed &&
-        m_scheduledCount + m_rejectedCount == m_candidateCount)
+        allFixedCandidatesAdmitted())
       return std::nullopt;
     auto const start = std::chrono::steady_clock::now();
     auto const strategyContext = TunerStrategyView{*this};
@@ -1352,6 +1439,13 @@ private:
                        detail::RuntimeHistory{runtimeHistoryOptions()});
     m_scheduled.assign(m_candidateCount, false);
     m_rejected.assign(m_candidateCount, false);
+    m_userInvalidated.assign(m_candidateCount, false);
+    m_candidateValidity.clear();
+    m_candidateValidity.reserve(m_candidateCount);
+    for (std::size_t candidate = 0u; candidate < m_candidateCount;
+         ++candidate)
+      m_candidateValidity.push_back(
+          std::make_shared<detail::ConfigurationValidityState>());
     m_loadedFromHistoryCandidates.assign(m_candidateCount, false);
     auto const compactLoaded = loadHistory();
     auto const completeLoaded = loadCompleteHistory();
@@ -1425,6 +1519,7 @@ private:
     m_revisitAcceptedCount = 0u;
     m_activeDuplicateAcceptedCount = 0u;
     m_restrictionRejectedCount = 0u;
+    m_userInvalidatedRejectedCount = 0u;
     m_revisitRejectedCount = 0u;
     m_scoreRejectedCount = 0u;
     m_consecutiveStrategyRetries = 0u;
@@ -1433,7 +1528,6 @@ private:
     m_bestRetiredRuntime = std::numeric_limits<double>::infinity();
     m_bestImprovements.clear();
     m_bestCandidate = std::numeric_limits<std::size_t>::max();
-    m_lastCandidate = std::numeric_limits<std::size_t>::max();
     m_completionReason = TunerCompletionReason::none;
     m_terminal = false;
     m_executionBudgetReached = false;
@@ -1456,7 +1550,7 @@ private:
       return;
     while (!m_queue->full()) {
       if (m_defaults.mode == TuningMode::onlineFixed &&
-          m_scheduledCount + m_rejectedCount == m_candidateCount)
+          allFixedCandidatesAdmitted())
         return;
       if (m_consecutiveStrategyRetries >=
           m_defaults.maximumConsecutiveStrategyRetries) {
@@ -1515,7 +1609,8 @@ private:
     auto const best = currentBestCandidate();
     if (!best)
       return std::nullopt;
-    if (m_scheduled.at(*best) || m_rejected.at(*best))
+    if (m_scheduled.at(*best) || m_rejected.at(*best) ||
+        !candidateUserValid(*best))
       throw std::logic_error{"The adaptive retry fallback is not schedulable."};
     m_histories.at(*best).reopen();
     m_scheduled.at(*best) = true;
@@ -1526,10 +1621,21 @@ private:
   }
 
   /** @brief Whether every legal fixed-mode history has retired. */
+  [[nodiscard]] auto allFixedCandidatesAdmitted() const -> bool {
+    for (std::size_t candidate = 0u; candidate < m_candidateCount;
+         ++candidate)
+      if (!m_scheduled.at(candidate) && !m_rejected.at(candidate) &&
+          candidateUserValid(candidate))
+        return false;
+    return true;
+  }
+
+  /** @brief Whether every valid fixed-mode history has retired. */
   [[nodiscard]] auto allFixedCandidatesResolved() const -> bool {
     for (std::size_t candidate = 0u; candidate < m_candidateCount;
          ++candidate) {
-      if (!m_rejected.at(candidate) && !m_histories.at(candidate).isFinished())
+      if (!m_rejected.at(candidate) && candidateUserValid(candidate) &&
+          !m_histories.at(candidate).isFinished())
         return false;
     }
     return true;
@@ -1567,7 +1673,7 @@ private:
     }
     if (m_bestCandidate == std::numeric_limits<std::size_t>::max())
       throw std::invalid_argument{
-          "The tuning-space constraints rejected every candidate."};
+          "No valid measured configuration is available to launch."};
     return {m_bestCandidate, false, false, false};
   }
 
@@ -1579,8 +1685,7 @@ private:
     if (m_terminal) {
       if (m_bestCandidate == std::numeric_limits<std::size_t>::max())
         throw std::logic_error{
-            "The strategy retry limit was reached without a measured "
-            "candidate to replay."};
+            "No valid measured configuration is available to replay."};
       return detail::CandidateQueue::Selection{m_bestCandidate, false, false,
                                                false};
     }
@@ -2107,6 +2212,8 @@ private:
       return TunerCompletionReason::maximumRetiredConfigurations;
     if (name == "maximum_consecutive_strategy_retries")
       return TunerCompletionReason::maximumConsecutiveStrategyRetries;
+    if (name == "no_valid_configuration")
+      return TunerCompletionReason::noValidConfiguration;
     return TunerCompletionReason::none;
   }
 
@@ -2250,7 +2357,10 @@ private:
         return false;
       auto const rejected =
           cache.at("rejected_candidates").get<std::vector<bool>>();
-      if (rejected.size() != m_candidateCount)
+      auto const userInvalidated =
+          cache.at("user_invalidated_candidates").get<std::vector<bool>>();
+      if (rejected.size() != m_candidateCount ||
+          userInvalidated.size() != m_candidateCount)
         return false;
       for (std::size_t candidate = 0u; candidate < m_candidateCount;
            ++candidate) {
@@ -2273,12 +2383,23 @@ private:
       m_rejected = rejected;
       m_rejectedCount = static_cast<std::size_t>(
           std::count(m_rejected.begin(), m_rejected.end(), true));
+      m_userInvalidated = userInvalidated;
+      m_userInvalidatedCount = static_cast<std::size_t>(std::count(
+          m_userInvalidated.begin(), m_userInvalidated.end(), true));
+      for (std::size_t candidate = 0u; candidate < m_candidateCount;
+           ++candidate) {
+        if (!m_userInvalidated.at(candidate))
+          continue;
+        m_candidateValidity.at(candidate)->valid = false;
+        m_candidateValidity.at(candidate)->invalidationConsumed = true;
+      }
       m_scheduled.assign(m_candidateCount, false);
       m_scheduledCount = 0u;
       if (m_defaults.mode == TuningMode::onlineFixed) {
         for (std::size_t candidate = 0u; candidate < m_candidateCount;
              ++candidate) {
-          if (m_rejected.at(candidate) || m_histories.at(candidate).empty())
+          if (m_rejected.at(candidate) || m_userInvalidated.at(candidate) ||
+              m_histories.at(candidate).empty())
             continue;
           m_scheduled.at(candidate) = true;
           ++m_scheduledCount;
@@ -2296,6 +2417,8 @@ private:
             admission->value("active_duplicate_accepted", 0u);
         m_restrictionRejectedCount =
             admission->value("restriction_rejected", 0u);
+        m_userInvalidatedRejectedCount =
+            admission->value("user_invalidated_rejected", 0u);
         m_revisitRejectedCount = admission->value("revisit_rejected", 0u);
         m_scoreRejectedCount = admission->value("score_rejected", 0u);
         m_strategyRetryLimitReachedCount =
@@ -2335,11 +2458,11 @@ private:
   }
 
   void finishTuning() {
-    auto best = std::size_t{0u};
+    auto best = std::optional<std::size_t>{};
     auto bestSeconds = std::numeric_limits<double>::infinity();
     for (std::size_t candidate = 0u; candidate < m_candidateCount;
          ++candidate) {
-      if (m_rejected.at(candidate))
+      if (m_rejected.at(candidate) || !candidateUserValid(candidate))
         continue;
       auto const statistics = m_histories.at(candidate).statistics();
       if (statistics.sampleCount == 0u)
@@ -2351,9 +2474,10 @@ private:
         best = candidate;
       }
     }
-    m_bestCandidate = best;
+    m_bestCandidate = best.value_or(std::numeric_limits<std::size_t>::max());
     m_terminal = true;
-    m_completionReason = TunerCompletionReason::allConfigurations;
+    m_completionReason = best ? TunerCompletionReason::allConfigurations
+                              : TunerCompletionReason::noValidConfiguration;
     writeCache();
   }
 
@@ -2375,11 +2499,18 @@ private:
   }
 
   void finishTuningAtStrategyRetryLimit() {
-    if (auto const best = currentBestCandidate())
+    if (auto const best = currentBestCandidate()) {
       m_bestCandidate = *best;
+      m_completionReason =
+          TunerCompletionReason::maximumConsecutiveStrategyRetries;
+    } else {
+      m_bestCandidate = std::numeric_limits<std::size_t>::max();
+      m_completionReason = m_userInvalidatedCount == 0u
+                               ? TunerCompletionReason::
+                                     maximumConsecutiveStrategyRetries
+                               : TunerCompletionReason::noValidConfiguration;
+    }
     m_terminal = true;
-    m_completionReason =
-        TunerCompletionReason::maximumConsecutiveStrategyRetries;
     m_queue.reset();
     writeCache();
   }
@@ -2733,6 +2864,7 @@ private:
             {"revisit_accepted", m_revisitAcceptedCount},
             {"active_duplicate_accepted", m_activeDuplicateAcceptedCount},
             {"restriction_rejected", m_restrictionRejectedCount},
+            {"user_invalidated_rejected", m_userInvalidatedRejectedCount},
             {"revisit_rejected", m_revisitRejectedCount},
             {"score_rejected", m_scoreRejectedCount},
             {"strategy_retry_limit_reached", m_strategyRetryLimitReachedCount},
@@ -2755,7 +2887,8 @@ private:
                              : nlohmann::json(nullptr)}};
     for (std::size_t candidate = 0u; candidate < m_candidateCount;
          ++candidate) {
-      if (m_histories.at(candidate).empty())
+      if (!candidateUserValid(candidate) ||
+          m_histories.at(candidate).empty())
         continue;
       auto const statistics = m_histories.at(candidate).statistics();
       cache["records"][std::to_string(candidate)] = {
@@ -2868,6 +3001,7 @@ private:
     for (auto const &improvement : m_bestImprovements)
       cache["best_improvements"].push_back(serializedImprovement(improvement));
     cache["rejected_candidates"] = m_rejected;
+    cache["user_invalidated_candidates"] = m_userInvalidated;
     cache["candidate_samples"] = nlohmann::json::array();
     cache["candidate_estimates"] = nlohmann::json::array();
     cache["candidate_configurations"] = nlohmann::json::array();
@@ -2930,9 +3064,13 @@ private:
   std::unique_ptr<detail::CandidateQueue> m_queue;
   std::vector<bool> m_scheduled;
   std::vector<bool> m_rejected;
+  std::vector<bool> m_userInvalidated;
+  std::vector<std::shared_ptr<detail::ConfigurationValidityState>>
+      m_candidateValidity;
   std::vector<bool> m_loadedFromHistoryCandidates;
   std::size_t m_scheduledCount{};
   std::size_t m_rejectedCount{};
+  std::size_t m_userInvalidatedCount{};
   std::size_t m_executionCount{};
   /** Executions in this adaptive process run; intentionally not restored. */
   std::size_t m_adaptiveHorizonExecutionCount{};
@@ -2941,6 +3079,7 @@ private:
   std::size_t m_revisitAcceptedCount{};
   std::size_t m_activeDuplicateAcceptedCount{};
   std::size_t m_restrictionRejectedCount{};
+  std::size_t m_userInvalidatedRejectedCount{};
   std::size_t m_revisitRejectedCount{};
   std::size_t m_scoreRejectedCount{};
   std::size_t m_consecutiveStrategyRetries{};
@@ -2951,6 +3090,7 @@ private:
   std::chrono::steady_clock::time_point m_tuningStarted{};
   double m_startedAtUnixSeconds{};
   std::vector<detail::RuntimeHistory> m_histories;
+  std::vector<ExecutedConfiguration> m_executionHistory;
   std::vector<CompileVariantFunctor> m_compileVariants;
   std::unordered_map<std::string, std::size_t> m_compileVariantIndices;
   std::string m_compileVariantSignature;
@@ -2959,7 +3099,6 @@ private:
   std::string m_kernelName;
   std::string m_launchSpecification;
   std::size_t m_bestCandidate{std::numeric_limits<std::size_t>::max()};
-  std::size_t m_lastCandidate{std::numeric_limits<std::size_t>::max()};
   double m_recommendationSecondsSinceLastLaunch{};
   TunerCompletionReason m_completionReason{TunerCompletionReason::none};
   /** Terminal replay state, intentionally independent of adaptive horizon. */

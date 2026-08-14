@@ -156,6 +156,7 @@ enum class RecommendationDisposition {
   scheduled,           ///< Candidate was accepted for queued or direct launch.
   activeDuplicate,     ///< Accepted: candidate was already queue-resident.
   restrictionRejected, ///< Candidate violated a tuning-space restriction.
+  userInvalidated,     ///< Candidate failed an application-side evaluation.
   revisitRejected,     ///< Adaptive revisit-probability gate rejected it.
   scoreRejected,       ///< Adaptive relative-runtime gate rejected it.
 };
@@ -182,6 +183,9 @@ public:
    */
   virtual void recommendationResult(ParameterConfiguration const &,
                                     RecommendationDisposition) {}
+
+  /** @brief Remove a post-evaluation-invalid candidate from strategy state. */
+  virtual void configurationInvalidated(ParameterConfiguration const &) {}
 };
 
 } // namespace alpakaTune

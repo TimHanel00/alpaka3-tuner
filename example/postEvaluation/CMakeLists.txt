@@ -1,0 +1,2 @@
+alpakatune_add_example(postEvaluation src/postEvaluation.cpp)
+alpakatune_add_example_smoke_test(postEvaluation)

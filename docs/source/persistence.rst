@@ -38,11 +38,12 @@ Complete history
 ----------------
 
 ``TunerConfig::completeHistory`` owns the former persistence schema. Complete
-history schema 11 retains raw rolling samples, sparse Cartesian candidate
+history schema 12 retains raw rolling samples, sparse Cartesian candidate
 arrays, lifecycle and completion state, admission counters, metadata,
-timestamps, learned diagnostics, and residual-adapter state. Files created by
-the previous ``persistence`` implementation remain structurally compatible
-after being moved to the configured complete-history path.
+timestamps, learned diagnostics, residual-adapter state, and application-side
+candidate invalidations. Invalidated samples remain available for diagnostics,
+but those candidates are excluded from winner selection and compact history.
+Complete histories from earlier schemas require a fresh collection.
 
 Read precedence
 ---------------
@@ -106,7 +107,7 @@ guarantee either write.
 Schema and identity
 -------------------
 
-Compact history uses file schema 1. Complete history remains file schema 11.
+Compact history uses file schema 1. Complete history uses file schema 12.
 Both use the same workload fingerprint so their contexts can be merged without
 storing a Cartesian candidate index in compact configuration records. Compact
 values are matched against each named tunable dimension, avoiding enumeration

@@ -49,6 +49,15 @@ public:
       m_pending.push_back(configuration);
   }
 
+  void configurationInvalidated(
+      ParameterConfiguration const &configuration) override {
+    std::erase(m_pending, configuration);
+    if (m_current == configuration) {
+      m_current.clear();
+      m_currentObjective = std::numeric_limits<double>::infinity();
+    }
+  }
+
 private:
   /** @brief Incorporate finished admitted proposals into annealing state.
    *

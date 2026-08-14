@@ -61,6 +61,11 @@ public:
       m_requested.erase(m_requested.begin());
   }
 
+  void configurationInvalidated(
+      ParameterConfiguration const &configuration) override {
+    std::erase(m_requested, configuration);
+  }
+
 private:
   struct Observation {
     ParameterConfiguration configuration;

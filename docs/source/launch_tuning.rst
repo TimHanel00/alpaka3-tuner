@@ -109,8 +109,10 @@ candidates such as ``alpaka::CVec`` and ``std::integer_sequence`` are
 materialized as their vector values before the predicate is called.
 
 ``tuner.info()`` returns a read-only snapshot including the Cartesian
-candidate count, the number rejected by relations, the number measured, the
-execution count, and the selected configuration when tuning is complete.
+candidate count, the numbers rejected before launch or invalidated after
+launch, the number measured, the execution count, and the selected
+configuration when tuning is complete. See :doc:`post_evaluation_validation`
+for application-side result checks and the ordered execution history.
 
 Reserved launch names
 ---------------------

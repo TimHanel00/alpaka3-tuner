@@ -208,6 +208,33 @@ public:
     m_lastRecommended.reset();
   }
 
+  void configurationInvalidated(
+      ParameterConfiguration const &configuration) override {
+    auto rawIndices = std::vector<std::size_t>{};
+    for (auto const &candidate : m_candidates)
+      if (candidate.configuration == configuration)
+        rawIndices.push_back(candidate.rawIndex);
+    std::erase_if(m_pendingCandidates, [&](auto const &candidate) {
+      if (candidate.configuration != configuration)
+        return false;
+      rawIndices.push_back(candidate.rawIndex);
+      return true;
+    });
+    std::erase_if(m_candidates, [&](auto const &candidate) {
+      return candidate.configuration == configuration;
+    });
+    std::erase_if(m_observations, [&](auto const &observation) {
+      return std::ranges::find(rawIndices, observation.rawIndex) !=
+             rawIndices.end();
+    });
+    m_adapter.clear();
+    m_observationsSinceUpdate = 0u;
+    if (!m_observations.empty())
+      fitResidualAdapter();
+    rebuildExploitationOrder();
+    buildExplorationOrder();
+  }
+
   /** @brief Whether native inference is active or which fallback is in use. */
   [[nodiscard]] auto status() const noexcept -> LearnedHybridStatus {
     return m_status;
