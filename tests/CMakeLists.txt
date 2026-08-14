@@ -13,6 +13,11 @@ target_link_libraries(alpakaTune_user_invalidation_tests PRIVATE alpakaTune::alp
 alpaka_finalize(alpakaTune_user_invalidation_tests)
 add_test(NAME alpakaTune_user_invalidation_tests COMMAND alpakaTune_user_invalidation_tests)
 
+add_executable(alpakaTune_custom_metric_tests custom_metric.cpp)
+target_link_libraries(alpakaTune_custom_metric_tests PRIVATE alpakaTune::alpakaTune Catch2::Catch2WithMain)
+alpaka_finalize(alpakaTune_custom_metric_tests)
+add_test(NAME alpakaTune_custom_metric_tests COMMAND alpakaTune_custom_metric_tests)
+
 add_executable(alpakaTune_frame_spec_tuning_tests frame_spec_tuning.cpp)
 target_link_libraries(alpakaTune_frame_spec_tuning_tests PRIVATE alpakaTune::alpakaTune)
 alpaka_finalize(alpakaTune_frame_spec_tuning_tests)

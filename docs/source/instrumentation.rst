@@ -85,7 +85,9 @@ events, SYCL uses profiling-enabled queues and event timestamps, and the host
 backend records its queue timeline with a host clock.
 ``LaunchObservation::runtimeMeasurementSource`` and
 ``TunerInfo::runtimeMeasurementSource`` report either ``device_event`` or
-``host_clock``; fallback therefore never masquerades as device timing.
+``host_clock`` for the default timing metric. They are empty for a
+:doc:`custom_metrics` tuner because alpakaTune does not instrument that launch;
+fallback therefore never masquerades as device timing.
 Recommendation time is reported separately, while application-side logging
 outside ``Tuner::enqueue`` is not included.
 

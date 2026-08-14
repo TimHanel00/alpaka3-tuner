@@ -157,6 +157,7 @@ enum class RecommendationDisposition {
   activeDuplicate,     ///< Accepted: candidate was already queue-resident.
   restrictionRejected, ///< Candidate violated a tuning-space restriction.
   userInvalidated,     ///< Candidate failed an application-side evaluation.
+  metricUnavailable,   ///< Candidate's application metric was not supplied.
   revisitRejected,     ///< Adaptive revisit-probability gate rejected it.
   scoreRejected,       ///< Adaptive relative-runtime gate rejected it.
 };

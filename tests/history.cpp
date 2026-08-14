@@ -18,6 +18,8 @@ namespace {
 
 [[nodiscard]] auto stagedHistory(std::size_t sampleCount) -> nlohmann::json {
   auto cache = nlohmann::json{{"records", nlohmann::json::object()},
+                              {"metric", {{"kind", "timing"},
+                                          {"name", "runtime_seconds"}}},
                               {"sampling_seed", 42u},
                               {"sample_count", sampleCount},
                               {"adapter",
@@ -31,7 +33,7 @@ namespace {
     cache["records"][std::to_string(candidate)] = {
         {"candidate_index", candidate},
         {"configuration", {{"value", candidate}}},
-        {"median_runtime_seconds", static_cast<double>(candidate + 1u)},
+        {"median_metric_value", static_cast<double>(candidate + 1u)},
         {"measurement_count", candidate + 2u}};
   return cache;
 }
@@ -55,7 +57,7 @@ auto main() -> int {
   auto previousRuntime = 0.0;
   for (std::size_t rank = 0u; rank < four.at("configurations").size(); ++rank) {
     auto const &record = four.at("configurations").at(rank);
-    auto const runtime = record.at("median_runtime_seconds").get<double>();
+    auto const runtime = record.at("median_metric_value").get<double>();
     if (record.contains("candidate_index") || runtime < previousRuntime)
       return EXIT_FAILURE;
     previousRuntime = runtime;

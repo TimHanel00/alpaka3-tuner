@@ -112,7 +112,8 @@ materialized as their vector values before the predicate is called.
 candidate count, the numbers rejected before launch or invalidated after
 launch, the number measured, the execution count, and the selected
 configuration when tuning is complete. See :doc:`post_evaluation_validation`
-for application-side result checks and the ordered execution history.
+for application-side result checks and the ordered execution history, or
+:doc:`custom_metrics` to replace runtime as the minimized objective.
 
 Reserved launch names
 ---------------------

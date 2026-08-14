@@ -60,8 +60,27 @@ struct BestImprovement {
   std::size_t candidateIndex{};
   std::size_t executionCount{};
   std::size_t retiredConfigurationCount{};
-  double runtimeSeconds{};
+  double metricValue{};
   double elapsedSeconds{};
+};
+
+template <typename T>
+inline constexpr bool isCustomMetricToken =
+    std::same_as<std::remove_cvref_t<T>, metric::Custom>;
+
+template <typename... Entries>
+inline constexpr std::size_t customMetricTokenCount =
+    (std::size_t{0u} + ... + (isCustomMetricToken<Entries> ? 1u : 0u));
+
+template <typename... Entries>
+using SelectedMetricPolicy =
+    std::conditional_t<customMetricTokenCount<Entries...> == 0u,
+                       metric::Timing, metric::Custom>;
+
+template <typename Device, bool Enabled> struct MeasurementTimerStorage {};
+
+template <typename Device> struct MeasurementTimerStorage<Device, true> {
+  std::optional<timing::KernelTimer<Device>> timer;
 };
 
 /** @brief Normalized sigmoid used to admit adaptive revisits.
@@ -298,14 +317,17 @@ void forEachTupleType(Callable &&callable) {
  * the surrounding application calls enqueue. One instance binds lazily to one
  * launch prototype and one persistent fingerprint.
  */
-template <typename TunablesType, typename Device> class Tuner {
+template <typename TunablesType, typename Device, typename MetricPolicy>
+class Tuner {
 public:
   using Traits = detail::TunablesTraits<TunablesType>;
   using Entries = typename Traits::entries_type;
   static constexpr std::size_t dimensionCount = Traits::dimensionCount;
   // The executor is part of the launch identity. Histories produced before
   // that identity was persisted must not be reused by a newer tuner.
-  static constexpr int completeHistorySchemaVersion = 12;
+  static constexpr int completeHistorySchemaVersion = 13;
+  static constexpr bool usesCustomMetric =
+      std::same_as<MetricPolicy, metric::Custom>;
   static constexpr bool tunesFrameSpec =
       Traits::template has<detail::numFramesName> ||
       Traits::template has<detail::frameExtentName>;
@@ -324,16 +346,40 @@ public:
   Tuner(TunerConfig defaults, std::shared_ptr<detail::HistoryStore> history,
         std::shared_ptr<detail::CompleteHistoryStore> completeHistory,
         TunablesType tunables, Device device,
-        std::vector<std::string> identityEntries)
+        std::vector<std::string> identityEntries, std::string metricName)
       : m_defaults(std::move(defaults)), m_history(std::move(history)),
         m_completeHistory(std::move(completeHistory)),
         m_tunables(std::move(tunables)), m_device(std::move(device)),
         m_identityEntries(std::move(identityEntries)),
+        m_metricName(std::move(metricName)),
         m_baseRandomSeed(m_defaults.randomSeed
                              ? *m_defaults.randomSeed
                              : detail::nondeterministicSeed()),
         m_random(0u) {
+    if (m_metricName.empty())
+      throw std::invalid_argument{"A tuning metric needs a name."};
     initialiseDimensions();
+  }
+
+  /** @brief Runtime label of the compile-time-selected minimization metric. */
+  [[nodiscard]] auto metricName() const noexcept -> std::string_view {
+    return m_metricName;
+  }
+  /** @brief Compile-time-selected source of objective measurements. */
+  [[nodiscard]] static constexpr auto metricKind() noexcept
+      -> TuningMetricKind {
+    if constexpr (usesCustomMetric)
+      return TuningMetricKind::custom;
+    else
+      return TuningMetricKind::timing;
+  }
+  /** @brief Timing clock, absent when the application owns measurement. */
+  [[nodiscard]] static constexpr auto runtimeMeasurementSource() noexcept
+      -> std::optional<RuntimeMeasurementSource> {
+    if constexpr (usesCustomMetric)
+      return std::nullopt;
+    else
+      return MeasurementTimer::measurementSource();
   }
 
   /** Whether the configured tuning-policy goal has been reached.
@@ -430,7 +476,7 @@ public:
     for (std::size_t candidate = 0u; candidate < m_histories.size();
          ++candidate)
       if (!m_rejected.empty() && !m_rejected.at(candidate) &&
-          candidateUserValid(candidate) &&
+          candidateUsable(candidate) &&
           !m_histories.at(candidate).empty())
         ++measured;
     auto result = TunerInfo{
@@ -438,6 +484,7 @@ public:
         .candidateCount = m_candidateCount,
         .rejectedCandidateCount = m_rejectedCount,
         .userInvalidatedCandidateCount = m_userInvalidatedCount,
+        .missingMetricCandidateCount = m_missingMetricCount,
         .scheduledCandidateCount = m_scheduledCount,
         .measuredCandidateCount = measured,
         .retiredConfigurationCount = m_retiredConfigurationCount,
@@ -463,7 +510,9 @@ public:
         .loadedFromCache = m_loadedFromCache,
         .executionBudgetReached = m_executionBudgetReached,
         .instrumentationOverheadWarning = m_instrumentationOverheadWarning,
-        .runtimeMeasurementSource = MeasurementTimer::measurementSource(),
+        .metricKind = metricKind(),
+        .metricName = m_metricName,
+        .runtimeMeasurementSource = runtimeMeasurementSource(),
         .bestCandidateIndex = std::nullopt,
         .bestConfiguration = std::nullopt,
         .learnedStatus = std::nullopt,
@@ -473,13 +522,14 @@ public:
         .activeDuplicateAcceptedCount = m_activeDuplicateAcceptedCount,
         .restrictionRejectedCount = m_restrictionRejectedCount,
         .userInvalidatedRejectedCount = m_userInvalidatedRejectedCount,
+        .missingMetricRejectedCount = m_missingMetricRejectedCount,
         .revisitRejectedCount = m_revisitRejectedCount,
         .scoreRejectedCount = m_scoreRejectedCount};
     if (auto const best = currentBestCandidate()) {
       result.bestCandidateIndex = *best;
       result.bestConfiguration = normalizedConfiguration(*best);
     } else if (m_bestCandidate != std::numeric_limits<std::size_t>::max() &&
-               candidateUserValid(m_bestCandidate)) {
+               candidateUsable(m_bestCandidate)) {
       result.bestCandidateIndex = m_bestCandidate;
       result.bestConfiguration = normalizedConfiguration(m_bestCandidate);
     }
@@ -503,6 +553,43 @@ public:
     if (m_histories.empty())
       throw std::logic_error{"The tuner has not launched a candidate yet."};
     return m_histories.at(candidate).samples();
+  }
+
+  /** @brief Current robust statistics for one candidate's tuning metric. */
+  [[nodiscard]] auto candidateMetricStatistics(std::size_t candidate) const
+      -> detail::RuntimeStatistics {
+    return candidateRuntimeStatistics(candidate);
+  }
+  /** @brief Retained rolling metric values for one Cartesian candidate. */
+  [[nodiscard]] auto candidateMetricSamples(std::size_t candidate) const
+      -> std::span<double const> {
+    return candidateRuntimeSamples(candidate);
+  }
+
+  /** @brief Attach one application objective to the most recent enqueue.
+   *
+   * Lower values are better. The value must be finite and non-negative. This
+   * member exists only for tuners constructed with customMetric().
+   *
+   * @throws std::logic_error if no most-recent launch is awaiting a metric or
+   * if that launch already received one.
+   */
+  void provideMetric(double value) requires(usesCustomMetric) {
+    if (!m_pendingMetric || m_executionHistory.empty() ||
+        m_pendingMetric->executionIndex != m_executionHistory.size() - 1u)
+      throw std::logic_error{
+          "The most recent enqueue is not awaiting a custom metric."};
+    if (!std::isfinite(value) || value < 0.0)
+      throw std::invalid_argument{
+          "A custom tuning metric must be finite and non-negative."};
+    auto const pending = *m_pendingMetric;
+    if (pending.measure)
+      recordMetric(pending.candidateIndex, value, pending.beginActivation,
+                   pending.endActivation);
+    auto &execution = m_executionHistory.at(pending.executionIndex);
+    execution.metricValue = value;
+    execution.measured = pending.measure;
+    m_pendingMetric.reset();
   }
 
   template <typename Queue, typename FrameSpec, typename Kernel,
@@ -559,12 +646,14 @@ public:
         launchDescription(frameSpec));
     initialiseScheduling();
     reconcileUserInvalidations();
+    reconcileMissingMetric();
     if (m_terminal &&
         m_bestCandidate == std::numeric_limits<std::size_t>::max())
       throw std::logic_error{
           "The tuner terminated without a measured candidate to launch."};
 
-    if constexpr (!std::same_as<ALPAKA_TYPEOF(queue.getTiming()),
+    if constexpr (!usesCustomMetric &&
+                  !std::same_as<ALPAKA_TYPEOF(queue.getTiming()),
                                 alpaka::timing::Enabled>) {
       if (!m_defaults.replayFastPath || !m_terminal)
         throw std::invalid_argument{
@@ -595,7 +684,14 @@ public:
     m_compileVariants.at(m_compileVariantIndices.at(key))(
         &call, candidate, selection.measure, selection.beginActivation,
         selection.endActivation, !(m_defaults.replayFastPath && m_terminal));
-    recordExecution(candidate, call.runtimeSeconds);
+    auto const executionIndex = recordExecution(candidate, call.runtimeSeconds);
+    if constexpr (usesCustomMetric)
+      m_pendingMetric = PendingMetric{.executionIndex = executionIndex,
+                                      .candidateIndex = candidate,
+                                      .measure = selection.measure,
+                                      .beginActivation =
+                                          selection.beginActivation,
+                                      .endActivation = selection.endActivation};
 
     if (m_defaults.mode == TuningMode::onlineFixed && !m_terminal && m_queue &&
         m_queue->empty() && allFixedCandidatesAdmitted())
@@ -606,7 +702,8 @@ public:
         .candidateIndex = candidate,
         .configuration = normalizedConfiguration(candidate),
         .runtimeSeconds = call.runtimeSeconds,
-        .runtimeMeasurementSource = MeasurementTimer::measurementSource(),
+        .metricValue = call.runtimeSeconds,
+        .runtimeMeasurementSource = runtimeMeasurementSource(),
         .recommendationSeconds = m_recommendationSecondsSinceLastLaunch,
         .measured = call.runtimeSeconds.has_value(),
         .tuningComplete = isTuningComplete(),
@@ -642,6 +739,7 @@ private:
         launchDescription(frameSpec));
     initialiseScheduling();
     reconcileUserInvalidations();
+    reconcileMissingMetric();
     if (!m_terminal)
       return false;
     if (m_bestCandidate == std::numeric_limits<std::size_t>::max())
@@ -659,7 +757,13 @@ private:
     auto const key = compileVariantKey(indicesFor(candidate));
     m_compileVariants.at(m_compileVariantIndices.at(key))(
         &call, candidate, false, false, false, false);
-    recordExecution(candidate, call.runtimeSeconds);
+    auto const executionIndex = recordExecution(candidate, call.runtimeSeconds);
+    if constexpr (usesCustomMetric)
+      m_pendingMetric = PendingMetric{.executionIndex = executionIndex,
+                                      .candidateIndex = candidate,
+                                      .measure = false,
+                                      .beginActivation = false,
+                                      .endActivation = false};
     return true;
   }
 
@@ -847,7 +951,7 @@ private:
       for (std::size_t candidate = 0u; candidate < m_candidateCount;
            ++candidate)
         descriptor.legalCandidates[candidate] =
-            static_cast<std::uint8_t>(candidateUserValid(candidate) &&
+            static_cast<std::uint8_t>(candidateUsable(candidate) &&
                                       candidateAccepted(indicesFor(candidate)));
     }
     return descriptor;
@@ -1135,15 +1239,54 @@ private:
            m_candidateValidity.at(candidate)->valid;
   }
 
-  void recordExecution(std::size_t candidate,
-                       std::optional<double> runtimeSeconds) {
+  [[nodiscard]] auto candidateMetricAvailable(std::size_t candidate) const
+      noexcept -> bool {
+    return m_missingMetric.empty() || !m_missingMetric.at(candidate);
+  }
+
+  [[nodiscard]] auto candidateUsable(std::size_t candidate) const noexcept
+      -> bool {
+    return candidateUserValid(candidate) && candidateMetricAvailable(candidate);
+  }
+
+  [[nodiscard]] auto recordExecution(
+      std::size_t candidate, std::optional<double> runtimeSeconds)
+      -> std::size_t {
+    auto const executionIndex = m_executionHistory.size();
     m_executionHistory.push_back(ExecutedConfiguration{
-        .executionIndex = m_executionHistory.size(),
+        .executionIndex = executionIndex,
         .candidateIndex = candidate,
         .configuration = normalizedConfiguration(candidate),
         .runtimeSeconds = runtimeSeconds,
+        .metricValue = runtimeSeconds,
         .measured = runtimeSeconds.has_value(),
         .valid = ConfigurationValidity{m_candidateValidity.at(candidate)}});
+    return executionIndex;
+  }
+
+  void removeCandidateFromSchedulers(std::size_t candidate) {
+    if (m_queue)
+      static_cast<void>(m_queue->retire(candidate));
+    if (m_defaults.mode == TuningMode::onlineAdaptive &&
+        m_scheduled.at(candidate)) {
+      m_scheduled.at(candidate) = false;
+      --m_scheduledCount;
+    }
+    if (m_strategy)
+      m_strategy->configurationInvalidated(normalizedConfiguration(candidate));
+  }
+
+  void rebuildBestAfterCandidateRemoval() {
+    m_bestImprovements.clear();
+    m_bestRetiredRuntime = std::numeric_limits<double>::infinity();
+    if (auto const best = currentBestCandidate()) {
+      m_bestRetiredRuntime = m_histories.at(*best).statistics().estimate();
+      if (m_terminal)
+        m_bestCandidate = *best;
+    } else if (m_terminal) {
+      m_bestCandidate = std::numeric_limits<std::size_t>::max();
+      m_completionReason = TunerCompletionReason::noValidConfiguration;
+    }
   }
 
   /** @brief Consume application validity decisions before selecting work. */
@@ -1159,29 +1302,35 @@ private:
       ++m_userInvalidatedCount;
       changed = true;
 
-      if (m_queue)
-        static_cast<void>(m_queue->retire(candidate));
-      if (m_defaults.mode == TuningMode::onlineAdaptive &&
-          m_scheduled.at(candidate)) {
-        m_scheduled.at(candidate) = false;
-        --m_scheduledCount;
-      }
-      if (m_strategy)
-        m_strategy->configurationInvalidated(
-            normalizedConfiguration(candidate));
+      removeCandidateFromSchedulers(candidate);
     }
     if (!changed)
       return;
 
-    m_bestImprovements.clear();
-    m_bestRetiredRuntime = std::numeric_limits<double>::infinity();
-    if (auto const best = currentBestCandidate()) {
-      m_bestRetiredRuntime = m_histories.at(*best).statistics().estimate();
-      if (m_terminal)
-        m_bestCandidate = *best;
-    } else if (m_terminal) {
-      m_bestCandidate = std::numeric_limits<std::size_t>::max();
-      m_completionReason = TunerCompletionReason::noValidConfiguration;
+    rebuildBestAfterCandidateRemoval();
+    writeCache();
+  }
+
+  /** @brief Reject a candidate whose preceding online launch has no metric. */
+  void reconcileMissingMetric() {
+    if constexpr (!usesCustomMetric)
+      return;
+    if (!m_pendingMetric)
+      return;
+    auto const pending = *m_pendingMetric;
+    m_pendingMetric.reset();
+    if (!pending.measure || !candidateUserValid(pending.candidateIndex))
+      return;
+    if (!m_missingMetric.at(pending.candidateIndex)) {
+      m_missingMetric.at(pending.candidateIndex) = true;
+      ++m_missingMetricCount;
+      removeCandidateFromSchedulers(pending.candidateIndex);
+      rebuildBestAfterCandidateRemoval();
+    }
+    if (m_defaults.mode == TuningMode::onlineFixed &&
+        allFixedCandidatesResolved()) {
+      finishTuning();
+      return;
     }
     writeCache();
   }
@@ -1198,6 +1347,10 @@ private:
     if (!candidateUserValid(candidate)) {
       ++m_userInvalidatedRejectedCount;
       return RecommendationDisposition::userInvalidated;
+    }
+    if (!candidateMetricAvailable(candidate)) {
+      ++m_missingMetricRejectedCount;
+      return RecommendationDisposition::metricUnavailable;
     }
     if (m_rejected.at(candidate)) {
       ++m_restrictionRejectedCount;
@@ -1304,7 +1457,7 @@ private:
     for (std::size_t candidate = 0u; candidate < m_histories.size();
          ++candidate) {
       auto const &history = m_histories.at(candidate);
-      if (!candidateUserValid(candidate) || history.empty())
+      if (!candidateUsable(candidate) || history.empty())
         continue;
       auto const estimate = history.statistics().estimate();
       if (estimate < bestEstimate) {
@@ -1333,15 +1486,15 @@ private:
 
   void recordRetiredConfiguration(std::size_t candidate) {
     ++m_retiredConfigurationCount;
-    auto const runtime = m_histories.at(candidate).statistics().estimate();
-    if (runtime >= m_bestRetiredRuntime)
+    auto const metricValue = m_histories.at(candidate).statistics().estimate();
+    if (metricValue >= m_bestRetiredRuntime)
       return;
-    m_bestRetiredRuntime = runtime;
+    m_bestRetiredRuntime = metricValue;
     m_bestImprovements.push_back(detail::BestImprovement{
         .candidateIndex = candidate,
         .executionCount = m_executionCount,
         .retiredConfigurationCount = m_retiredConfigurationCount,
-        .runtimeSeconds = runtime,
+        .metricValue = metricValue,
         .elapsedSeconds =
             std::chrono::duration<double>{std::chrono::steady_clock::now() -
                                           m_tuningStarted}
@@ -1353,7 +1506,7 @@ private:
       -> std::optional<RuntimeObservation> {
     try {
       auto const candidate = candidateForConfiguration(configuration);
-      if (!candidateUserValid(candidate) || m_histories.empty() ||
+      if (!candidateUsable(candidate) || m_histories.empty() ||
           m_histories.at(candidate).empty())
         return std::nullopt;
       auto const &history = m_histories.at(candidate);
@@ -1440,6 +1593,7 @@ private:
     m_scheduled.assign(m_candidateCount, false);
     m_rejected.assign(m_candidateCount, false);
     m_userInvalidated.assign(m_candidateCount, false);
+    m_missingMetric.assign(m_candidateCount, false);
     m_candidateValidity.clear();
     m_candidateValidity.reserve(m_candidateCount);
     for (std::size_t candidate = 0u; candidate < m_candidateCount;
@@ -1520,6 +1674,7 @@ private:
     m_activeDuplicateAcceptedCount = 0u;
     m_restrictionRejectedCount = 0u;
     m_userInvalidatedRejectedCount = 0u;
+    m_missingMetricRejectedCount = 0u;
     m_revisitRejectedCount = 0u;
     m_scoreRejectedCount = 0u;
     m_consecutiveStrategyRetries = 0u;
@@ -1610,7 +1765,7 @@ private:
     if (!best)
       return std::nullopt;
     if (m_scheduled.at(*best) || m_rejected.at(*best) ||
-        !candidateUserValid(*best))
+        !candidateUsable(*best))
       throw std::logic_error{"The adaptive retry fallback is not schedulable."};
     m_histories.at(*best).reopen();
     m_scheduled.at(*best) = true;
@@ -1625,7 +1780,7 @@ private:
     for (std::size_t candidate = 0u; candidate < m_candidateCount;
          ++candidate)
       if (!m_scheduled.at(candidate) && !m_rejected.at(candidate) &&
-          candidateUserValid(candidate))
+          candidateUsable(candidate))
         return false;
     return true;
   }
@@ -1634,7 +1789,7 @@ private:
   [[nodiscard]] auto allFixedCandidatesResolved() const -> bool {
     for (std::size_t candidate = 0u; candidate < m_candidateCount;
          ++candidate) {
-      if (!m_rejected.at(candidate) && candidateUserValid(candidate) &&
+      if (!m_rejected.at(candidate) && candidateUsable(candidate) &&
           !m_histories.at(candidate).isFinished())
         return false;
     }
@@ -1702,6 +1857,14 @@ private:
     FrameSpec const *frameSpec;
     Bundle const *prototype;
     std::optional<double> runtimeSeconds;
+  };
+
+  struct PendingMetric {
+    std::size_t executionIndex{};
+    std::size_t candidateIndex{};
+    bool measure{};
+    bool beginActivation{};
+    bool endActivation{};
   };
 
   using CompileVariantFunctor =
@@ -1994,20 +2157,30 @@ private:
       launch(queue);
       return;
     }
+    if constexpr (usesCustomMetric) {
+      launch(queue);
+    } else {
+      if constexpr (std::same_as<ALPAKA_TYPEOF(queue.getTiming()),
+                                 alpaka::timing::Enabled>) {
+        if (!m_measurementTimer.timer)
+          m_measurementTimer.timer.emplace(m_device);
+        runtimeSeconds = m_measurementTimer.timer->measure(queue, launch);
+      } else {
+        throw std::invalid_argument{
+            "A measured tuning launch requires a timing-enabled queue."};
+      }
+      recordInstrumentationOverheadWarning(*runtimeSeconds);
+      recordMetric(candidate, *runtimeSeconds, beginActivation, endActivation);
+    }
+  }
+
+  /** @brief Incorporate one timing or application-provided objective value. */
+  void recordMetric(std::size_t candidate, double value, bool beginActivation,
+                    bool endActivation) {
     auto &history = m_histories.at(candidate);
     if (beginActivation)
       history.beginActivation();
-    if constexpr (std::same_as<ALPAKA_TYPEOF(queue.getTiming()),
-                               alpaka::timing::Enabled>) {
-      if (!m_measurementTimer)
-        m_measurementTimer.emplace(m_device);
-      runtimeSeconds = m_measurementTimer->measure(queue, launch);
-    } else {
-      throw std::invalid_argument{
-          "A measured tuning launch requires a timing-enabled queue."};
-    }
-    recordInstrumentationOverheadWarning(*runtimeSeconds);
-    static_cast<void>(history.record(*runtimeSeconds));
+    static_cast<void>(history.record(value));
     if (m_defaults.mode == TuningMode::onlineFixed)
       retireByMannWhitneyIfWarranted(candidate);
     if (m_defaults.mode == TuningMode::onlineAdaptive && endActivation)
@@ -2071,6 +2244,8 @@ private:
              << '\n';
     identity << "bundle=" << detail::typeName<BundleType>() << '\n';
     identity << "device=" << detail::identityName(m_device) << '\n';
+    identity << "metric=" << tuningMetricKindName(metricKind()) << ':'
+             << m_metricName << '\n';
     identity << "executor="
              << detail::printable(
                     std::remove_cvref_t<LaunchSpec>::getExecutor())
@@ -2130,6 +2305,8 @@ private:
              << LearnedModelContextDescriptor::featureSchemaVersion << '\n';
     identity << "kernel=" << m_kernelName << '\n';
     identity << "launch=" << m_launchSpecification << '\n';
+    identity << "metric=" << tuningMetricKindName(metricKind()) << ':'
+             << m_metricName << '\n';
     for (auto const &entry : m_identityEntries)
       identity << "context=" << entry << '\n';
     std::apply(
@@ -2244,6 +2421,11 @@ private:
     auto const &cache = *cachePointer;
     auto restored = std::vector<std::tuple<std::size_t, double, std::size_t>>{};
     try {
+      auto const &metric = cache.at("metric");
+      if (metric.at("kind").get<std::string>() !=
+              tuningMetricKindName(metricKind()) ||
+          metric.at("name").get<std::string>() != m_metricName)
+        return false;
       auto const &records =
           stagedCache ? cache.at("records") : cache.at("configurations");
       if (stagedCache) {
@@ -2257,7 +2439,7 @@ private:
           if (!candidate)
             return false;
           restored.emplace_back(
-              *candidate, record.at("median_runtime_seconds").get<double>(),
+              *candidate, record.at("median_metric_value").get<double>(),
               record.at("measurement_count").get<std::size_t>());
         }
       } else {
@@ -2270,7 +2452,7 @@ private:
           if (!candidate)
             return false;
           restored.emplace_back(
-              *candidate, record.at("median_runtime_seconds").get<double>(),
+              *candidate, record.at("median_metric_value").get<double>(),
               record.at("measurement_count").get<std::size_t>());
         }
       }
@@ -2351,6 +2533,11 @@ private:
         std::count_if(m_histories.begin(), m_histories.end(),
                       [](auto const &history) { return !history.empty(); }));
     try {
+      auto const &metric = cache.at("metadata").at("metric");
+      if (metric.at("kind").get<std::string>() !=
+              tuningMetricKindName(metricKind()) ||
+          metric.at("name").get<std::string>() != m_metricName)
+        return false;
       auto const &storedHistories = cache.at("candidate_samples");
       if (!storedHistories.is_array() ||
           storedHistories.size() != m_candidateCount)
@@ -2359,8 +2546,11 @@ private:
           cache.at("rejected_candidates").get<std::vector<bool>>();
       auto const userInvalidated =
           cache.at("user_invalidated_candidates").get<std::vector<bool>>();
+      auto const missingMetric =
+          cache.at("missing_metric_candidates").get<std::vector<bool>>();
       if (rejected.size() != m_candidateCount ||
-          userInvalidated.size() != m_candidateCount)
+          userInvalidated.size() != m_candidateCount ||
+          missingMetric.size() != m_candidateCount)
         return false;
       for (std::size_t candidate = 0u; candidate < m_candidateCount;
            ++candidate) {
@@ -2386,6 +2576,9 @@ private:
       m_userInvalidated = userInvalidated;
       m_userInvalidatedCount = static_cast<std::size_t>(std::count(
           m_userInvalidated.begin(), m_userInvalidated.end(), true));
+      m_missingMetric = missingMetric;
+      m_missingMetricCount = static_cast<std::size_t>(std::count(
+          m_missingMetric.begin(), m_missingMetric.end(), true));
       for (std::size_t candidate = 0u; candidate < m_candidateCount;
            ++candidate) {
         if (!m_userInvalidated.at(candidate))
@@ -2399,6 +2592,7 @@ private:
         for (std::size_t candidate = 0u; candidate < m_candidateCount;
              ++candidate) {
           if (m_rejected.at(candidate) || m_userInvalidated.at(candidate) ||
+              m_missingMetric.at(candidate) ||
               m_histories.at(candidate).empty())
             continue;
           m_scheduled.at(candidate) = true;
@@ -2419,6 +2613,8 @@ private:
             admission->value("restriction_rejected", 0u);
         m_userInvalidatedRejectedCount =
             admission->value("user_invalidated_rejected", 0u);
+        m_missingMetricRejectedCount =
+            admission->value("missing_metric_rejected", 0u);
         m_revisitRejectedCount = admission->value("revisit_rejected", 0u);
         m_scoreRejectedCount = admission->value("score_rejected", 0u);
         m_strategyRetryLimitReachedCount =
@@ -2462,7 +2658,7 @@ private:
     auto bestSeconds = std::numeric_limits<double>::infinity();
     for (std::size_t candidate = 0u; candidate < m_candidateCount;
          ++candidate) {
-      if (m_rejected.at(candidate) || !candidateUserValid(candidate))
+      if (m_rejected.at(candidate) || !candidateUsable(candidate))
         continue;
       auto const statistics = m_histories.at(candidate).statistics();
       if (statistics.sampleCount == 0u)
@@ -2505,10 +2701,10 @@ private:
           TunerCompletionReason::maximumConsecutiveStrategyRetries;
     } else {
       m_bestCandidate = std::numeric_limits<std::size_t>::max();
-      m_completionReason = m_userInvalidatedCount == 0u
-                               ? TunerCompletionReason::
-                                     maximumConsecutiveStrategyRetries
-                               : TunerCompletionReason::noValidConfiguration;
+      m_completionReason =
+          m_userInvalidatedCount == 0u && m_missingMetricCount == 0u
+              ? TunerCompletionReason::maximumConsecutiveStrategyRetries
+              : TunerCompletionReason::noValidConfiguration;
     }
     m_terminal = true;
     m_queue.reset();
@@ -2573,7 +2769,7 @@ private:
         {"candidate_index", improvement.candidateIndex},
         {"execution_count", improvement.executionCount},
         {"retired_configuration_count", improvement.retiredConfigurationCount},
-        {"runtime_seconds", improvement.runtimeSeconds},
+        {"metric_value", improvement.metricValue},
         {"elapsed_seconds", improvement.elapsedSeconds},
         {"timestamp_unix_seconds",
          m_startedAtUnixSeconds + improvement.elapsedSeconds}};
@@ -2865,6 +3061,7 @@ private:
             {"active_duplicate_accepted", m_activeDuplicateAcceptedCount},
             {"restriction_rejected", m_restrictionRejectedCount},
             {"user_invalidated_rejected", m_userInvalidatedRejectedCount},
+            {"missing_metric_rejected", m_missingMetricRejectedCount},
             {"revisit_rejected", m_revisitRejectedCount},
             {"score_rejected", m_scoreRejectedCount},
             {"strategy_retry_limit_reached", m_strategyRetryLimitReachedCount},
@@ -2881,20 +3078,22 @@ private:
       -> nlohmann::json {
     auto cache = nlohmann::json{
         {"records", nlohmann::json::object()},
+        {"metric", {{"kind", tuningMetricKindName(metricKind())},
+                    {"name", m_metricName}}},
         {"sampling_seed", historySamplingSeed()},
         {"sample_count", m_defaults.history.sampleCount
                              ? nlohmann::json(*m_defaults.history.sampleCount)
                              : nlohmann::json(nullptr)}};
     for (std::size_t candidate = 0u; candidate < m_candidateCount;
          ++candidate) {
-      if (!candidateUserValid(candidate) ||
+      if (!candidateUsable(candidate) ||
           m_histories.at(candidate).empty())
         continue;
       auto const statistics = m_histories.at(candidate).statistics();
       cache["records"][std::to_string(candidate)] = {
           {"candidate_index", candidate},
           {"configuration", serializedCompactCandidateConfiguration(candidate)},
-          {"median_runtime_seconds", statistics.estimate()},
+          {"median_metric_value", statistics.estimate()},
           {"measurement_count", statistics.sampleCount}};
     }
     if (learning)
@@ -2914,7 +3113,7 @@ private:
       cache["records"][std::to_string(candidate)] = {
           {"candidate_index", candidate},
           {"configuration", serializedCompactCandidateConfiguration(candidate)},
-          {"median_runtime_seconds", statistics.estimate()},
+          {"median_metric_value", statistics.estimate()},
           {"measurement_count", statistics.sampleCount}};
       if (schedulingChanged) {
         if (learning) {
@@ -2956,6 +3155,8 @@ private:
         {"kernel", m_kernelName},
         {"device", detail::identityName(m_device)},
         {"launch_specification", m_launchSpecification},
+        {"metric", {{"kind", tuningMetricKindName(metricKind())},
+                    {"name", m_metricName}}},
         {"mode", std::string{tuningModeName(m_defaults.mode)}},
         {"strategy", std::string{strategyName(m_defaults.strategy)}},
         {"model_context", serializedLearnedModelContext()}};
@@ -3002,6 +3203,7 @@ private:
       cache["best_improvements"].push_back(serializedImprovement(improvement));
     cache["rejected_candidates"] = m_rejected;
     cache["user_invalidated_candidates"] = m_userInvalidated;
+    cache["missing_metric_candidates"] = m_missingMetric;
     cache["candidate_samples"] = nlohmann::json::array();
     cache["candidate_estimates"] = nlohmann::json::array();
     cache["candidate_configurations"] = nlohmann::json::array();
@@ -3049,8 +3251,10 @@ private:
   std::shared_ptr<detail::CompleteHistoryStore> m_completeHistory;
   TunablesType m_tunables;
   Device m_device;
-  std::optional<MeasurementTimer> m_measurementTimer;
+  detail::MeasurementTimerStorage<Device, !usesCustomMetric>
+      m_measurementTimer;
   std::vector<std::string> m_identityEntries;
+  std::string m_metricName;
   std::vector<std::size_t> m_dimensionSizes;
   std::size_t m_candidateCount{1u};
   std::uint64_t m_baseRandomSeed{};
@@ -3065,12 +3269,14 @@ private:
   std::vector<bool> m_scheduled;
   std::vector<bool> m_rejected;
   std::vector<bool> m_userInvalidated;
+  std::vector<bool> m_missingMetric;
   std::vector<std::shared_ptr<detail::ConfigurationValidityState>>
       m_candidateValidity;
   std::vector<bool> m_loadedFromHistoryCandidates;
   std::size_t m_scheduledCount{};
   std::size_t m_rejectedCount{};
   std::size_t m_userInvalidatedCount{};
+  std::size_t m_missingMetricCount{};
   std::size_t m_executionCount{};
   /** Executions in this adaptive process run; intentionally not restored. */
   std::size_t m_adaptiveHorizonExecutionCount{};
@@ -3080,6 +3286,7 @@ private:
   std::size_t m_activeDuplicateAcceptedCount{};
   std::size_t m_restrictionRejectedCount{};
   std::size_t m_userInvalidatedRejectedCount{};
+  std::size_t m_missingMetricRejectedCount{};
   std::size_t m_revisitRejectedCount{};
   std::size_t m_scoreRejectedCount{};
   std::size_t m_consecutiveStrategyRetries{};
@@ -3091,6 +3298,7 @@ private:
   double m_startedAtUnixSeconds{};
   std::vector<detail::RuntimeHistory> m_histories;
   std::vector<ExecutedConfiguration> m_executionHistory;
+  std::optional<PendingMetric> m_pendingMetric;
   std::vector<CompileVariantFunctor> m_compileVariants;
   std::unordered_map<std::string, std::size_t> m_compileVariantIndices;
   std::string m_compileVariantSignature;
@@ -3119,7 +3327,8 @@ private:
  * @param config Tuner policy, validated before construction.
  * @param tunables Runtime, compile-time, and launch-shape candidate bundle.
  * @param device Physical device to which subsequent queues must belong.
- * @param identityEntries Additional stable workload identity components.
+ * @param identityEntries Additional stable workload identity components and,
+ * optionally, one customMetric() compile-time policy token.
  *
  * Identity-entry order does not affect the persistent fingerprint.
  */
@@ -3128,19 +3337,32 @@ template <typename TunablesType, typename Device, typename... IdentityEntries>
 [[nodiscard]] auto makeTuner(TunerConfig config, TunablesType tunables,
                              Device device,
                              IdentityEntries const &...identityEntries) {
+  static_assert(detail::customMetricTokenCount<IdentityEntries...> <= 1u,
+                "makeTuner accepts at most one customMetric() token.");
+  using MetricPolicy = detail::SelectedMetricPolicy<IdentityEntries...>;
   config.validate();
-  std::vector<std::string> names{
-      (detail::typeName<std::remove_cvref_t<IdentityEntries>>() + "=" +
-       detail::identityName(identityEntries))...};
+  auto names = std::vector<std::string>{};
+  names.reserve(sizeof...(IdentityEntries));
+  auto metricName = std::string{"runtime_seconds"};
+  auto consumeEntry = [&](auto const &entry) {
+    using Entry = std::remove_cvref_t<decltype(entry)>;
+    if constexpr (detail::isCustomMetricToken<Entry>)
+      metricName = entry.name;
+    else
+      names.push_back(detail::typeName<Entry>() + "=" +
+                      detail::identityName(entry));
+  };
+  (consumeEntry(identityEntries), ...);
   std::sort(names.begin(), names.end());
   auto history = detail::historyStore(config.history.file, config.history.read,
                                       config.history.write);
   auto completeHistory = detail::completeHistoryStore(
       config.completeHistory.file, config.completeHistory.read,
       config.completeHistory.write);
-  return Tuner<TunablesType, Device>{
+  return Tuner<TunablesType, Device, MetricPolicy>{
       std::move(config),   std::move(history), std::move(completeHistory),
-      std::move(tunables), std::move(device),  std::move(names)};
+      std::move(tunables), std::move(device),  std::move(names),
+      std::move(metricName)};
 }
 
 /** @brief Construct a tuner using the process default YAML configuration. */

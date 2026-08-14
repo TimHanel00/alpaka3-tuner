@@ -24,4 +24,5 @@ Alpaka3 provides two host-side launch descriptions:
    post_evaluation_validation
    compile_time_tuning
    instrumentation
+   custom_metrics
    persistence

@@ -73,3 +73,8 @@ The complete source is
 ``example/postEvaluation/src/postEvaluation.cpp``. The same pattern applies to
 fixed exhaustive searches over approximation levels, sample counts, or other
 algorithmic parameters whose validity is known only after execution.
+
+Validity is independent of the minimized objective. A tuner constructed with
+:doc:`custom_metrics` can attach its application objective through
+``provideMetric()`` and still invalidate the same last execution when a
+separate correctness requirement fails.

@@ -222,6 +222,7 @@ auto main() -> int {
 
   auto firstObservation = tuner.enqueueObserved(queue, frameSpec, bundle);
   if (!firstObservation.measured || !firstObservation.runtimeSeconds ||
+      firstObservation.metricValue != firstObservation.runtimeSeconds ||
       *firstObservation.runtimeSeconds < 0.0 ||
       firstObservation.runtimeMeasurementSource !=
           alpakaTune::RuntimeMeasurementSource::hostClock ||
@@ -236,7 +237,9 @@ auto main() -> int {
   if (firstTunerInfo.runtimeMeasurementSource !=
           alpakaTune::RuntimeMeasurementSource::hostClock ||
       std::string_view{alpakaTune::runtimeMeasurementSourceName(
-          firstTunerInfo.runtimeMeasurementSource)} != "host_clock" ||
+          *firstTunerInfo.runtimeMeasurementSource)} != "host_clock" ||
+      firstTunerInfo.metricKind != alpakaTune::TuningMetricKind::timing ||
+      firstTunerInfo.metricName != "runtime_seconds" ||
       firstTunerInfo.instrumentationOverheadWarning.has_value() !=
           shortKernelWarningExpected)
     return EXIT_FAILURE;
@@ -909,7 +912,7 @@ auto main() -> int {
         return EXIT_FAILURE;
       auto previousRuntime = std::numeric_limits<double>::infinity();
       for (auto const &improvement : cache.at("best_improvements")) {
-        auto const runtime = improvement.at("runtime_seconds").get<double>();
+        auto const runtime = improvement.at("metric_value").get<double>();
         if (runtime >= previousRuntime ||
             improvement.at("execution_count").get<std::size_t>() > 2u)
           return EXIT_FAILURE;
@@ -1018,7 +1021,8 @@ auto main() -> int {
   for (auto const &[fingerprint, context] :
        compactHistory.at("contexts").items()) {
     static_cast<void>(fingerprint);
-    if (context.at("configurations").empty())
+    if (context.at("configurations").empty() ||
+        context.at("metric").at("name") != "runtime_seconds")
       return EXIT_FAILURE;
   }
 #endif

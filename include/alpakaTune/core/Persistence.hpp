@@ -169,7 +169,7 @@ private:
 };
 
 /** On-disk schema of the compact sampled history. */
-inline constexpr int historySchemaVersion = 1;
+inline constexpr int historySchemaVersion = 2;
 
 #if ALPAKA_TUNE_HAS_JSON
 /** @brief Convert one complete staged summary into its compact file context. */
@@ -197,12 +197,12 @@ inline constexpr int historySchemaVersion = 1;
     }
   }
   std::ranges::sort(records, [](auto const &left, auto const &right) {
-    auto const leftRuntime =
-        left.at("median_runtime_seconds").template get<double>();
-    auto const rightRuntime =
-        right.at("median_runtime_seconds").template get<double>();
-    if (leftRuntime != rightRuntime)
-      return leftRuntime < rightRuntime;
+    auto const leftMetric =
+        left.at("median_metric_value").template get<double>();
+    auto const rightMetric =
+        right.at("median_metric_value").template get<double>();
+    if (leftMetric != rightMetric)
+      return leftMetric < rightMetric;
     return left.at("configuration").dump() < right.at("configuration").dump();
   });
 
@@ -233,7 +233,8 @@ inline constexpr int historySchemaVersion = 1;
     }
   }
 
-  auto result = nlohmann::json{{"configurations", nlohmann::json::array()}};
+  auto result = nlohmann::json{{"configurations", nlohmann::json::array()},
+                               {"metric", cache.at("metric")}};
   for (std::size_t rank = 0u; rank < records.size(); ++rank) {
     if (!selected.at(rank))
       continue;

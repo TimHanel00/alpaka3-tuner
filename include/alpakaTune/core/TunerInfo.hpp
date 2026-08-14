@@ -4,6 +4,7 @@
 #pragma once
 
 #include "alpakaTune/core/TunerConfig.hpp"
+#include "alpakaTune/core/TuningMetric.hpp"
 
 #include <cstddef>
 #include <memory>
@@ -14,7 +15,9 @@
 
 namespace alpakaTune {
 
-template <typename TunablesType, typename Device> class Tuner;
+template <typename TunablesType, typename Device,
+          typename MetricPolicy = metric::Timing>
+class Tuner;
 
 namespace detail {
 struct ConfigurationValidityState {
@@ -54,7 +57,8 @@ public:
   }
 
 private:
-  template <typename TunablesType, typename Device> friend class Tuner;
+  template <typename TunablesType, typename Device, typename MetricPolicy>
+  friend class Tuner;
 
   explicit ConfigurationValidity(
       std::shared_ptr<detail::ConfigurationValidityState> state)
@@ -74,7 +78,9 @@ struct ExecutedConfiguration {
   ParameterConfiguration configuration;
   /** Synchronized launch duration when timing was enabled. */
   std::optional<double> runtimeSeconds;
-  /** Whether runtimeSeconds contains a measured tuning sample. */
+  /** Tuning objective attached to this launch, when one was provided. */
+  std::optional<double> metricValue;
+  /** Whether this launch supplied a sample used by online tuning. */
   bool measured{};
   /** Application decision, shared by all entries for this candidate. */
   mutable ConfigurationValidity valid;
@@ -85,6 +91,24 @@ enum class RuntimeMeasurementSource {
   hostClock,   ///< Host wall clock around a synchronized Alpaka launch.
   deviceEvent, ///< Backend device-event timestamps around the kernel.
 };
+
+/** @brief Compile-time-selected source of tuner objective values. */
+enum class TuningMetricKind {
+  timing, ///< Built-in synchronized kernel-runtime instrumentation.
+  custom, ///< Values supplied by the application through provideMetric().
+};
+
+/** @brief Stable diagnostic spelling of a tuning metric kind. */
+[[nodiscard]] constexpr auto
+tuningMetricKindName(TuningMetricKind kind) noexcept -> char const * {
+  switch (kind) {
+  case TuningMetricKind::timing:
+    return "timing";
+  case TuningMetricKind::custom:
+    return "custom";
+  }
+  return "timing";
+}
 
 /** @brief Stable diagnostic spelling of a runtime measurement source. */
 [[nodiscard]] constexpr auto
@@ -157,9 +181,11 @@ struct TunerInfo {
   std::size_t rejectedCandidateCount{};
   /** Executed candidates permanently invalidated by the application. */
   std::size_t userInvalidatedCandidateCount{};
+  /** Candidates rejected because their last launch received no metric. */
+  std::size_t missingMetricCandidateCount{};
   /** Candidates currently owned by the active scheduler or fixed history. */
   std::size_t scheduledCandidateCount{};
-  /** Non-rejected candidates with at least one retained timing sample. */
+  /** Non-rejected candidates with at least one retained metric sample. */
   std::size_t measuredCandidateCount{};
   /** Records or adaptive visits retired in the current online run. */
   std::size_t retiredConfigurationCount{};
@@ -192,9 +218,12 @@ struct TunerInfo {
   bool executionBudgetReached{};
   /** Present after the first measured runtime below 200 microseconds. */
   std::optional<InstrumentationOverheadWarning> instrumentationOverheadWarning;
-  /** Backend clock used for measured kernel runtimes. */
-  RuntimeMeasurementSource runtimeMeasurementSource{
-      RuntimeMeasurementSource::hostClock};
+  /** Compile-time-selected source of the minimized objective. */
+  TuningMetricKind metricKind{TuningMetricKind::timing};
+  /** Runtime metric label stored in persistent histories. */
+  std::string metricName{"runtime_seconds"};
+  /** Backend clock used for runtime metrics; absent for custom metrics. */
+  std::optional<RuntimeMeasurementSource> runtimeMeasurementSource;
   /** Current statistically best measured candidate, when one exists. */
   std::optional<std::size_t> bestCandidateIndex;
   /** Normalized parameters corresponding to bestCandidateIndex. */
@@ -213,6 +242,8 @@ struct TunerInfo {
   std::size_t restrictionRejectedCount{};
   /** Proposals rejected because the application invalidated the candidate. */
   std::size_t userInvalidatedRejectedCount{};
+  /** Proposals rejected because a required custom metric was not supplied. */
+  std::size_t missingMetricRejectedCount{};
   /** Revisit proposals rejected by the adaptive sigmoid gate. */
   std::size_t revisitRejectedCount{};
   /** Revisit proposals rejected by the relative-score gate. */
@@ -227,12 +258,13 @@ struct LaunchObservation {
   ParameterConfiguration configuration;
   /** Synchronized launch duration when timing was enabled. */
   std::optional<double> runtimeSeconds;
-  /** Backend clock used to produce runtimeSeconds. */
-  RuntimeMeasurementSource runtimeMeasurementSource{
-      RuntimeMeasurementSource::hostClock};
+  /** Objective available when this call returned; custom metrics arrive later. */
+  std::optional<double> metricValue;
+  /** Backend clock used to produce runtimeSeconds, when timing is active. */
+  std::optional<RuntimeMeasurementSource> runtimeMeasurementSource;
   /** Wall time spent obtaining and admitting this call's recommendation. */
   double recommendationSeconds{};
-  /** Whether this call synchronized and produced runtimeSeconds. */
+  /** Whether this call already produced a tuning sample when it returned. */
   bool measured{};
   /** Policy-completion snapshot; adaptive mode still measures afterward. */
   bool tuningComplete{};
