@@ -54,8 +54,8 @@ struct ApproximatePiKernel {
 }
 
 auto run(auto const &backend) -> int {
-  auto selector = alpaka::onHost::makeDeviceSelector(
-      alpaka::onHost::DeviceSpec{backend});
+  auto selector =
+      alpaka::onHost::makeDeviceSelector(alpaka::onHost::DeviceSpec{backend});
   if (!selector.isAvailable())
     return EXIT_SUCCESS;
   auto device = selector.makeDevice(0u);
@@ -70,10 +70,10 @@ auto run(auto const &backend) -> int {
       termCount(alpakaTune::RVals<std::uint32_t>::list(
           candidateTerms[0u], candidateTerms[1u], candidateTerms[2u],
           candidateTerms[3u]))};
-  auto tuner = alpakaTune::makeTuner(
-      tuningConfig(), tunables, device, backend, "post-evaluation-pi");
-  auto const bundle = alpaka::KernelBundle{
-      ApproximatePiKernel{}, deviceResult.getMdSpan(), termCount};
+  auto tuner = alpakaTune::makeTuner(tuningConfig(), tunables, device, backend,
+                                     "post-evaluation-pi");
+  auto const bundle = alpaka::KernelBundle{ApproximatePiKernel{},
+                                           deviceResult.getMdSpan(), termCount};
 
   constexpr auto maximumError = 2.0e-5;
   while (!tuner.completed()) {

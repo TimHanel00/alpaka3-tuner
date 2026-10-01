@@ -317,8 +317,8 @@ consteval auto compileUniqueComponent() {
 template <typename Prototype, auto... Components> struct RebindCompileVector {
   static_assert(alpaka::isCVector_v<Prototype>);
   using type =
-      alpaka::CVec<typename Prototype::type,
-                   static_cast<typename Prototype::type>(Components)...>;
+      alpaka::CVec<typename Prototype::value_type,
+                   static_cast<typename Prototype::value_type>(Components)...>;
 };
 
 template <typename T, T... Original, auto... Components>

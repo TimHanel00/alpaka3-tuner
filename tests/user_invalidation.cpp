@@ -37,13 +37,13 @@ struct WriteKernel {
   auto config = alpakaTune::TunerConfig{};
   config.mode = alpakaTune::TuningMode::onlineFixed;
   config.strategy = alpakaTune::StrategyKind::exhaustive;
-  config.queue = queued
-                     ? std::optional{alpakaTune::QueueConfig{
-                           .disable = false,
-                           .warmupRuns = 0u,
-                           .noiseCancellationWindow = 3u,
-                           .maxConsecutiveRuns = 1u}}
-                     : std::nullopt;
+  config.queue =
+      queued
+          ? std::optional{alpakaTune::QueueConfig{.disable = false,
+                                                  .warmupRuns = 0u,
+                                                  .noiseCancellationWindow = 3u,
+                                                  .maxConsecutiveRuns = 1u}}
+          : std::nullopt;
   config.runsPerCandidate = 2u;
   config.minimumRunsPerCandidate = 2u;
   config.mannWhitneyEarlyStop = false;
@@ -58,12 +58,8 @@ struct WriteKernel {
   return config;
 }
 
-struct Fixture {
+template <typename Device> struct Fixture {
   using Index = alpaka::Vec<std::size_t, 1u>;
-  using Selector = ALPAKA_TYPEOF(alpaka::onHost::makeDeviceSelector(
-      alpaka::onHost::DeviceSpec{alpaka::api::host,
-                                 alpaka::deviceKind::cpu}));
-  using Device = ALPAKA_TYPEOF(std::declval<Selector &>().makeDevice(0u));
   using Queue = ALPAKA_TYPEOF(alpakaTune::makeQueue(
       std::declval<Device &>(), alpaka::queueKind::nonBlocking,
       alpakaTune::timing::enabled));
@@ -75,8 +71,9 @@ struct Fixture {
   Queue queue;
   HostBuffer host;
   DeviceBuffer output;
-  ALPAKA_TYPEOF(alpaka::onHost::FrameSpec{
-      Index{1u}, Index{1u}, alpaka::exec::cpuSerial}) frameSpec;
+  ALPAKA_TYPEOF(alpaka::onHost::FrameSpec{Index{1u}, Index{1u},
+                                          alpaka::exec::cpuSerial})
+  frameSpec;
 
   explicit Fixture(Device selected)
       : device(std::move(selected)),
@@ -85,15 +82,22 @@ struct Fixture {
         host(alpaka::onHost::allocHost<int>(Index{1u})),
         output(alpaka::onHost::allocLike(device, host)),
         frameSpec{Index{1u}, Index{1u}, alpaka::exec::cpuSerial} {}
+
+  ~Fixture() {
+    // Timing-disabled launches and terminal replays may still be queued.
+    // Drain them while every span target is alive; members are destroyed
+    // before the queue member would otherwise synchronize during teardown.
+    alpaka::onHost::wait(queue);
+  }
 };
 
-[[nodiscard]] auto hostDevice() -> std::optional<Fixture::Device> {
+[[nodiscard]] auto hostDevice() {
   auto selector = alpaka::onHost::makeDeviceSelector(
-      alpaka::onHost::DeviceSpec{alpaka::api::host,
-                                 alpaka::deviceKind::cpu});
+      alpaka::onHost::DeviceSpec{alpaka::api::host, alpaka::deviceKind::cpu});
+  using Device = ALPAKA_TYPEOF(selector.makeDevice(0u));
   if (!selector.isAvailable())
-    return std::nullopt;
-  return selector.makeDevice(0u);
+    return std::optional<Device>{};
+  return std::optional{selector.makeDevice(0u)};
 }
 
 } // namespace
@@ -104,16 +108,15 @@ TEST_CASE("post-evaluation invalidation preserves actual execution order",
   if (!selected)
     SKIP("The host backend is unavailable.");
   auto fixture = Fixture{*selected};
-  auto const tunables = alpakaTune::TunableBundle{
-      qualityLevel(alpakaTune::RVals{1, 2, 3})};
+  auto const tunables =
+      alpakaTune::TunableBundle{qualityLevel(alpakaTune::RVals{1, 2, 3})};
   auto tuner = alpakaTune::makeTuner(fixedConfig(false), tunables,
                                      fixture.device, "validity-direct");
   auto const bundle = alpaka::KernelBundle{
       WriteKernel{}, fixture.output.getMdSpan(), qualityLevel};
 
   CHECK(tuner.history().empty());
-  CHECK(tuner.lastCandidateIndex() ==
-        std::numeric_limits<std::size_t>::max());
+  CHECK(tuner.lastCandidateIndex() == std::numeric_limits<std::size_t>::max());
   CHECK_THROWS_AS(tuner.lastConfig(), std::logic_error);
 
   tuner.enqueue(fixture.queue, fixture.frameSpec, bundle);
@@ -154,8 +157,8 @@ TEST_CASE("queued invalid candidates are retired before the next launch",
   if (!selected)
     SKIP("The host backend is unavailable.");
   auto fixture = Fixture{*selected};
-  auto const tunables = alpakaTune::TunableBundle{
-      qualityLevel(alpakaTune::RVals{1, 2, 3})};
+  auto const tunables =
+      alpakaTune::TunableBundle{qualityLevel(alpakaTune::RVals{1, 2, 3})};
   auto tuner = alpakaTune::makeTuner(fixedConfig(true), tunables,
                                      fixture.device, "validity-queue");
   auto const bundle = alpaka::KernelBundle{
@@ -181,8 +184,8 @@ TEST_CASE("invalidating the only candidate terminates without a winner",
   if (!selected)
     SKIP("The host backend is unavailable.");
   auto fixture = Fixture{*selected};
-  auto const tunables = alpakaTune::TunableBundle{
-      qualityLevel(alpakaTune::RVals{1})};
+  auto const tunables =
+      alpakaTune::TunableBundle{qualityLevel(alpakaTune::RVals{1})};
   auto tuner = alpakaTune::makeTuner(fixedConfig(false), tunables,
                                      fixture.device, "validity-no-winner");
   auto const bundle = alpaka::KernelBundle{
@@ -218,8 +221,7 @@ TEST_CASE("pre-launch constraint rejection does not enter execution history",
 
   CHECK_THROWS(tuner.enqueue(fixture.queue, fixture.frameSpec, bundle));
   CHECK(tuner.history().empty());
-  CHECK(tuner.lastCandidateIndex() ==
-        std::numeric_limits<std::size_t>::max());
+  CHECK(tuner.lastCandidateIndex() == std::numeric_limits<std::size_t>::max());
   CHECK_THROWS_AS(tuner.lastConfig(), std::logic_error);
   CHECK(tuner.info().restrictionRejectedCount == 1u);
   CHECK(tuner.info().userInvalidatedCandidateCount == 0u);
@@ -241,8 +243,8 @@ TEST_CASE("user invalidation is excluded from compact persistence",
   config.history.write = true;
   config.completeHistory.file = directory / "complete-history.json";
   config.completeHistory.write = true;
-  auto const tunables = alpakaTune::TunableBundle{
-      qualityLevel(alpakaTune::RVals{1, 2})};
+  auto const tunables =
+      alpakaTune::TunableBundle{qualityLevel(alpakaTune::RVals{1, 2})};
   auto tuner = alpakaTune::makeTuner(config, tunables, fixture.device,
                                      "validity-persistence");
   auto const bundle = alpaka::KernelBundle{

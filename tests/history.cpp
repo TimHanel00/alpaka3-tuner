@@ -17,18 +17,18 @@
 namespace {
 
 [[nodiscard]] auto stagedHistory(std::size_t sampleCount) -> nlohmann::json {
-  auto cache = nlohmann::json{{"records", nlohmann::json::object()},
-                              {"metric", {{"kind", "timing"},
-                                          {"name", "runtime_seconds"}}},
-                              {"sampling_seed", 42u},
-                              {"sample_count", sampleCount},
-                              {"adapter",
-                               {{"model_digest", "digest"},
-                                {"state_version", 1},
-                                {"coefficients", {1.0, 2.0}},
-                                {"observations_since_update", 1},
-                                {"update_count", 2},
-                                {"observations", nlohmann::json::array()}}}};
+  auto cache = nlohmann::json{
+      {"records", nlohmann::json::object()},
+      {"metric", {{"kind", "timing"}, {"name", "runtime_seconds"}}},
+      {"sampling_seed", 42u},
+      {"sample_count", sampleCount},
+      {"adapter",
+       {{"model_digest", "digest"},
+        {"state_version", 1},
+        {"coefficients", {1.0, 2.0}},
+        {"observations_since_update", 1},
+        {"update_count", 2},
+        {"observations", nlohmann::json::array()}}}};
   for (std::size_t candidate = 0u; candidate < 6u; ++candidate)
     cache["records"][std::to_string(candidate)] = {
         {"candidate_index", candidate},

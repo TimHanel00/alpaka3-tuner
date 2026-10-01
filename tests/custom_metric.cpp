@@ -6,12 +6,15 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <limits>
 #include <optional>
 #include <string_view>
+#include <thread>
 #include <utility>
 
 #if ALPAKA_TUNE_HAS_JSON
@@ -54,12 +57,8 @@ struct WriteKernel {
   return config;
 }
 
-struct Fixture {
+template <typename Device> struct Fixture {
   using Index = alpaka::Vec<std::size_t, 1u>;
-  using Selector = ALPAKA_TYPEOF(alpaka::onHost::makeDeviceSelector(
-      alpaka::onHost::DeviceSpec{alpaka::api::host,
-                                 alpaka::deviceKind::cpu}));
-  using Device = ALPAKA_TYPEOF(std::declval<Selector &>().makeDevice(0u));
   using Queue = ALPAKA_TYPEOF(alpakaTune::makeQueue(
       std::declval<Device &>(), alpaka::queueKind::nonBlocking,
       alpakaTune::timing::disabled));
@@ -71,8 +70,9 @@ struct Fixture {
   Queue queue;
   HostBuffer host;
   DeviceBuffer output;
-  ALPAKA_TYPEOF(alpaka::onHost::FrameSpec{
-      Index{1u}, Index{1u}, alpaka::exec::cpuSerial}) frameSpec;
+  ALPAKA_TYPEOF(alpaka::onHost::FrameSpec{Index{1u}, Index{1u},
+                                          alpaka::exec::cpuSerial})
+  frameSpec;
 
   explicit Fixture(Device selected)
       : device(std::move(selected)),
@@ -81,18 +81,53 @@ struct Fixture {
         host(alpaka::onHost::allocHost<int>(Index{1u})),
         output(alpaka::onHost::allocLike(device, host)),
         frameSpec{Index{1u}, Index{1u}, alpaka::exec::cpuSerial} {}
+
+  ~Fixture() {
+    // Timing-disabled launches and terminal replays may still be queued.
+    // Drain them while every span target is alive; members are destroyed
+    // before the queue member would otherwise synchronize during teardown.
+    alpaka::onHost::wait(queue);
+  }
 };
 
-[[nodiscard]] auto hostDevice() -> std::optional<Fixture::Device> {
+[[nodiscard]] auto hostDevice() {
   auto selector = alpaka::onHost::makeDeviceSelector(
-      alpaka::onHost::DeviceSpec{alpaka::api::host,
-                                 alpaka::deviceKind::cpu});
+      alpaka::onHost::DeviceSpec{alpaka::api::host, alpaka::deviceKind::cpu});
+  using Device = ALPAKA_TYPEOF(selector.makeDevice(0u));
   if (!selector.isAvailable())
-    return std::nullopt;
-  return selector.makeDevice(0u);
+    return std::optional<Device>{};
+  return std::optional{selector.makeDevice(0u)};
 }
 
 } // namespace
+
+TEST_CASE(
+    "untimed custom metric launches finish before fixture buffers are released",
+    "[metric][lifetime]") {
+  auto selected = hostDevice();
+  REQUIRE(selected.has_value());
+  std::promise<void> finished;
+  auto completion = finished.get_future();
+  {
+    auto fixture = Fixture{*selected};
+    // Model a busy asynchronous executor: the kernel remains pending when
+    // this scope exits. ASan catches a freed span target without the drain.
+    fixture.queue.enqueueHostFn(
+        [] { std::this_thread::sleep_for(std::chrono::milliseconds{10}); });
+    auto const tunables =
+        alpakaTune::TunableBundle{qualityLevel(alpakaTune::RVals{1})};
+    auto tuner = alpakaTune::makeTuner(
+        fixedConfig(), tunables, fixture.device,
+        alpakaTune::customMetric("lifetime_cost"), "custom-metric-lifetime");
+    tuner.enqueue(fixture.queue, fixture.frameSpec,
+                  alpaka::KernelBundle{
+                      WriteKernel{}, fixture.output.getMdSpan(), qualityLevel});
+    tuner.provideMetric(1.0);
+    fixture.queue.enqueueHostFn([&finished] { finished.set_value(); });
+  }
+  CHECK(completion.wait_for(std::chrono::milliseconds{0}) ==
+        std::future_status::ready);
+}
 
 TEST_CASE("custom metrics replace compile-time timing instrumentation",
           "[metric]") {
@@ -100,11 +135,11 @@ TEST_CASE("custom metrics replace compile-time timing instrumentation",
   if (!selected)
     SKIP("The host backend is unavailable.");
   auto fixture = Fixture{*selected};
-  auto const tunables = alpakaTune::TunableBundle{
-      qualityLevel(alpakaTune::RVals{1, 2})};
-  auto tuner = alpakaTune::makeTuner(
-      fixedConfig(2u), tunables, fixture.device,
-      alpakaTune::customMetric("quality_loss"), "custom-metric-direct");
+  auto const tunables =
+      alpakaTune::TunableBundle{qualityLevel(alpakaTune::RVals{1, 2})};
+  auto tuner = alpakaTune::makeTuner(fixedConfig(2u), tunables, fixture.device,
+                                     alpakaTune::customMetric("quality_loss"),
+                                     "custom-metric-direct");
   static_assert(decltype(tuner)::usesCustomMetric);
   static_assert(ProvidesCustomMetric<decltype(tuner)>);
   auto timingTuner = alpakaTune::makeTuner(
@@ -129,9 +164,9 @@ TEST_CASE("custom metrics replace compile-time timing instrumentation",
     if (tuner.history().size() == 1u)
       CHECK_THROWS_AS(tuner.provideMetric(-1.0), std::invalid_argument);
     if (tuner.history().size() == 2u)
-      CHECK_THROWS_AS(tuner.provideMetric(
-                          std::numeric_limits<double>::infinity()),
-                      std::invalid_argument);
+      CHECK_THROWS_AS(
+          tuner.provideMetric(std::numeric_limits<double>::infinity()),
+          std::invalid_argument);
     tuner.provideMetric(candidate == 0u ? 4.0 : 1.0);
     CHECK(tuner.lastConfig().metricValue ==
           std::optional<double>{candidate == 0u ? 4.0 : 1.0});
@@ -154,8 +189,8 @@ TEST_CASE("an omitted custom metric rejects exactly the preceding candidate",
   if (!selected)
     SKIP("The host backend is unavailable.");
   auto fixture = Fixture{*selected};
-  auto const tunables = alpakaTune::TunableBundle{
-      qualityLevel(alpakaTune::RVals{1, 2, 3})};
+  auto const tunables =
+      alpakaTune::TunableBundle{qualityLevel(alpakaTune::RVals{1, 2, 3})};
   auto tuner = alpakaTune::makeTuner(
       fixedConfig(), tunables, fixture.device,
       alpakaTune::customMetric("application_cost"), "missing-metric");
@@ -190,8 +225,8 @@ TEST_CASE("a sole missing custom metric terminates without a winner",
   if (!selected)
     SKIP("The host backend is unavailable.");
   auto fixture = Fixture{*selected};
-  auto const tunables = alpakaTune::TunableBundle{
-      qualityLevel(alpakaTune::RVals{1})};
+  auto const tunables =
+      alpakaTune::TunableBundle{qualityLevel(alpakaTune::RVals{1})};
   auto tuner = alpakaTune::makeTuner(
       fixedConfig(), tunables, fixture.device,
       alpakaTune::customMetric("application_cost"), "missing-only-metric");
@@ -214,8 +249,8 @@ TEST_CASE("custom metric identity and missing candidates persist",
   if (!selected)
     SKIP("The host backend is unavailable.");
   auto fixture = Fixture{*selected};
-  auto const directory = std::filesystem::temp_directory_path() /
-                         "alpakaTune-custom-metric-test";
+  auto const directory =
+      std::filesystem::temp_directory_path() / "alpakaTune-custom-metric-test";
   std::filesystem::remove_all(directory);
   std::filesystem::create_directories(directory);
   auto config = fixedConfig();
@@ -223,8 +258,8 @@ TEST_CASE("custom metric identity and missing candidates persist",
   config.history.write = true;
   config.completeHistory.file = directory / "complete-history.json";
   config.completeHistory.write = true;
-  auto const tunables = alpakaTune::TunableBundle{
-      qualityLevel(alpakaTune::RVals{1, 2})};
+  auto const tunables =
+      alpakaTune::TunableBundle{qualityLevel(alpakaTune::RVals{1, 2})};
   auto tuner = alpakaTune::makeTuner(
       config, tunables, fixture.device,
       alpakaTune::customMetric("joules_per_result"), "metric-persistence");
@@ -243,8 +278,7 @@ TEST_CASE("custom metric identity and missing candidates persist",
   auto const &compactContext = compact.at("contexts").begin().value();
   auto const &completeContext = complete.at("contexts").begin().value();
   CHECK(compactContext.at("metric") ==
-        nlohmann::json{{"kind", "custom"},
-                       {"name", "joules_per_result"}});
+        nlohmann::json{{"kind", "custom"}, {"name", "joules_per_result"}});
   CHECK(completeContext.at("metadata").at("metric") ==
         compactContext.at("metric"));
   CHECK(completeContext.at("missing_metric_candidates") ==
@@ -273,9 +307,8 @@ TEST_CASE("custom metric identity and missing candidates persist",
   auto wrongMetric = alpakaTune::makeTuner(
       replayConfig, tunables, fixture.device,
       alpakaTune::customMetric("different_metric"), "metric-persistence");
-  CHECK_THROWS_AS(
-      wrongMetric.enqueue(fixture.queue, fixture.frameSpec, bundle),
-      std::runtime_error);
+  CHECK_THROWS_AS(wrongMetric.enqueue(fixture.queue, fixture.frameSpec, bundle),
+                  std::runtime_error);
 
   std::filesystem::remove_all(directory);
 }

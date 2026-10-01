@@ -74,8 +74,8 @@ inline constexpr std::size_t customMetricTokenCount =
 
 template <typename... Entries>
 using SelectedMetricPolicy =
-    std::conditional_t<customMetricTokenCount<Entries...> == 0u,
-                       metric::Timing, metric::Custom>;
+    std::conditional_t<customMetricTokenCount<Entries...> == 0u, metric::Timing,
+                       metric::Custom>;
 
 template <typename Device, bool Enabled> struct MeasurementTimerStorage {};
 
@@ -476,8 +476,7 @@ public:
     for (std::size_t candidate = 0u; candidate < m_histories.size();
          ++candidate)
       if (!m_rejected.empty() && !m_rejected.at(candidate) &&
-          candidateUsable(candidate) &&
-          !m_histories.at(candidate).empty())
+          candidateUsable(candidate) && !m_histories.at(candidate).empty())
         ++measured;
     auto result = TunerInfo{
         .mode = m_defaults.mode,
@@ -574,7 +573,9 @@ public:
    * @throws std::logic_error if no most-recent launch is awaiting a metric or
    * if that launch already received one.
    */
-  void provideMetric(double value) requires(usesCustomMetric) {
+  void provideMetric(double value)
+    requires(usesCustomMetric)
+  {
     if (!m_pendingMetric || m_executionHistory.empty() ||
         m_pendingMetric->executionIndex != m_executionHistory.size() - 1u)
       throw std::logic_error{
@@ -686,12 +687,12 @@ public:
         selection.endActivation, !(m_defaults.replayFastPath && m_terminal));
     auto const executionIndex = recordExecution(candidate, call.runtimeSeconds);
     if constexpr (usesCustomMetric)
-      m_pendingMetric = PendingMetric{.executionIndex = executionIndex,
-                                      .candidateIndex = candidate,
-                                      .measure = selection.measure,
-                                      .beginActivation =
-                                          selection.beginActivation,
-                                      .endActivation = selection.endActivation};
+      m_pendingMetric =
+          PendingMetric{.executionIndex = executionIndex,
+                        .candidateIndex = candidate,
+                        .measure = selection.measure,
+                        .beginActivation = selection.beginActivation,
+                        .endActivation = selection.endActivation};
 
     if (m_defaults.mode == TuningMode::onlineFixed && !m_terminal && m_queue &&
         m_queue->empty() && allFixedCandidatesAdmitted())
@@ -774,7 +775,7 @@ private:
         [&markers](auto const &...arguments) {
           (collectPrototypeMarker<decltype(arguments)>(markers), ...);
         },
-        prototype.m_args);
+        prototype.getArgs());
     std::apply(
         [&markers](auto const &...entries) {
           (validateTunableConsumed<decltype(entries)>(markers), ...);
@@ -1239,8 +1240,8 @@ private:
            m_candidateValidity.at(candidate)->valid;
   }
 
-  [[nodiscard]] auto candidateMetricAvailable(std::size_t candidate) const
-      noexcept -> bool {
+  [[nodiscard]] auto
+  candidateMetricAvailable(std::size_t candidate) const noexcept -> bool {
     return m_missingMetric.empty() || !m_missingMetric.at(candidate);
   }
 
@@ -1249,8 +1250,8 @@ private:
     return candidateUserValid(candidate) && candidateMetricAvailable(candidate);
   }
 
-  [[nodiscard]] auto recordExecution(
-      std::size_t candidate, std::optional<double> runtimeSeconds)
+  [[nodiscard]] auto recordExecution(std::size_t candidate,
+                                     std::optional<double> runtimeSeconds)
       -> std::size_t {
     auto const executionIndex = m_executionHistory.size();
     m_executionHistory.push_back(ExecutedConfiguration{
@@ -1596,8 +1597,7 @@ private:
     m_missingMetric.assign(m_candidateCount, false);
     m_candidateValidity.clear();
     m_candidateValidity.reserve(m_candidateCount);
-    for (std::size_t candidate = 0u; candidate < m_candidateCount;
-         ++candidate)
+    for (std::size_t candidate = 0u; candidate < m_candidateCount; ++candidate)
       m_candidateValidity.push_back(
           std::make_shared<detail::ConfigurationValidityState>());
     m_loadedFromHistoryCandidates.assign(m_candidateCount, false);
@@ -1777,8 +1777,7 @@ private:
 
   /** @brief Whether every legal fixed-mode history has retired. */
   [[nodiscard]] auto allFixedCandidatesAdmitted() const -> bool {
-    for (std::size_t candidate = 0u; candidate < m_candidateCount;
-         ++candidate)
+    for (std::size_t candidate = 0u; candidate < m_candidateCount; ++candidate)
       if (!m_scheduled.at(candidate) && !m_rejected.at(candidate) &&
           candidateUsable(candidate))
         return false;
@@ -2060,11 +2059,11 @@ private:
     return alpaka::apply(
         [this, &prototype, &indices](auto const &...arguments) {
           return alpaka::KernelBundle{
-              prototype.m_kernelFn,
+              prototype.getKernelFn(),
               rebuildArgument<std::remove_cvref_t<decltype(arguments)>,
                               CompileValues...>(arguments, indices)...};
         },
-        prototype.m_args);
+        prototype.getArgs());
   }
 
   template <typename... CompileValues, typename Queue, typename LaunchSpec,
@@ -2574,11 +2573,11 @@ private:
       m_rejectedCount = static_cast<std::size_t>(
           std::count(m_rejected.begin(), m_rejected.end(), true));
       m_userInvalidated = userInvalidated;
-      m_userInvalidatedCount = static_cast<std::size_t>(std::count(
-          m_userInvalidated.begin(), m_userInvalidated.end(), true));
+      m_userInvalidatedCount = static_cast<std::size_t>(
+          std::count(m_userInvalidated.begin(), m_userInvalidated.end(), true));
       m_missingMetric = missingMetric;
-      m_missingMetricCount = static_cast<std::size_t>(std::count(
-          m_missingMetric.begin(), m_missingMetric.end(), true));
+      m_missingMetricCount = static_cast<std::size_t>(
+          std::count(m_missingMetric.begin(), m_missingMetric.end(), true));
       for (std::size_t candidate = 0u; candidate < m_candidateCount;
            ++candidate) {
         if (!m_userInvalidated.at(candidate))
@@ -3090,16 +3089,16 @@ private:
       -> nlohmann::json {
     auto cache = nlohmann::json{
         {"records", nlohmann::json::object()},
-        {"metric", {{"kind", tuningMetricKindName(metricKind())},
-                    {"name", m_metricName}}},
+        {"metric",
+         {{"kind", tuningMetricKindName(metricKind())},
+          {"name", m_metricName}}},
         {"sampling_seed", historySamplingSeed()},
         {"sample_count", m_defaults.history.sampleCount
                              ? nlohmann::json(*m_defaults.history.sampleCount)
                              : nlohmann::json(nullptr)}};
     for (std::size_t candidate = 0u; candidate < m_candidateCount;
          ++candidate) {
-      if (!candidateUsable(candidate) ||
-          m_histories.at(candidate).empty())
+      if (!candidateUsable(candidate) || m_histories.at(candidate).empty())
         continue;
       auto const statistics = m_histories.at(candidate).statistics();
       cache["records"][std::to_string(candidate)] = {
@@ -3167,8 +3166,9 @@ private:
         {"kernel", m_kernelName},
         {"device", detail::identityName(m_device)},
         {"launch_specification", m_launchSpecification},
-        {"metric", {{"kind", tuningMetricKindName(metricKind())},
-                    {"name", m_metricName}}},
+        {"metric",
+         {{"kind", tuningMetricKindName(metricKind())},
+          {"name", m_metricName}}},
         {"mode", std::string{tuningModeName(m_defaults.mode)}},
         {"strategy", std::string{strategyName(m_defaults.strategy)}},
         {"model_context", serializedLearnedModelContext()}};
@@ -3263,8 +3263,7 @@ private:
   std::shared_ptr<detail::CompleteHistoryStore> m_completeHistory;
   TunablesType m_tunables;
   Device m_device;
-  detail::MeasurementTimerStorage<Device, !usesCustomMetric>
-      m_measurementTimer;
+  detail::MeasurementTimerStorage<Device, !usesCustomMetric> m_measurementTimer;
   std::vector<std::string> m_identityEntries;
   std::string m_metricName;
   std::vector<std::size_t> m_dimensionSizes;
@@ -3372,8 +3371,8 @@ template <typename TunablesType, typename Device, typename... IdentityEntries>
       config.completeHistory.file, config.completeHistory.read,
       config.completeHistory.write);
   return Tuner<TunablesType, Device, MetricPolicy>{
-      std::move(config),   std::move(history), std::move(completeHistory),
-      std::move(tunables), std::move(device),  std::move(names),
+      std::move(config),    std::move(history), std::move(completeHistory),
+      std::move(tunables),  std::move(device),  std::move(names),
       std::move(metricName)};
 }
 

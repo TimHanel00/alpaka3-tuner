@@ -258,7 +258,8 @@ struct LaunchObservation {
   ParameterConfiguration configuration;
   /** Synchronized launch duration when timing was enabled. */
   std::optional<double> runtimeSeconds;
-  /** Objective available when this call returned; custom metrics arrive later. */
+  /** Objective available when this call returned; custom metrics arrive later.
+   */
   std::optional<double> metricValue;
   /** Backend clock used to produce runtimeSeconds, when timing is active. */
   std::optional<RuntimeMeasurementSource> runtimeMeasurementSource;
