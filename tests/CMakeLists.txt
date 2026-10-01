@@ -82,3 +82,30 @@ if(alpakaTune_ENABLE_PERSISTENCE)
         PROPERTIES FIXTURES_REQUIRED alpakaTune_persistence_shutdown
     )
 endif()
+
+add_executable(alpakaTune_workflow_tests workflows.cpp)
+target_link_libraries(alpakaTune_workflow_tests PRIVATE alpakaTune::alpakaTune)
+alpaka_finalize(alpakaTune_workflow_tests)
+foreach(_workflow IN ITEMS pipeline stencil quality)
+    add_test(NAME alpakaTune_workflow_${_workflow} COMMAND alpakaTune_workflow_tests ${_workflow})
+    set_tests_properties(alpakaTune_workflow_${_workflow} PROPERTIES LABELS integration TIMEOUT 120)
+endforeach()
+if(alpakaTune_ENABLE_PERSISTENCE)
+    set(_workflow_history "${CMAKE_CURRENT_BINARY_DIR}/workflow-history")
+    add_test(
+        NAME alpakaTune_workflow_persistence_stage
+        COMMAND alpakaTune_workflow_tests pipeline stage "${_workflow_history}"
+    )
+    set_tests_properties(
+        alpakaTune_workflow_persistence_stage
+        PROPERTIES FIXTURES_SETUP alpakaTune_workflow_history LABELS integration TIMEOUT 120
+    )
+    add_test(
+        NAME alpakaTune_workflow_persistence_replay
+        COMMAND alpakaTune_workflow_tests pipeline replay "${_workflow_history}"
+    )
+    set_tests_properties(
+        alpakaTune_workflow_persistence_replay
+        PROPERTIES FIXTURES_REQUIRED alpakaTune_workflow_history LABELS integration TIMEOUT 120
+    )
+endif()
