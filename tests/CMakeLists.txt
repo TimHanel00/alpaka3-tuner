@@ -109,3 +109,21 @@ if(alpakaTune_ENABLE_PERSISTENCE)
         PROPERTIES FIXTURES_REQUIRED alpakaTune_workflow_history LABELS integration TIMEOUT 120
     )
 endif()
+
+add_executable(alpakaTune_adaptive_pi_tests adaptive_pi.cpp)
+target_link_libraries(alpakaTune_adaptive_pi_tests PRIVATE alpakaTune::alpakaTune Catch2::Catch2WithMain)
+target_include_directories(alpakaTune_adaptive_pi_tests PRIVATE ${PROJECT_SOURCE_DIR}/example/adaptivePi/src)
+alpaka_finalize(alpakaTune_adaptive_pi_tests)
+add_test(NAME alpakaTune_adaptive_pi_tests COMMAND alpakaTune_adaptive_pi_tests)
+set_tests_properties(alpakaTune_adaptive_pi_tests PROPERTIES LABELS integration TIMEOUT 120)
+
+if(alpaka_DEP_CUDA)
+    add_executable(alpakaTune_cuda_occupancy_tests ../example/cudaOccupancy/src/cudaOccupancy.cpp)
+    target_link_libraries(alpakaTune_cuda_occupancy_tests PRIVATE alpakaTune::alpakaTune)
+    alpaka_finalize(alpakaTune_cuda_occupancy_tests)
+    add_test(NAME alpakaTune_cuda_occupancy_tests COMMAND alpakaTune_cuda_occupancy_tests)
+    set_tests_properties(
+        alpakaTune_cuda_occupancy_tests
+        PROPERTIES LABELS "integration;cuda" SKIP_RETURN_CODE 77 TIMEOUT 120
+    )
+endif()

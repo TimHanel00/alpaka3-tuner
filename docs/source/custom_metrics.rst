@@ -62,3 +62,11 @@ Compact histories store the metric kind and name together with
 samples and the ``missing_metric_candidates`` bitmap. Candidates rejected for
 a missing metric are excluded from winner selection and compact history while
 their prior samples remain available in complete history for diagnostics.
+
+Runnable feature examples
+-------------------------
+
+See :doc:`advanced_objectives` for the adaptive Pi example that swaps accuracy
+and runtime objectives with post-evaluation constraints, and a guarded CUDA
+vector-add example that maximizes predicted occupancy. Both examples share
+their implementation with integration tests.
