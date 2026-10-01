@@ -86,7 +86,8 @@ struct VectorAndScalarWriteKernel {
                                 int scalar) const {
     static_cast<void>(acc);
     auto encoded = std::size_t{0u};
-    for (std::size_t dimension = 0u; dimension < value.dim(); ++dimension)
+    for (std::size_t dimension = 0u; dimension < ALPAKA_TYPEOF(value)::dim();
+         ++dimension)
       encoded = encoded * 100u + value[dimension];
     output[0u] = static_cast<int>(encoded * 1000u + scalar);
   }
@@ -681,9 +682,14 @@ auto main() -> int {
       fastBudgetTuner
           .candidateRuntimeSamples(fastBudgetTuner.bestCandidateIndex())
           .size();
-  fastBudgetTuner.enqueue(untimedQueue, frameSpec, bundle);
+  // Independent queues use separate outputs for their asynchronous writes.
+  auto replayOutput = alpaka::onHost::allocLike(device, host);
+  auto const replayBundle = alpaka::KernelBundle{
+      WriteKernel{}, replayOutput.getMdSpan(), runtimeValue};
+  fastBudgetTuner.enqueue(untimedQueue, frameSpec, replayBundle);
   auto const fastBudgetReplay =
-      fastBudgetTuner.enqueueObserved(untimedQueue, frameSpec, bundle);
+      fastBudgetTuner.enqueueObserved(untimedQueue, frameSpec, replayBundle);
+  alpaka::onHost::wait(untimedQueue);
   if (!fastBudgetTuner.completed() || fastBudgetReplay.measured ||
       fastBudgetReplay.runtimeSeconds ||
       fastBudgetTuner.info().executionCount != fastBudgetInfo.executionCount ||
@@ -843,7 +849,8 @@ auto main() -> int {
   offlineFastConfig.replayFastPath = true;
   auto offlineFastTuner = alpakaTune::makeTuner(
       offlineFastConfig, adaptiveTunables, device, "adaptive-burst-test");
-  offlineFastTuner.enqueue(untimedQueue, frameSpec, bundle);
+  offlineFastTuner.enqueue(untimedQueue, frameSpec, replayBundle);
+  alpaka::onHost::wait(untimedQueue);
   auto const offlineFastInfo = offlineFastTuner.info();
   if (!offlineFastTuner.loadedFromCache() || !offlineFastTuner.completed() ||
       offlineFastTuner.completionReason() !=
@@ -1027,6 +1034,8 @@ auto main() -> int {
   }
 #endif
 
+  // Offline replays are asynchronous; keep their output alive until done.
+  alpaka::onHost::wait(queue);
   std::filesystem::remove_all(configuration.parent_path());
   return EXIT_SUCCESS;
 }

@@ -21,7 +21,8 @@ namespace {
 [[nodiscard]] auto
 hasDefaultExtentProperties(alpaka::concepts::Vector auto const &extent)
     -> bool {
-  for (std::size_t dimension = 1u; dimension < extent.dim(); ++dimension)
+  for (std::size_t dimension = 1u; dimension < ALPAKA_TYPEOF(extent)::dim();
+       ++dimension)
     if (extent[dimension - 1u] > extent[dimension])
       return false;
   auto const elements = static_cast<std::size_t>(extent.product());
@@ -33,7 +34,8 @@ hasDefaultExtentProperties(alpaka::concepts::Vector auto const &extent)
   // Alpaka linearizes the final dimension fastest. The generated extent puts
   // its largest component there, and mapToND advances it first.
   auto const mapped = alpaka::mapToND(extent, ALPAKA_TYPEOF(extent[0u]){1u});
-  return mapped[extent.dim() - 1u] == ALPAKA_TYPEOF(extent[0u]){1u};
+  return mapped[ALPAKA_TYPEOF(extent)::dim() - 1u] ==
+         ALPAKA_TYPEOF(extent[0u]){1u};
 }
 } // namespace
 

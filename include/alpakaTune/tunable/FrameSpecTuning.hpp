@@ -24,10 +24,12 @@ inline constexpr auto defaultFrameElementCounts =
 [[nodiscard]] auto
 isDefaultFrameExtent(alpaka::concepts::Vector auto const &candidate) -> bool {
   auto elements = std::size_t{1u};
-  for (std::size_t dimension = 1u; dimension < candidate.dim(); ++dimension)
+  for (std::size_t dimension = 1u; dimension < ALPAKA_TYPEOF(candidate)::dim();
+       ++dimension)
     if (candidate[dimension - 1u] > candidate[dimension])
       return false;
-  for (std::size_t dimension = 0u; dimension < candidate.dim(); ++dimension) {
+  for (std::size_t dimension = 0u; dimension < ALPAKA_TYPEOF(candidate)::dim();
+       ++dimension) {
     auto const component = static_cast<std::size_t>(candidate[dimension]);
     if (component == 0u ||
         elements > std::numeric_limits<std::size_t>::max() / component)
@@ -187,7 +189,8 @@ preserveCoverage(alpaka::onHost::concepts::FrameSpec auto const &frameSpec) {
           if constexpr (ALPAKA_TYPEOF(candidateNumFrames)::dim() !=
                         ALPAKA_TYPEOF(candidateFrameExtent)::dim())
             return false;
-          for (std::size_t dimension = 0u; dimension < candidateNumFrames.dim();
+          for (std::size_t dimension = 0u;
+               dimension < ALPAKA_TYPEOF(candidateNumFrames)::dim();
                ++dimension)
             if (!detail::productDoesNotExceed(candidateNumFrames[dimension],
                                               candidateFrameExtent[dimension],
@@ -227,8 +230,8 @@ preserveCoverage(alpaka::onHost::concepts::FrameSpec auto const &frameSpec) {
         alpaka::Vec<std::size_t, RuntimeFrameExtents::dim()>::fill(exponent +
                                                                    1u);
     auto exponentCombinationCount = std::size_t{1u};
-    for (std::size_t dimension = 0u; dimension < exponentExtents.dim();
-         ++dimension) {
+    for (std::size_t dimension = 0u;
+         dimension < ALPAKA_TYPEOF(exponentExtents)::dim(); ++dimension) {
       if (exponentCombinationCount >
           std::numeric_limits<std::size_t>::max() / exponentExtents[dimension])
         throw std::overflow_error{
@@ -240,8 +243,8 @@ preserveCoverage(alpaka::onHost::concepts::FrameSpec auto const &frameSpec) {
       auto const exponents = alpaka::mapToND(exponentExtents, linearIndex);
       auto exponentSum = std::size_t{};
       auto nondecreasing = true;
-      for (std::size_t dimension = 0u; dimension < exponents.dim();
-           ++dimension) {
+      for (std::size_t dimension = 0u;
+           dimension < ALPAKA_TYPEOF(exponents)::dim(); ++dimension) {
         exponentSum += exponents[dimension];
         if (dimension > 0u && exponents[dimension - 1u] > exponents[dimension])
           nondecreasing = false;

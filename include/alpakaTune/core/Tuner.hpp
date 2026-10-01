@@ -2775,6 +2775,18 @@ private:
          m_startedAtUnixSeconds + improvement.elapsedSeconds}};
   }
 
+  template <typename Entry>
+  void appendSerializedCandidateEntry(
+      nlohmann::json &configuration,
+      std::array<std::size_t, dimensionCount> const &indices) const {
+    static_cast<void>(withCandidateValue<Entry::name>(
+        indices, [&configuration](auto const &value) {
+          configuration[std::string{Entry::name.view()}] =
+              detail::printable(value);
+          return true;
+        }));
+  }
+
   [[nodiscard]] auto
   serializedCandidateConfiguration(std::size_t candidate) const
       -> nlohmann::json {
@@ -2782,17 +2794,9 @@ private:
     auto const indices = indicesFor(candidate);
     std::apply(
         [this, &configuration, &indices](auto const &...entries) {
-          (
-              [&] {
-                using Entry = std::remove_cvref_t<decltype(entries)>;
-                static_cast<void>(withCandidateValue<Entry::name>(
-                    indices, [&configuration](auto const &value) {
-                      configuration[std::string{Entry::name.view()}] =
-                          detail::printable(value);
-                      return true;
-                    }));
-              }(),
-              ...);
+          (appendSerializedCandidateEntry<
+               std::remove_cvref_t<decltype(entries)>>(configuration, indices),
+           ...);
         },
         m_tunables.entries());
     return configuration;
@@ -2816,6 +2820,18 @@ private:
     }
   }
 
+  template <typename Entry>
+  void appendSerializedCompactCandidateEntry(
+      nlohmann::json &configuration,
+      std::array<std::size_t, dimensionCount> const &indices) const {
+    static_cast<void>(withCandidateValue<Entry::name>(
+        indices, [&configuration](auto const &value) {
+          configuration[std::string{Entry::name.view()}] =
+              serializedCompactValue(value);
+          return true;
+        }));
+  }
+
   [[nodiscard]] auto
   serializedCompactCandidateConfiguration(std::size_t candidate) const
       -> nlohmann::json {
@@ -2823,17 +2839,9 @@ private:
     auto const indices = indicesFor(candidate);
     std::apply(
         [this, &configuration, &indices](auto const &...entries) {
-          (
-              [&] {
-                using Entry = std::remove_cvref_t<decltype(entries)>;
-                static_cast<void>(withCandidateValue<Entry::name>(
-                    indices, [&configuration](auto const &value) {
-                      configuration[std::string{Entry::name.view()}] =
-                          serializedCompactValue(value);
-                      return true;
-                    }));
-              }(),
-              ...);
+          (appendSerializedCompactCandidateEntry<
+               std::remove_cvref_t<decltype(entries)>>(configuration, indices),
+           ...);
         },
         m_tunables.entries());
     return configuration;
@@ -2889,6 +2897,15 @@ private:
     }
   }
 
+  template <typename Entry>
+  [[nodiscard]] auto resolveCompactConfigurationEntry(
+      nlohmann::json const &configuration,
+      std::array<std::size_t, dimensionCount> &indices) const -> bool {
+    auto const found = configuration.find(std::string{Entry::name.view()});
+    return found != configuration.end() &&
+           resolveCompactEntry<Entry>(*found, indices);
+  }
+
   [[nodiscard]] auto
   candidateForCompactConfiguration(nlohmann::json const &configuration) const
       -> std::optional<std::size_t> {
@@ -2899,16 +2916,11 @@ private:
     auto valid = true;
     std::apply(
         [this, &configuration, &indices, &valid](auto const &...entries) {
-          (
-              [&] {
-                using Entry = std::remove_cvref_t<decltype(entries)>;
-                auto const found =
-                    configuration.find(std::string{Entry::name.view()});
-                if (found == configuration.end() ||
-                    !resolveCompactEntry<Entry>(*found, indices))
-                  valid = false;
-              }(),
-              ...);
+          ((valid = resolveCompactConfigurationEntry<
+                        std::remove_cvref_t<decltype(entries)>>(configuration,
+                                                                indices) &&
+                    valid),
+           ...);
         },
         m_tunables.entries());
     if (!valid || !candidateAccepted(indices))
