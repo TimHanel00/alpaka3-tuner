@@ -233,3 +233,12 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/dependency_switching.py
     )
 endif()
+
+if(alpakaTune_DEP_METRICS)
+    add_executable(alpakaTune_metric_objective_tests metric_objectives.cpp)
+    target_link_libraries(alpakaTune_metric_objective_tests PRIVATE alpakaTune::metrics Catch2::Catch2WithMain)
+    target_include_directories(alpakaTune_metric_objective_tests PRIVATE ${PROJECT_SOURCE_DIR}/example)
+    target_compile_definitions(alpakaTune_metric_objective_tests PRIVATE ALPAKA_TUNE_EXAMPLE_METRICS=1)
+    alpaka_finalize(alpakaTune_metric_objective_tests)
+    add_test(NAME alpakaTune_metric_objective_tests COMMAND alpakaTune_metric_objective_tests)
+endif()

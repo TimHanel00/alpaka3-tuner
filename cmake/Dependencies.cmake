@@ -6,6 +6,7 @@ include(FetchContent)
 # selection from leaking into unrelated dependencies. Targets remain visible.
 function(alpakaTune_make_accelerator_dependencies)
     if(alpakaTune_DEP_METRICS)
+        set(FETCHCONTENT_TRY_FIND_PACKAGE_MODE NEVER)
         set(FETCHCONTENT_BASE_DIR "${CMAKE_BINARY_DIR}/_deps/metrics")
         # A prior standalone configure may have used a local Alpaka override.
         # Metrics owns its revision, including when switching an existing build.

@@ -54,6 +54,9 @@ jobs:
         config:
           - { compiler: gcc, version: "12", cuda: "no", hip: "no", container: "ubuntu:24.04" }
           - { compiler: gcc, version: "13", cuda: "no", hip: "no", container: "ubuntu:24.04" }
+          # Optional metrics integration; PAPI-free timing and counter-enabled builds.
+          - { compiler: gcc, version: "13", cuda: "no", hip: "no", container: "ubuntu:24.04", metrics: "on", papi: "off" }
+          - { compiler: gcc, version: "13", cuda: "no", hip: "no", container: "ubuntu:24.04", metrics: "on", papi: "on" }
           # tbb backend on
           - { compiler: gcc, version: "13", cuda: "no", hip: "no", container: "ubuntu:24.04", tbb: "on" }
           - { compiler: gcc, version: "14", cuda: "no", hip: "no", container: "ubuntu:24.04" }
@@ -112,12 +115,18 @@ jobs:
       - name: Install base dependencies
         run: |
           apt-get update
-          apt-get install -y cmake build-essential ninja-build git
+          apt-get install -y cmake build-essential ninja-build git python3
           export "SANITIZERS_DIR=$(pwd)/sanitizers"
           echo "ASAN_OPTIONS=suppressions=${SANITIZERS_DIR}/asan_suppressions.txt" >> $GITHUB_ENV
           echo "TSAN_OPTIONS=suppressions=${SANITIZERS_DIR}/tsan_suppressions.txt,ignore_noninstrumented_modules=1" >> $GITHUB_ENV
           echo "LSAN_OPTIONS=suppressions=${SANITIZERS_DIR}/lsan_suppressions.txt" >> $GITHUB_ENV
           echo "UBSAN_OPTIONS=suppressions=${SANITIZERS_DIR}/ubsan_suppressions.txt" >> $GITHUB_ENV
+
+      - name: Install PAPI build tools
+        if: matrix.config.metrics == 'on' && matrix.config.papi == 'on'
+        run: |
+          apt-get update
+          apt-get install -y autoconf automake libtool pkg-config
 
       - name: Install oneTBB
         if: matrix.config.tbb == 'on' && matrix.config.compiler != 'icpx'
@@ -227,6 +236,9 @@ jobs:
                 ${{ matrix.config.hip != 'no' && '-DCMAKE_CXX_COMPILER=clang++ -Dalpaka_DEP_HIP=ON -Dalpaka_DEP_OMP=OFF \
                    -DCMAKE_HIP_ARCHITECTURES=gfx906 -DAMDGPU_TARGETS=gfx906' || '' }} \
                 ${{ matrix.config.tbb == 'on' && '-Dalpaka_DEP_TBB=ON' || '' }} \
+                ${{ matrix.config.metrics == 'on' && '-DalpakaTune_DEP_METRICS=ON' || '' }} \
+                ${{ matrix.config.papi == 'off' && '-DalpakaMetrics_DEP_PAPI=OFF' || '' }} \
+                ${{ matrix.config.papi == 'on' && '-DalpakaMetrics_DEP_PAPI=ON' || '' }} \
                 ${{ matrix.config.sanitizer == 'asan' && '-Dalpaka_ASAN=ON' || '' }} \
                 ${{ matrix.config.sanitizer == 'tsan' && '-Dalpaka_TSAN=ON' || '' }} \
                 ${{ matrix.config.sanitizer == 'lsan' && '-Dalpaka_LSAN=ON' || '' }} \

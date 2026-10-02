@@ -5,6 +5,7 @@
 
 #include "BoundaryKernel.hpp"
 #include "ExampleHelper.hpp"
+#include "ExampleObjectives.hpp"
 #include "StencilKernel.hpp"
 #include "alpaka/onHost/FrameSpec.hpp"
 #include "analyticalSolution.hpp"
@@ -139,8 +140,6 @@ int example(auto const deviceSpec, auto const computeExec,
   // Select queue
   Queue dumpQueue = devAcc.makeQueue();
   Queue computeQueue = devAcc.makeQueue();
-  auto tuningQueue = alpakaTune::makeQueue(devAcc, queueKind::nonBlocking,
-                                           alpakaTune::timing::enabled);
 
   // Copy host -> device
   memcpy(computeQueue, uCurrBufAcc, uBufHost);
@@ -179,139 +178,125 @@ int example(auto const deviceSpec, auto const computeExec,
       stencilTileExtent(
           alpakaTune::CTypes<CVec<IdxType, 4u, 4u>, CVec<IdxType, 8u, 8u>,
                              CVec<IdxType, ySize, xSize>>{})};
-  auto stencilTuning = alpakaTune::makeTuner(
-      stencilTunables, devAcc, computeExec, "heatEquation2D/stencil");
-  using BorderVec = typename std::remove_cvref_t<ALPAKA_TYPEOF(
-      dataBlockingBorder.getNumFrames())>::UniVec;
-  auto const boundaryTunables = alpakaTune::TunableBundle{
-      alpakaTune::tuneNumFrames(
-          dataBlockingBorder,
-          alpakaTune::generate::linSpace(
-              BorderVec::fill(1u), BorderVec{dataBlockingBorder.getNumFrames()},
-              BorderVec::fill(1u))),
-      alpakaTune::tuneFrameExtent(
-          dataBlockingBorder, alpakaTune::generate::linSpace(
-                                  BorderVec::fill(1u), BorderVec::fill(512u),
-                                  BorderVec::fill(1u)))};
-  auto boundaryTuning = alpakaTune::makeTuner(boundaryTunables, devAcc,
-                                              dataBlockingBorder.getExecutor(),
-                                              "heatEquation2D/boundary");
-  assert(stencilTuning.info().candidateCount >= 2000u);
-  assert(boundaryTuning.info().candidateCount >= 2000u);
+  return alpakaTune::example::withObjective(
+      stencilTunables, devAcc, computeExec, "heatEquation2D/stencil",
+      [&](auto &stencilTuning, auto const &tuningQueue) -> int {
+        assert(stencilTuning.info().candidateCount >= 2000u);
 
-  memcpy(computeQueue, uCurrBufAcc, uBufHost);
-  wait(computeQueue);
+        memcpy(computeQueue, uCurrBufAcc, uBufHost);
+        wait(computeQueue);
 
-  auto const startTime = std::chrono::high_resolution_clock::now();
+        auto const startTime = std::chrono::high_resolution_clock::now();
 
-  // Tune and execute the two kernels as part of each simulation step. The
-  // normal example performs exactly numTimeSteps. Data-collection modes
-  // continue the same safe pair of launches through the application minimum
-  // and both tuning-policy goals, without changing the example's default
-  // scientific behavior.
-  std::size_t completedSteps = 0u;
-  for (uint32_t step = 1; step <= numTimeSteps ||
-                          (extendsForTuningCollection(tuningRunMode) &&
-                           alpakaTune::example::applicationRunsRemain(
-                               completedSteps, stencilTuning, boundaryTuning));
-       ++step) {
-    ++completedSteps;
-    // Compute next values
-    stencilTuning.enqueue(tuningQueue, dataBlockingStencil,
-                          KernelBundle{stencilKernel, uCurrBufAcc, uNextBufAcc,
-                                       stencilTileExtent, numNodes, dx, dy,
-                                       dt});
+        // Tune the stencil; the boundary uses its fixed launch on the same
+        // queue. Normal simulation keeps exactly numTimeSteps. Collection modes
+        // observe only the stencil's policy goal while preserving the pair of
+        // launches.
+        std::size_t completedSteps = 0u;
+        for (uint32_t step = 1; step <= numTimeSteps ||
+                                (extendsForTuningCollection(tuningRunMode) &&
+                                 alpakaTune::example::applicationRunsRemain(
+                                     completedSteps, stencilTuning));
+             ++step) {
+          ++completedSteps;
+          // Compute next values
+          alpakaTune::example::enqueueObjective(
+              stencilTuning, tuningQueue, dataBlockingStencil,
+              KernelBundle{stencilKernel, uCurrBufAcc, uNextBufAcc,
+                           stencilTileExtent, numNodes, dx, dy, dt});
 
-    boundaryTuning.enqueue(tuningQueue, dataBlockingBorder,
-                           KernelBundle{boundaryKernel, uNextBufAcc.getMdSpan(),
-                                        numNodesWithHalo, step, dx, dy, dt});
+          alpakaTune::example::underlyingQueue(tuningQueue)
+              .enqueue(dataBlockingBorder,
+                       KernelBundle{boundaryKernel, uNextBufAcc.getMdSpan(),
+                                    numNodesWithHalo, step, dx, dy, dt});
 
 #ifdef PNGWRITER_ENABLED
-    if ((step - 1) % 100 == 0) {
-      wait(computeQueue);
-      memcpy(dumpQueue, uBufHost, uCurrBufAcc);
-      wait(dumpQueue);
-      writeImage(step - 1, uBufHost.getMdSpan());
-    }
+          if ((step - 1) % 100 == 0) {
+            alpaka::onHost::wait(
+                alpakaTune::example::underlyingQueue(tuningQueue));
+            memcpy(dumpQueue, uBufHost, uCurrBufAcc);
+            wait(dumpQueue);
+            writeImage(step - 1, uBufHost.getMdSpan());
+          }
 #endif
 
-    // So we just swap next and curr (shallow copy)
-    std::swap(uNextBufAcc, uCurrBufAcc);
-  }
+          // So we just swap next and curr (shallow copy)
+          std::swap(uNextBufAcc, uCurrBufAcc);
+        }
 
-  wait(computeQueue);
-  auto const endTime = std::chrono::high_resolution_clock::now();
-  std::chrono::duration<double> elapsedTime = endTime - startTime;
+        wait(computeQueue);
+        alpaka::onHost::wait(alpakaTune::example::underlyingQueue(tuningQueue));
+        auto const endTime = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double> elapsedTime = endTime - startTime;
 
-  std::cout << "Simulation took " << elapsedTime.count() << " seconds."
-            << std::endl;
-  std::cout << "Time per time step: "
-            << elapsedTime.count() / completedSteps * 1000 << " ms."
-            << std::endl;
-  if (extendsForTuningCollection(tuningRunMode)) {
-    if (alpakaTune::example::applicationRunsRemain(
-            completedSteps, stencilTuning, boundaryTuning)) {
-      std::cerr << "Tuning collection stopped before the application minimum "
+        std::cout << "Simulation took " << elapsedTime.count() << " seconds."
+                  << std::endl;
+        std::cout << "Time per time step: "
+                  << elapsedTime.count() / completedSteps * 1000 << " ms."
+                  << std::endl;
+        if (extendsForTuningCollection(tuningRunMode)) {
+          if (alpakaTune::example::applicationRunsRemain(completedSteps,
+                                                         stencilTuning)) {
+            std::cerr
+                << "Tuning collection stopped before the application minimum "
                    "and every tuning-policy goal were reached."
                 << std::endl;
-      return EXIT_FAILURE;
-    }
+            return EXIT_FAILURE;
+          }
 
-    auto const fullCoverageComplete =
-        stencilTuning.isTuningComplete() && boundaryTuning.isTuningComplete() &&
-        stencilTuning.completionReason() ==
-            alpakaTune::TunerCompletionReason::allConfigurations &&
-        boundaryTuning.completionReason() ==
-            alpakaTune::TunerCompletionReason::allConfigurations;
-    if (tuningRunMode == TuningRunMode::untilComplete &&
-        !fullCoverageComplete) {
-      std::cerr
-          << "Full-coverage tuning stopped at a configured completion limit."
-          << std::endl;
-      return EXIT_FAILURE;
-    }
+          auto const fullCoverageComplete =
+              stencilTuning.isTuningComplete() &&
+              stencilTuning.completionReason() ==
+                  alpakaTune::TunerCompletionReason::allConfigurations;
+          if (tuningRunMode == TuningRunMode::untilComplete &&
+              !fullCoverageComplete) {
+            std::cerr << "Full-coverage tuning stopped at a configured "
+                         "completion limit."
+                      << std::endl;
+            return EXIT_FAILURE;
+          }
 
-    if (tuningRunMode == TuningRunMode::untilComplete) {
-      std::cout << "Full-coverage tuning mode executed " << completedSteps
-                << " time steps and completed every tuning context."
-                << std::endl;
-    } else {
-      std::cout << "Tuning-collection mode executed " << completedSteps
+          if (tuningRunMode == TuningRunMode::untilComplete) {
+            std::cout << "Full-coverage tuning mode executed " << completedSteps
+                      << " time steps and completed every tuning context."
+                      << std::endl;
+          } else {
+            std::cout
+                << "Tuning-collection mode executed " << completedSteps
                 << " time steps and reached the application minimum plus every "
                    "tuning-policy goal.";
-      if (stencilTuning.isTuningComplete() && boundaryTuning.isTuningComplete())
-        std::cout << " Terminal reasons: stencil="
-                  << alpakaTune::completionReasonName(
-                         stencilTuning.completionReason())
-                  << ", boundary="
-                  << alpakaTune::completionReasonName(
-                         boundaryTuning.completionReason());
-      else
-        std::cout << " Adaptive horizons reached; tuning remains active";
-      std::cout << "." << std::endl;
-    }
-    return EXIT_SUCCESS;
-  }
+            if (stencilTuning.isTuningComplete())
+              std::cout << " Terminal reasons: stencil="
+                        << alpakaTune::completionReasonName(
+                               stencilTuning.completionReason());
+            else
+              std::cout << " Adaptive horizons reached; tuning remains active";
+            std::cout << "." << std::endl;
+          }
+          return EXIT_SUCCESS;
+        }
 
-  // Copy device -> host
-  memcpy(dumpQueue, uBufHost, uCurrBufAcc);
-  wait(dumpQueue);
+        alpaka::onHost::wait(alpakaTune::example::underlyingQueue(tuningQueue));
+        // Copy device -> host
+        memcpy(dumpQueue, uBufHost, uCurrBufAcc);
+        wait(dumpQueue);
 
-  // Validate
-  if (!enableCheck)
-    return EXIT_SUCCESS;
+        // Validate
+        if (!enableCheck)
+          return EXIT_SUCCESS;
 
-  auto const [resultIsCorrect, maxError] =
-      validateSolution(uBufHost.getMdSpan(), extent, dx, dy, tMax);
+        auto const [resultIsCorrect, maxError] =
+            validateSolution(uBufHost.getMdSpan(), extent, dx, dy, tMax);
 
-  if (resultIsCorrect) {
-    std::cout << "Execution results correct!" << std::endl;
-    return EXIT_SUCCESS;
-  } else {
-    std::cout << "Execution results incorrect: Max error = " << maxError
-              << " (the grid resolution may be too low)" << std::endl;
-    return EXIT_FAILURE;
-  }
+        if (resultIsCorrect) {
+          std::cout << "Execution results correct!" << std::endl;
+          return EXIT_SUCCESS;
+        } else {
+          std::cout << "Execution results incorrect: Max error = " << maxError
+                    << " (the grid resolution may be too low)" << std::endl;
+          return EXIT_FAILURE;
+        }
+      });
 }
 
 void help(char *argv[]) {
@@ -339,12 +324,15 @@ void help(char *argv[]) {
             << std::endl;
   std::cerr << "  -h: Print this help message" << std::endl;
   std::cerr << std::endl;
+  alpakaTune::example::printObjectiveHelp();
 }
 
 } // namespace alpaka::example::heatEquation
 
 auto main(int argc, char *argv[]) -> int {
   if (!alpakaTune::consumeBackendOptions(argc, argv))
+    return EXIT_FAILURE;
+  if (!alpakaTune::example::consumeObjectiveOptions(argc, argv, "l2-misses"))
     return EXIT_FAILURE;
   using namespace alpaka;
   using namespace alpaka::example::heatEquation;

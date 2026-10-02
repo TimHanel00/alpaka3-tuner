@@ -5,6 +5,7 @@
 #include <alpaka/alpaka.hpp>
 
 #include "ExampleHelper.hpp"
+#include "ExampleObjectives.hpp"
 
 #include <tuning.hpp>
 
@@ -104,8 +105,6 @@ auto example(auto const deviceSpec, auto const exec, size_t numElements,
 
   // Create a queue on the device
   onHost::Queue queue = devAcc.makeQueue();
-  auto tuningQueue = alpakaTune::makeQueue(devAcc, queueKind::nonBlocking,
-                                           alpakaTune::timing::enabled);
 
   // Allocate 3 host memory buffers
   auto bufHostA = onHost::allocHost<Data>(extent);
@@ -142,83 +141,90 @@ auto example(auto const deviceSpec, auto const exec, size_t numElements,
       alpakaTune::tuneFrameExtent(
           dataBlocking, alpakaTune::generate::linSpace(IdxVec{1u}, IdxVec{512u},
                                                        IdxVec{1u}))};
-  auto tuner = alpakaTune::makeTuner(tunables, devAcc,
-                                     dataBlocking.getExecutor(), "vectorAdd");
-  if (tuner.info().candidateCount < 2000u)
-    throw std::logic_error{
-        "vectorAdd must expose at least 2000 tuning configurations"};
+  return alpakaTune::example::withObjective(
+      tunables, devAcc, exec, "vectorAdd",
+      [&](auto &tuner, auto const &tuningQueue) -> int {
+        if (tuner.info().candidateCount < 2000u)
+          throw std::logic_error{
+              "vectorAdd must expose at least 2000 tuning configurations"};
 
-  // Instantiate the kernel function object
-  VectorAddKernel kernel;
-  auto const taskKernel =
-      KernelBundle{kernel, bufAccA, bufAccB, bufAccC, extent};
+        // Instantiate the kernel function object
+        VectorAddKernel kernel;
+        auto const taskKernel =
+            KernelBundle{kernel, bufAccA, bufAccB, bufAccC, extent};
 
-  // Copy Host -> Acc
-  onHost::memcpy(queue, bufAccA, bufHostA);
-  onHost::memcpy(queue, bufAccB, bufHostB);
+        // Copy Host -> Acc
+        onHost::memcpy(queue, bufAccA, bufHostA);
+        onHost::memcpy(queue, bufAccB, bufHostB);
 
-  double totalKernelRuntime = 0.0;
-  double totalCopyRuntime = 0.0;
-  std::size_t completedRuns = 0u;
+        double totalKernelRuntime = 0.0;
+        double totalCopyRuntime = 0.0;
+        std::size_t completedRuns = 0u;
 
-  for (; alpakaTune::example::applicationRunsRemain(completedRuns, numberOfRuns,
-                                                    tuner);
-       ++completedRuns) {
-    // set the device memory to all zeros (byte-wise, not element-wise)
-    onHost::memset(queue, bufAccC, uint8_t{0});
+        for (; alpakaTune::example::applicationRunsRemain(completedRuns,
+                                                          numberOfRuns, tuner);
+             ++completedRuns) {
+          // set the device memory to all zeros (byte-wise, not element-wise)
+          onHost::memset(queue, bufAccC, uint8_t{0});
 
-    // Kernel execution timing
-    onHost::wait(queue);
-    auto const beginT = std::chrono::high_resolution_clock::now();
-    // Enqueue the kernel execution task
-    tuner.enqueue(tuningQueue, dataBlocking, taskKernel);
-    // wait in case we are using an asynchronous queue to time actual kernel
-    // runtime
-    onHost::wait(queue);
-    auto const endT = std::chrono::high_resolution_clock::now();
-    double kernelRuntime = std::chrono::duration<double>(endT - beginT).count();
-    totalKernelRuntime += kernelRuntime;
+          // Kernel execution timing
+          onHost::wait(queue);
+          auto const beginT = std::chrono::high_resolution_clock::now();
+          // Enqueue the kernel execution task
+          alpakaTune::example::enqueueObjective(tuner, tuningQueue,
+                                                dataBlocking, taskKernel);
+          // wait in case we are using an asynchronous queue to time actual
+          // kernel runtime
+          onHost::wait(alpakaTune::example::underlyingQueue(tuningQueue));
+          auto const endT = std::chrono::high_resolution_clock::now();
+          double kernelRuntime =
+              std::chrono::duration<double>(endT - beginT).count();
+          totalKernelRuntime += kernelRuntime;
 
-    // Copy back the result
-    auto beginCopyT = std::chrono::high_resolution_clock::now();
-    onHost::memcpy(queue, bufHostC, bufAccC);
-    onHost::wait(queue);
-    auto const endCopyT = std::chrono::high_resolution_clock::now();
-    double copyRuntime =
-        std::chrono::duration<double>(endCopyT - beginCopyT).count();
-    totalCopyRuntime += copyRuntime;
+          // Copy back the result
+          auto beginCopyT = std::chrono::high_resolution_clock::now();
+          onHost::memcpy(queue, bufHostC, bufAccC);
+          onHost::wait(queue);
+          auto const endCopyT = std::chrono::high_resolution_clock::now();
+          double copyRuntime =
+              std::chrono::duration<double>(endCopyT - beginCopyT).count();
+          totalCopyRuntime += copyRuntime;
 
-    if (completedRuns == 0) {
-      if (int const result =
-              validateResult(bufHostC, bufHostA, bufHostB, extent.x());
-          result != EXIT_SUCCESS)
-        return result;
-    }
-  }
+          if (completedRuns == 0) {
+            if (int const result =
+                    validateResult(bufHostC, bufHostA, bufHostB, extent.x());
+                result != EXIT_SUCCESS)
+              return result;
+          }
+        }
 
-  if (completedRuns > 0u) {
-    double avgKernelRuntime =
-        totalKernelRuntime / static_cast<double>(completedRuns);
-    double avgCopyRuntime =
-        totalCopyRuntime / static_cast<double>(completedRuns);
-    std::cout << "Average time for kernel execution: " << avgKernelRuntime
-              << "s" << std::endl;
-    std::cout << "Average time for HtoD copy: " << avgCopyRuntime << "s"
-              << std::endl;
-  }
+        if (completedRuns > 0u) {
+          double avgKernelRuntime =
+              totalKernelRuntime / static_cast<double>(completedRuns);
+          double avgCopyRuntime =
+              totalCopyRuntime / static_cast<double>(completedRuns);
+          std::cout << "Average time for kernel execution: " << avgKernelRuntime
+                    << "s" << std::endl;
+          std::cout << "Average time for HtoD copy: " << avgCopyRuntime << "s"
+                    << std::endl;
+        }
 
-  std::cout << "Execution results correct!" << std::endl;
-  std::cout << std::endl;
-  return EXIT_SUCCESS;
+        std::cout << "Execution results correct!" << std::endl;
+        std::cout << std::endl;
+        return EXIT_SUCCESS;
+      });
 }
 
 void help(char *argv[]) {
   std::cerr << argv[0] << " [-n numElements] [-r numberOfRuns] [-h]\n"
             << "  numberOfRuns defaults to 50000 application-owned launches\n";
+  alpakaTune::example::printObjectiveHelp();
 }
 
 auto main(int argc, char *argv[]) -> int {
   if (!alpakaTune::consumeBackendOptions(argc, argv))
+    return EXIT_FAILURE;
+  if (!alpakaTune::example::consumeObjectiveOptions(argc, argv, "instructions"))
     return EXIT_FAILURE;
   size_t numElements = 123456;
   size_t numberOfRuns = alpakaTune::example::minimumTuningExecutions;

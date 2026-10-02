@@ -5,6 +5,7 @@
 #include <alpaka/alpaka.hpp>
 
 #include "ExampleHelper.hpp"
+#include "ExampleObjectives.hpp"
 
 #include <tuning.hpp>
 
@@ -183,8 +184,6 @@ auto example(auto const deviceSpec, auto const executor, Index rows,
   auto selector = onHost::makeDeviceSelector(deviceSpec);
   onHost::Device device = selector.makeDevice(0);
   onHost::Queue queue = device.makeQueue();
-  auto tuningQueue = alpakaTune::makeQueue(device, queueKind::nonBlocking,
-                                           alpakaTune::timing::enabled);
 
   auto hostA = onHost::allocHost<Scalar>(Vector{rows * innerDimension});
   auto hostB = onHost::allocHost<Scalar>(Vector{innerDimension * columns});
@@ -233,68 +232,74 @@ auto example(auto const deviceSpec, auto const executor, Index rows,
       alpakaTune::restrict(
           blockColumnsTunable, simdWidthTunable,
           [](auto block, auto width) { return block % width == 0u; }));
-  auto tuner = alpakaTune::makeTuner(tunables, device, executor,
-                                     "matrixMultiplication/tiledSimd");
-  // 4 numFrames * 3 frameExtent * 5 tilesPerGroup runtime choices,
-  // multiplied by 3 * 3 * 2 * 2 * 2 = 72 compile-time variants.
-  constexpr Index expectedCandidateCount = 4u * 3u * 5u * 72u;
-  static_assert(expectedCandidateCount == 4320u);
-  if (tuner.info().candidateCount != expectedCandidateCount)
-    throw std::logic_error{
-        "matrixMultiplication must expose exactly 4320 tuning configurations"};
+  return alpakaTune::example::withObjective(
+      tunables, device, executor, "matrixMultiplication/tiledSimd",
+      [&](auto &tuner, auto const &tuningQueue) -> int {
+        // 4 numFrames * 3 frameExtent * 5 tilesPerGroup runtime choices,
+        // multiplied by 3 * 3 * 2 * 2 * 2 = 72 compile-time variants.
+        constexpr Index expectedCandidateCount = 4u * 3u * 5u * 72u;
+        static_assert(expectedCandidateCount == 4320u);
+        if (tuner.info().candidateCount != expectedCandidateCount)
+          throw std::logic_error{"matrixMultiplication must expose exactly "
+                                 "4320 tuning configurations"};
 
-  auto const bundle =
-      KernelBundle{TiledMatrixMultiplicationKernel{},
-                   deviceA,
-                   deviceB,
-                   deviceC,
-                   rows,
-                   columns,
-                   innerDimension,
-                   alpakaTune::markTunable(tilesPerGroupTunable),
-                   alpakaTune::markTunable(blockRowsTunable),
-                   alpakaTune::markTunable(blockColumnsTunable),
-                   alpakaTune::markTunable(kTileTunable),
-                   alpakaTune::markTunable(rowsPerThreadTunable),
-                   alpakaTune::markTunable(simdWidthTunable)};
+        auto const bundle =
+            KernelBundle{TiledMatrixMultiplicationKernel{},
+                         deviceA,
+                         deviceB,
+                         deviceC,
+                         rows,
+                         columns,
+                         innerDimension,
+                         alpakaTune::markTunable(tilesPerGroupTunable),
+                         alpakaTune::markTunable(blockRowsTunable),
+                         alpakaTune::markTunable(blockColumnsTunable),
+                         alpakaTune::markTunable(kTileTunable),
+                         alpakaTune::markTunable(rowsPerThreadTunable),
+                         alpakaTune::markTunable(simdWidthTunable)};
 
-  Index runs = 0u;
-  while (alpakaTune::example::applicationRunsRemain(runs, minimumRuns, tuner)) {
-    tuner.enqueue(tuningQueue, frameSpec, bundle);
-    ++runs;
-  }
-  onHost::memcpy(queue, hostC, deviceC);
-  onHost::wait(queue);
+        Index runs = 0u;
+        while (alpakaTune::example::applicationRunsRemain(runs, minimumRuns,
+                                                          tuner)) {
+          alpakaTune::example::enqueueObjective(tuner, tuningQueue, frameSpec,
+                                                bundle);
+          ++runs;
+        }
+        onHost::wait(alpakaTune::example::underlyingQueue(tuningQueue));
+        onHost::memcpy(queue, hostC, deviceC);
+        onHost::wait(queue);
 
-  Index errors = 0u;
-  for (Index row = 0u; row < rows; ++row) {
-    for (Index column = 0u; column < columns; ++column) {
-      Scalar expected = 0.0f;
-      for (Index inner = 0u; inner < innerDimension; ++inner)
-        expected += hostA[row * innerDimension + inner] *
-                    hostB[inner * columns + column];
-      auto const actual = hostC[row * columns + column];
-      auto const tolerance =
-          Scalar{2.0e-4f} * std::max(Scalar{1.0f}, std::abs(expected));
-      if (std::abs(actual - expected) > tolerance && ++errors <= 8u)
-        std::cerr << "C[" << row << "," << column << "] = " << actual
-                  << ", expected " << expected << '\n';
-    }
-  }
-  if (errors != 0u) {
-    std::cerr << "Matrix multiplication validation failed for " << errors
-              << " elements\n";
-    return EXIT_FAILURE;
-  }
+        Index errors = 0u;
+        for (Index row = 0u; row < rows; ++row) {
+          for (Index column = 0u; column < columns; ++column) {
+            Scalar expected = 0.0f;
+            for (Index inner = 0u; inner < innerDimension; ++inner)
+              expected += hostA[row * innerDimension + inner] *
+                          hostB[inner * columns + column];
+            auto const actual = hostC[row * columns + column];
+            auto const tolerance =
+                Scalar{2.0e-4f} * std::max(Scalar{1.0f}, std::abs(expected));
+            if (std::abs(actual - expected) > tolerance && ++errors <= 8u)
+              std::cerr << "C[" << row << "," << column << "] = " << actual
+                        << ", expected " << expected << '\n';
+          }
+        }
+        if (errors != 0u) {
+          std::cerr << "Matrix multiplication validation failed for " << errors
+                    << " elements\n";
+          return EXIT_FAILURE;
+        }
 
-  auto const operations = 2.0 * static_cast<double>(rows) *
-                          static_cast<double>(columns) *
-                          static_cast<double>(innerDimension);
-  std::cout << "Validated " << rows << 'x' << innerDimension << " times "
-            << innerDimension << 'x' << columns << " matrix multiplication ("
-            << operations / 1.0e9 << " GFLOP per launch, "
-            << tuner.info().candidateCount << " candidates)\n";
-  return EXIT_SUCCESS;
+        auto const operations = 2.0 * static_cast<double>(rows) *
+                                static_cast<double>(columns) *
+                                static_cast<double>(innerDimension);
+        std::cout << "Validated " << rows << 'x' << innerDimension << " times "
+                  << innerDimension << 'x' << columns
+                  << " matrix multiplication (" << operations / 1.0e9
+                  << " GFLOP per launch, " << tuner.info().candidateCount
+                  << " candidates)\n";
+        return EXIT_SUCCESS;
+      });
 }
 
 auto parsePositive(char const *text, char const *option) -> Index {
@@ -309,6 +314,7 @@ void help(char const *executable) {
       << executable
       << " [-m rows] [-n columns] [-k inner-dimension] [-r minimum-runs]\n"
       << "  minimum-runs defaults to 50000 application-owned launches\n";
+  alpakaTune::example::printObjectiveHelp();
 }
 } // namespace alpaka::example::matrixMultiplication
 
@@ -316,6 +322,8 @@ auto main(int argc, char *argv[]) -> int {
   if (!alpakaTune::consumeBackendOptions(argc, argv))
     return EXIT_FAILURE;
 
+  if (!alpakaTune::example::consumeObjectiveOptions(argc, argv, "l2-misses"))
+    return EXIT_FAILURE;
   using namespace alpaka;
   using namespace alpaka::example::matrixMultiplication;
   Index rows = 256u;
