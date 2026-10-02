@@ -313,3 +313,91 @@ TEST_CASE("custom metric identity and missing candidates persist",
   std::filesystem::remove_all(directory);
 }
 #endif
+
+TEST_CASE("scoring callbacks combine inputs and preserve submission lifecycle",
+          "[metric][function]") {
+  auto selected = hostDevice();
+  REQUIRE(selected.has_value());
+  auto fixture = Fixture{*selected};
+  auto const tunables =
+      alpakaTune::TunableBundle{qualityLevel(alpakaTune::RVals{1, 2})};
+  std::size_t calls = 0u;
+  auto const objective = alpakaTune::customMetric(
+      "weighted_v1", [&calls, weight = 0.25](double time, double cost) {
+        ++calls;
+        if (cost == 99.0)
+          throw std::runtime_error{"collector failure"};
+        return weight * time / 2.0 + (1.0 - weight) * cost / 4.0;
+      });
+  auto tuner = alpakaTune::makeTuner(fixedConfig(), tunables, fixture.device,
+                                     objective, "weights=0.25,0.75;scales=2,4");
+  auto const bundle = alpaka::KernelBundle{
+      WriteKernel{}, fixture.output.getMdSpan(), qualityLevel};
+  CHECK_THROWS_AS(tuner.provideMetrics(2.0, 4.0), std::logic_error);
+  CHECK(calls == 0u);
+  tuner.enqueue(fixture.queue, fixture.frameSpec, bundle);
+  CHECK_THROWS_AS(tuner.provideMetrics(2.0, 99.0), std::runtime_error);
+  CHECK_FALSE(tuner.lastConfig().metricValue);
+  CHECK_THROWS_AS(tuner.provideMetrics(-2.0, -4.0), std::invalid_argument);
+  CHECK_THROWS_AS(
+      tuner.provideMetrics(std::numeric_limits<double>::infinity(), 1.0),
+      std::invalid_argument);
+  tuner.provideMetrics(2.0, 4.0);
+  CHECK(tuner.lastConfig().metricValue == std::optional<double>{1.0});
+  auto const successfulCalls = calls;
+  CHECK_THROWS_AS(tuner.provideMetrics(1.0, 1.0), std::logic_error);
+  CHECK(calls == successfulCalls);
+  tuner.enqueue(fixture.queue, fixture.frameSpec, bundle);
+  tuner.provideMetrics(4.0, 0.0);
+  CHECK(tuner.completed());
+  CHECK(tuner.bestCandidateIndex() == 1u);
+  CHECK(tuner.candidateMetricSamples(1u).front() == 0.5);
+  tuner.enqueue(fixture.queue, fixture.frameSpec, bundle);
+  tuner.provideMetrics(2.0, 4.0);
+  CHECK_FALSE(tuner.lastConfig().measured);
+  CHECK(tuner.candidateMetricSamples(1u).size() == 1u);
+}
+
+#if ALPAKA_TUNE_HAS_JSON
+TEST_CASE("function objective configuration separates persistent histories",
+          "[metric][function][persistence]") {
+  auto selected = hostDevice();
+  REQUIRE(selected.has_value());
+  auto fixture = Fixture{*selected};
+  auto const directory = std::filesystem::temp_directory_path() /
+                         "alpakaTune-function-metric-test";
+  std::filesystem::create_directories(directory);
+  auto config = fixedConfig();
+  config.history.file = directory / "history.json";
+  config.history.write = true;
+  auto const tunables =
+      alpakaTune::TunableBundle{qualityLevel(alpakaTune::RVals{1, 2})};
+  auto objective = alpakaTune::customMetric("weighted_v1",
+                                            [](double value) { return value; });
+  auto const bundle = alpaka::KernelBundle{
+      WriteKernel{}, fixture.output.getMdSpan(), qualityLevel};
+  {
+    auto tuner = alpakaTune::makeTuner(config, tunables, fixture.device,
+                                       objective, "weights=1,0");
+    tuner.enqueue(fixture.queue, fixture.frameSpec, bundle);
+    tuner.provideMetrics(3.0);
+    tuner.enqueue(fixture.queue, fixture.frameSpec, bundle);
+    tuner.provideMetrics(1.0);
+    alpakaTune::flushPersistence();
+  }
+  config.mode = alpakaTune::TuningMode::offline;
+  config.maximumExecutions.reset();
+  config.history.read = true;
+  config.history.write = false;
+  auto replay = alpakaTune::makeTuner(config, tunables, fixture.device,
+                                      objective, "weights=1,0");
+  replay.enqueue(fixture.queue, fixture.frameSpec, bundle);
+  CHECK(replay.loadedFromCache());
+  CHECK(replay.lastConfig().candidateIndex == 1u);
+  auto changed = alpakaTune::makeTuner(config, tunables, fixture.device,
+                                       objective, "weights=0,1");
+  CHECK_THROWS_AS(changed.enqueue(fixture.queue, fixture.frameSpec, bundle),
+                  std::runtime_error);
+  std::filesystem::remove_all(directory);
+}
+#endif

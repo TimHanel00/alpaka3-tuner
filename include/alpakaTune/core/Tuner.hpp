@@ -64,18 +64,23 @@ struct BestImprovement {
   double elapsedSeconds{};
 };
 
-template <typename T>
-inline constexpr bool isCustomMetricToken =
-    std::same_as<std::remove_cvref_t<T>, metric::Custom>;
-
 template <typename... Entries>
 inline constexpr std::size_t customMetricTokenCount =
-    (std::size_t{0u} + ... + (isCustomMetricToken<Entries> ? 1u : 0u));
+    (std::size_t{0u} + ... +
+     (isCustomMetricToken<std::remove_cvref_t<Entries>> ? 1u : 0u));
 
+template <typename... Entries> struct MetricPolicyFor {
+  using type = metric::Timing;
+};
+template <typename First, typename... Rest>
+struct MetricPolicyFor<First, Rest...> {
+  using type =
+      std::conditional_t<isCustomMetricToken<std::remove_cvref_t<First>>,
+                         std::remove_cvref_t<First>,
+                         typename MetricPolicyFor<Rest...>::type>;
+};
 template <typename... Entries>
-using SelectedMetricPolicy =
-    std::conditional_t<customMetricTokenCount<Entries...> == 0u, metric::Timing,
-                       metric::Custom>;
+using SelectedMetricPolicy = typename MetricPolicyFor<Entries...>::type;
 
 template <typename Device, bool Enabled> struct MeasurementTimerStorage {};
 
@@ -327,7 +332,7 @@ public:
   // that identity was persisted must not be reused by a newer tuner.
   static constexpr int completeHistorySchemaVersion = 13;
   static constexpr bool usesCustomMetric =
-      std::same_as<MetricPolicy, metric::Custom>;
+      detail::isCustomMetricToken<MetricPolicy>;
   static constexpr bool tunesFrameSpec =
       Traits::template has<detail::numFramesName> ||
       Traits::template has<detail::frameExtentName>;
@@ -346,12 +351,14 @@ public:
   Tuner(TunerConfig defaults, std::shared_ptr<detail::HistoryStore> history,
         std::shared_ptr<detail::CompleteHistoryStore> completeHistory,
         TunablesType tunables, Device device,
-        std::vector<std::string> identityEntries, std::string metricName)
+        std::vector<std::string> identityEntries, std::string metricName,
+        MetricPolicy metricPolicy = {})
       : m_defaults(std::move(defaults)), m_history(std::move(history)),
         m_completeHistory(std::move(completeHistory)),
         m_tunables(std::move(tunables)), m_device(std::move(device)),
         m_identityEntries(std::move(identityEntries)),
         m_metricName(std::move(metricName)),
+        m_metricPolicy(std::move(metricPolicy)),
         m_baseRandomSeed(m_defaults.randomSeed
                              ? *m_defaults.randomSeed
                              : detail::nondeterministicSeed()),
@@ -576,10 +583,7 @@ public:
   void provideMetric(double value)
     requires(usesCustomMetric)
   {
-    if (!m_pendingMetric || m_executionHistory.empty() ||
-        m_pendingMetric->executionIndex != m_executionHistory.size() - 1u)
-      throw std::logic_error{
-          "The most recent enqueue is not awaiting a custom metric."};
+    requirePendingMetric();
     if (!std::isfinite(value) || value < 0.0)
       throw std::invalid_argument{
           "A custom tuning metric must be finite and non-negative."};
@@ -591,6 +595,18 @@ public:
     execution.metricValue = value;
     execution.measured = pending.measure;
     m_pendingMetric.reset();
+  }
+
+  /** @brief Evaluate the configured scoring function for the latest launch.
+   * The function is called only after submission eligibility has been checked.
+   * Exceptions and invalid scores leave that launch awaiting a valid metric.
+   */
+  template <typename... Values>
+    requires(detail::acceptsMetricInputs<MetricPolicy, Values...>)
+  void provideMetrics(Values &&...values) {
+    requirePendingMetric();
+    provideMetric(
+        std::invoke(m_metricPolicy.function, std::forward<Values>(values)...));
   }
 
   template <typename Queue, typename FrameSpec, typename Kernel,
@@ -721,6 +737,13 @@ public:
   }
 
 private:
+  void requirePendingMetric() const {
+    if (!m_pendingMetric || m_executionHistory.empty() ||
+        m_pendingMetric->executionIndex != m_executionHistory.size() - 1u)
+      throw std::logic_error{
+          "The most recent enqueue is not awaiting a custom metric."};
+  }
+
   template <typename Queue, typename FrameSpec, typename Kernel,
             typename... Args>
   [[nodiscard]] auto
@@ -3266,6 +3289,7 @@ private:
   detail::MeasurementTimerStorage<Device, !usesCustomMetric> m_measurementTimer;
   std::vector<std::string> m_identityEntries;
   std::string m_metricName;
+  [[no_unique_address]] MetricPolicy m_metricPolicy;
   std::vector<std::size_t> m_dimensionSizes;
   std::size_t m_candidateCount{1u};
   std::uint64_t m_baseRandomSeed{};
@@ -3351,6 +3375,12 @@ template <typename TunablesType, typename Device, typename... IdentityEntries>
   static_assert(detail::customMetricTokenCount<IdentityEntries...> <= 1u,
                 "makeTuner accepts at most one customMetric() token.");
   using MetricPolicy = detail::SelectedMetricPolicy<IdentityEntries...>;
+  auto metricPolicy = [&] {
+    if constexpr (std::same_as<MetricPolicy, metric::Timing>)
+      return metric::Timing{};
+    else
+      return std::get<MetricPolicy const &>(std::tie(identityEntries...));
+  }();
   config.validate();
   auto names = std::vector<std::string>{};
   names.reserve(sizeof...(IdentityEntries));
@@ -3371,9 +3401,9 @@ template <typename TunablesType, typename Device, typename... IdentityEntries>
       config.completeHistory.file, config.completeHistory.read,
       config.completeHistory.write);
   return Tuner<TunablesType, Device, MetricPolicy>{
-      std::move(config),    std::move(history), std::move(completeHistory),
-      std::move(tunables),  std::move(device),  std::move(names),
-      std::move(metricName)};
+      std::move(config),     std::move(history),     std::move(completeHistory),
+      std::move(tunables),   std::move(device),      std::move(names),
+      std::move(metricName), std::move(metricPolicy)};
 }
 
 /** @brief Construct a tuner using the process default YAML configuration. */

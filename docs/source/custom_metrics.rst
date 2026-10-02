@@ -67,6 +67,41 @@ Runnable feature examples
 -------------------------
 
 See :doc:`advanced_objectives` for the adaptive Pi example that swaps accuracy
-and runtime objectives with post-evaluation constraints, and a guarded CUDA
-vector-add example that maximizes predicted occupancy. Both examples share
-their implementation with integration tests.
+and runtime objectives with post-evaluation constraints.
+
+Scoring multiple inputs
+-----------------------
+
+Register a scoring function to combine application-provided measurements:
+
+.. code-block:: cpp
+
+   auto objective = alpakaTune::customMetric(
+       "weighted_cost_v1", [=](double seconds, double joules) {
+           return timeWeight * seconds / timeScale
+                + energyWeight * joules / energyScale;
+       });
+   auto tuner = alpakaTune::makeTuner(
+       config, tunables, device, objective, objectiveConfigurationIdentity);
+   tuner.enqueue(queue, frameSpec, bundle);
+   tuner.provideMetrics(elapsedSeconds, consumedJoules);
+
+The callable is stored by value without type erasure. Evaluation is explicit;
+the tuner neither collects these inputs nor invokes the callable during enqueue.
+Inputs can be scalars or an application-defined result object. A single finite,
+non-negative score is minimized using the same statistics as scalar metrics.
+Normalize different units using fixed positive reference scales. Users choose
+weights, minimization transforms, and nonlinear formulas; this is scalar scoring,
+not Pareto optimization.
+
+Include the formula version, weights, normalization scales, and input meanings
+in the metric name or stable identity entries. Captured state cannot be inferred
+automatically. Changing it without changing identity can reuse incompatible
+histories. Persistence stores the final score, not the inputs or callable.
+
+The last-enqueue contract also applies to ``provideMetrics()``. Eligibility is
+checked before the callable runs, so duplicate submissions do not invoke it.
+Exceptions and invalid scores leave the launch awaiting a metric; retry before
+the next enqueue, or explicitly invalidate the candidate. Terminal replays may
+attach a score without adding it to tuning statistics. Existing
+``provideMetric(double)`` remains available on callable-objective tuners.
