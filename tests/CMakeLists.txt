@@ -115,4 +115,6 @@ target_link_libraries(alpakaTune_adaptive_pi_tests PRIVATE alpakaTune::alpakaTun
 target_include_directories(alpakaTune_adaptive_pi_tests PRIVATE ${PROJECT_SOURCE_DIR}/example/adaptivePi/src)
 alpaka_finalize(alpakaTune_adaptive_pi_tests)
 add_test(NAME alpakaTune_adaptive_pi_tests COMMAND alpakaTune_adaptive_pi_tests)
-set_tests_properties(alpakaTune_adaptive_pi_tests PROPERTIES LABELS integration TIMEOUT 120)
+# Exhaustive device calculations and leaf inspection are substantially slower
+# under sanitizers; the runtime objective is checked independently of this limit.
+set_tests_properties(alpakaTune_adaptive_pi_tests PROPERTIES LABELS integration TIMEOUT 600)

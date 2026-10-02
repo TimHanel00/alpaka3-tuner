@@ -37,6 +37,15 @@ struct InspectLeaves {
         CHECK(leaf.hits <= leaf.samples);
       }
     }
+    // The runtime constraint is a policy test, not a CI hardware benchmark.
+    // Keep real device calculations and their geometric/accuracy checks, but
+    // supply a reproducible duration so sanitizers and SYCL startup cannot
+    // change which candidates are feasible. Exercise both sides of 10 ms.
+    REQUIRE(std::isfinite(result.seconds));
+    REQUIRE(result.seconds > 0.0);
+    result.seconds =
+        result.parameters[0u] == 8u && result.parameters[1u] > 1280u ? 0.02
+                                                                     : 0.005;
     result.lowerBound = 4.0 * insideArea;
     result.upperBound = 4.0 * (insideArea + boundaryArea);
     result.partitionArea = insideArea + outsideArea + boundaryArea;
@@ -101,6 +110,7 @@ void checkOptimization(alpaka::onHost::concepts::Device auto device,
   REQUIRE(result.candidateCount == 320u);
   REQUIRE(result.feasible);
   CHECK(result.replayCount == 4u);
+  CHECK(result.rejectedCount > 0u);
   CHECK(result.winner.seconds <= 0.01);
   CHECK(result.bestError < 0.001);
   CHECK(result.parameters == result.winner.parameters);

@@ -57,8 +57,13 @@ Its adaptive refinement and tuning scheme are independent.
 
 Integration tests run both objectives, check feasible winner replay, and verify
 that zero runtime or zero error tolerance leaves no valid candidate. One
-measurement per candidate bounds test duration; production timing comparisons
-should use enough repetitions for their noise level.
+measurement per candidate bounds test duration. Tests inspect real device leaves
+and retain the geometry and accuracy checks, but supply deterministic 5 ms and
+20 ms durations through the inspection hook when testing the 10 ms constraint.
+This tests acceptance and rejection independently of sanitizer overhead, SYCL
+startup, and runner speed. The executable always uses measured durations;
+production timing comparisons should use enough repetitions for their noise
+level.
 
 Run the integration cases
 -------------------------

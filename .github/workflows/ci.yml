@@ -90,6 +90,9 @@ jobs:
     # Specify the container to use based on the matrix configuration
     container:
       image: ${{ matrix.config.container }}
+      # TSan needs the host-wide mmap randomization setting below. Docker's
+      # default read-only /proc/sys prevents changing it inside a job container.
+      options: ${{ matrix.config.sanitizer == 'tsan' && '--privileged' || '' }}
 
     steps:
       # Ensure git is available before checkout -> if not the checkout (parent repo) will be performed using the github REST API
