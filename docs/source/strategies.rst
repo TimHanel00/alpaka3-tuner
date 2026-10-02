@@ -1,6 +1,16 @@
 Strategies
 ==========
 
+Start with ``exhaustive`` for a small space so every candidate can be tested.
+For larger spaces, ``random`` is a simple sampling baseline;
+``simulated_annealing`` and ``bayesian_optimization`` use prior observations to
+propose new points. ``learned_hybrid`` is useful when you have a compatible
+trained model; missing or incompatible models use its configured random
+fallback. No strategy can compensate for an invalid candidate space.
+
+Change ``config.strategy`` in C++, or the ``tuning.strategy`` field in your
+complete YAML file. The snippet below is only a configuration fragment.
+
 Constraints, the horizon gate, the optional queue, the execution mode, and the
 strategy have separate responsibilities. A ``ParameterStrategy`` recommends a
 configuration. The tuner always applies constraints, then applies adaptive
@@ -81,8 +91,7 @@ retained residual observations, partial-batch count, and fit count are stored
 with compatible history and restored only for the exact same model artifact.
 The core tuner still stores its full legality and runtime-history bookkeeping;
 the pool specifically bounds learned inference and learned candidate metadata.
-Model
-training and campaign data live in the separate ``alpakaTune-ml`` repository;
+Model training and campaign data live in the separate ``alpakaTune-ml`` repository;
 only a promoted deployment artifact may be bundled here.
 
 Select one in YAML:

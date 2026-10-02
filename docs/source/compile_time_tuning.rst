@@ -1,63 +1,64 @@
-Compile-time tuning
-===================
+Tune compiled alternatives
+==========================
 
-Use ``CVals`` for values that must be part of the kernel argument type. Each
-``CVals`` combination is compiled into a launch functor when the tuner first
-sees the prototype bundle. The tuner keeps those functors in a table keyed
-by the selected compile-time configuration, while the normal scheduler chooses
-the key together with runtime and launch candidates.
+Use ``RVals`` when a kernel accepts a runtime value. Use ``CVals`` when you
+want separately compiled alternatives, such as an unroll factor or a SIMD
+width. Every alternative must still implement the required computation.
+More compile-time combinations increase compilation time and binary size;
+start with a few meaningful choices.
 
-.. code-block:: cpp
+Try the same tutorial with CVals
+--------------------------------
 
-   inline constexpr auto width = ALPAKA_TUNE_TUNABLE("simdWidth");
-   auto tunables = alpakaTune::TunableBundle{
-       width(alpakaTune::CVals<1u, 2u, 4u, 8u>{})};
-   auto prototype = alpaka::KernelBundle{
-       Kernel{}, buffers..., width};
-
-Inside a generic kernel operator, ``decltype(widthArgument)::value`` is a
-compile-time constant. ``RVals`` does not change the argument type, whereas
-``CVals`` does.
-
-Use ``CTypes`` when a candidate is itself a compile-time type. This applies to
-ordinary kernel parameters and to the reserved ``frameExtent``, ``numFrames``,
-``numBlocks``, and ``numThreads`` launch parameters. Both Alpaka ``CVec`` types
-and ``std::integer_sequence`` types are accepted; an integer sequence is
-materialized as the corresponding ``CVec`` when it is used by a launch or a
-constraint predicate.
-
-Every component is an independent backend dimension. Candidate component
-sets are deduplicated before their Cartesian product is compiled:
+The tutorial kernel accepts both an integer and an integral-constant argument.
+Its CMake option changes only the candidate declaration:
 
 .. code-block:: cpp
 
-   inline constexpr auto tile = ALPAKA_TUNE_TUNABLE("tile");
+   auto candidates = batchSize(alpakaTune::CVals<32u, 64u, 128u>{});
+   auto tunables = alpakaTune::TunableBundle{candidates};
 
-   auto tunables = alpakaTune::TunableBundle{
-       tile(alpakaTune::CTypes<
-           alpaka::CVec<std::size_t, 8u, 2u>,
-           std::integer_sequence<std::size_t, 16u, 4u>>{})};
+Build in a separate directory:
 
-This compiles the four reconstructed vectors ``{8,2}``, ``{8,4}``,
-``{16,2}``, and ``{16,4}``. They occupy two normalized strategy coordinates
-while the kernel continues to receive one compile-time vector.
+.. code-block:: sh
+
+   cmake -S docs/examples/first_tuner -B build-tutorial-ct \
+     -DCMAKE_BUILD_TYPE=Release -DalpakaTune_TUTORIAL_COMPILE_TIME=ON
+   cmake --build build-tutorial-ct --target first_tuner --parallel 4
+   ./build-tutorial-ct/first_tuner
+
+It still checks the same 20 launches and exposes three candidates. Compilation
+produces the alternatives; execution selects among them. The tuner does not
+invoke a compiler during tuning.
+
+Inside a generic kernel, ``decltype(argument)::value`` provides the selected
+``CVals`` constant for ``if constexpr`` or template arguments. Ordinary
+arithmetic can use its conversion to the underlying value, as the tutorial
+does. That type-dependent expression would not work with an ``RVals`` integer.
+
+Runtime, compile-time, and launch candidates can coexist in one bundle. Their
+Cartesian product is searched by the same tuner; only the compile-time
+combinations need compiled launch variants. Changing candidate kinds also
+changes the context identity, so recollect history before offline replay.
+
+Type candidates and vectors
+---------------------------
+
+Use ``CTypes`` when a candidate is itself a type. For compile-time launch
+vectors, both Alpaka ``CVec`` and ``std::integer_sequence`` are accepted:
 
 .. code-block:: cpp
 
-   using Small = alpaka::CVec<std::size_t, 8u>;
-   using Large = std::integer_sequence<std::size_t, 16u>;
-
+   using Small = alpaka::CVec<std::size_t, 32u>;
+   using Large = std::integer_sequence<std::size_t, 64u>;
    auto tunables = alpakaTune::TunableBundle{
-       alpakaTune::tuneFrameExtent(
-           frameSpec, alpakaTune::CTypes<Small, Large>{})};
+       alpakaTune::tuneFrameExtent(frame, alpakaTune::CTypes<Small, Large>{})};
 
-This tunes the frame extent independently and leaves ``numFrames`` fixed.
-Combine it with ``tuneNumFrames`` for the Cartesian product. Explicit launch
-entries receive no implicit constraint: add ``doesNotExceedCoverage`` for an
-upper coverage bound, ``preserveCoverage`` for exact equality, or an
-application-specific relation when required.
+The sequence is materialized as a ``CVec`` for launch and restriction
+predicates. This tunes the frame extent and leaves frame count fixed. Add
+``tuneNumFrames`` for an independent second dimension, or a relation when
+coverage must be preserved.
 
-The mirrored Alpaka examples deliberately retain their upstream kernel source
-shape. Add compile-time candidates only where an existing kernel argument is
-already a semantic compile-time choice; do not create a renamed tuner-only
-copy of an example to demonstrate ``CVals``.
+Multidimensional compile-time vectors are component-wise Cartesian spaces,
+just like runtime vectors. A list containing ``{8,2}`` and ``{16,4}`` compiles
+four reconstructed combinations, unless restricted; see :doc:`launch_tuning`.

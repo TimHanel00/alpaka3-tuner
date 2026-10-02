@@ -1,8 +1,8 @@
 Advanced objective examples
 ===========================
 
-The examples below are complete starting points for application objectives
-and post-evaluation constraints. Both use the existing interfaces described in
+The adaptive Pi example demonstrates application objectives and
+post-evaluation constraints using the interfaces described in
 :doc:`custom_metrics` and :doc:`post_evaluation_validation`.
 
 Adaptive Pi: swap accuracy and runtime

@@ -118,3 +118,42 @@ add_test(NAME alpakaTune_adaptive_pi_tests COMMAND alpakaTune_adaptive_pi_tests)
 # Exhaustive device calculations and leaf inspection are substantially slower
 # under sanitizers; the runtime objective is checked independently of this limit.
 set_tests_properties(alpakaTune_adaptive_pi_tests PROPERTIES LABELS integration TIMEOUT 600)
+
+# Compile the exact source shown by the Sphinx tutorial in both candidate modes.
+foreach(_tutorial_variant IN ITEMS runtime compile_time)
+    set(_tutorial_target alpakaTune_tutorial_${_tutorial_variant})
+    add_executable(${_tutorial_target} ${PROJECT_SOURCE_DIR}/docs/examples/first_tuner/main.cpp)
+    target_link_libraries(${_tutorial_target} PRIVATE alpakaTune::alpakaTune)
+    if(_tutorial_variant STREQUAL "compile_time")
+        target_compile_definitions(${_tutorial_target} PRIVATE ALPAKA_TUNE_TUTORIAL_COMPILE_TIME=1)
+    endif()
+    alpaka_finalize(${_tutorial_target})
+    add_test(NAME ${_tutorial_target} COMMAND ${_tutorial_target})
+    set_tests_properties(${_tutorial_target} PROPERTIES PASS_REGULAR_EXPRESSION "candidates=3.*completed=1.*loaded=0")
+    if(alpakaTune_ENABLE_PERSISTENCE)
+        set(_tutorial_workdir "${CMAKE_CURRENT_BINARY_DIR}/tutorial-${_tutorial_variant}")
+        file(MAKE_DIRECTORY "${_tutorial_workdir}")
+        foreach(_tutorial_policy IN ITEMS collect replay adaptive)
+            add_test(
+                NAME ${_tutorial_target}_${_tutorial_policy}
+                COMMAND ${_tutorial_target} ${PROJECT_SOURCE_DIR}/docs/examples/first_tuner/${_tutorial_policy}.yaml
+            )
+            set_tests_properties(
+                ${_tutorial_target}_${_tutorial_policy}
+                PROPERTIES WORKING_DIRECTORY "${_tutorial_workdir}"
+            )
+        endforeach()
+        set_tests_properties(
+            ${_tutorial_target}_collect
+            PROPERTIES FIXTURES_SETUP ${_tutorial_target}_history PASS_REGULAR_EXPRESSION "completed=1.*loaded=0"
+        )
+        set_tests_properties(
+            ${_tutorial_target}_replay
+            PROPERTIES FIXTURES_REQUIRED ${_tutorial_target}_history PASS_REGULAR_EXPRESSION "completed=1.*loaded=1"
+        )
+        set_tests_properties(
+            ${_tutorial_target}_adaptive
+            PROPERTIES FIXTURES_REQUIRED ${_tutorial_target}_history PASS_REGULAR_EXPRESSION "completed=0.*loaded=1"
+        )
+    endif()
+endforeach()

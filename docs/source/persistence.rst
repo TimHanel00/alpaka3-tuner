@@ -11,9 +11,9 @@ Compact history
 ---------------
 
 ``TunerConfig::history`` is the preferred restart source. Its schema contains
-only a runtime-ordered selection of measured configurations and, for an active
+only a objective-ordered selection of measured configurations and, for an active
 learned-hybrid strategy, the complete residual-adapter state. Each
-configuration record contains its readable values, robust median runtime, and
+configuration record contains its readable values, robust median objective, and
 retained measurement count. It deliberately omits raw timings, execution
 counters, policy diagnostics, and timestamps.
 
@@ -23,7 +23,7 @@ fingerprint. Omission writes every measured configuration. With a limit of
 are drawn without replacement using rank weights declining linearly from 100
 for the fastest configuration to 0 for the slowest. The tuner seed and
 fingerprint make the draw reproducible for a fixed measured ranking. Selected
-records are written in ascending median-runtime order.
+records are written in ascending median-objective order.
 
 Sampling happens only at shutdown write. Same-process readers see every staged
 summary. A compact summary is restored as median-valued samples, clamped to the
@@ -112,7 +112,7 @@ Schema and identity
 Compact history uses file schema 2. Complete history uses file schema 13.
 Both use the same workload fingerprint so their contexts can be merged without
 storing a Cartesian candidate index in compact configuration records. Compact
-records identify the metric kind and runtime name and store the decision value
+records identify the metric kind and metric name and store the decision value
 as ``median_metric_value``. Values are matched against each named tunable
 dimension, avoiding enumeration of the complete candidate space.
 

@@ -161,7 +161,7 @@ struct TunerConfig {
   /** Maximum number of candidates sent through one learned scoring batch. */
   std::size_t learnedCandidateBatchSize{256u};
 
-  /** @brief Load a mutable configuration from schema-version-1 or -2 YAML.
+  /** @brief Load a mutable configuration from schema-version-1, -2, or -3 YAML.
    * @throws std::runtime_error for missing, malformed, or unsupported input.
    */
   [[nodiscard]] static auto fromYaml(std::filesystem::path path) -> TunerConfig;

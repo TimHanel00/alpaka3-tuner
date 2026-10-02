@@ -1,0 +1,10 @@
+schema_version: 3
+tuning:
+  mode: online_adaptive
+  strategy: random
+  runs_per_candidate: 3
+  history_window_size: 10
+history:
+  file: .alpakaTune/tutorial.json
+  read: true
+  write: false

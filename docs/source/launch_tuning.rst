@@ -1,151 +1,112 @@
-Launch tuning
-=============
+Choose candidates and launch shapes
+===================================
 
-A tuner owns the tuning state for one device and one kernel bundle type.
-Construct it from a ``TunerConfig`` and named ``TunableBundle``, then pass the
-device plus optional identity-only Alpaka or application entries. Alpaka
-``deviceKind``, ``api``,
-``Device``, and executor objects use their Alpaka name; strings and values
-accepted by ``std::to_string`` are also accepted.
+Begin with a small set of choices whose correctness you can explain. The
+:doc:`tutorial <getting_started>` tunes ``batchSize`` using a named marker:
 
 .. code-block:: cpp
 
-   inline constexpr auto scale = ALPAKA_TUNE_TUNABLE("scale");
+   inline constexpr auto batchSize = ALPAKA_TUNE_TUNABLE("batchSize");
+   auto tunables = alpakaTune::TunableBundle{
+       batchSize(alpakaTune::RVals{32u, 64u, 128u})};
+   auto bundle = alpaka::KernelBundle{
+       AddOne{}, input, output, extent, batchSize};
 
-   auto tunableBundle = alpakaTune::TunableBundle{
-       scale(alpakaTune::RVals{0, 256, 16})};
-   auto tuner = alpakaTune::makeTuner(
-       alpakaTune::tunerConfig(), tunableBundle, device,
-       alpaka::deviceKind::cpu, alpaka::api::host, executor, "vector-add");
+Only the marker is substituted. Buffers, extent, and other ordinary arguments
+are passed through. Every non-launch tunable must appear in the prototype.
+Build the candidate list before ``makeTuner``; subsequent changes to the list
+or configuration do not change an existing tuner.
 
-   auto prototype = alpaka::KernelBundle{
-       Kernel{}, input, output, scale};
-   tuner.enqueue(queue, frameSpec, prototype);
+``RVals{1, 2, 3}`` means exactly those values, not a range specification. Use
+``generate::linSpace(first, last, step)`` or
+``generate::logSpace(first, last, factor)`` for generated runtime candidates.
+Candidate values can come from application configuration or device discovery.
+``markTunable`` and ``Tunable`` are compatibility forms; new code can use the
+marker directly as above.
 
-The parameter object in the prototype bundle is a placeholder only: it is
-never sent to the device. The tuner rebuilds the Alpaka ``KernelBundle``
-with the selected value in every parameter slot before calling
-``queue.enqueue``. An ordinary argument remains fixed. Every non-launch
-tunable must appear in at least one parameter slot. ``Tunable{scale, values}``,
-``named``, and ``markTunable`` remain compatibility spellings for this direct
-frontend.
+Tune a FrameSpec
+----------------
 
-Braced ``RVals`` arguments are explicit candidates, so ``RVals{1, 2, 3}``
-selects those three values. For a non-integral candidate such as an Alpaka
-vector, spell the element type and provide a vector of values:
-``RVals<Index>{std::vector<Index>{Index{1}, Index{2}}}``.
-
-``generate::linSpace(first, last, step)`` and
-``generate::logSpace(first, last, factor)`` provide the corresponding scalar
-or Alpaka-vector runtime candidates.
-
-Runtime candidate lists may be assembled from configuration files, command
-line arguments, device discovery, or other runtime state. ``makeTuner`` moves
-or copies the completed bundle into the tuner. Candidate dimensions, indices,
-scheduling state, and the persistence fingerprint are fixed from that
-snapshot; candidate lists do not change during tuning.
-
-Multidimensional parameters
----------------------------
-
-Every component of an Alpaka vector is an independent backend dimension. The
-candidate vectors provide the component value sets; duplicates are removed
-per component before the Cartesian product is formed:
+``FrameSpec`` describes logical work with ``numFrames`` and ``frameExtent``.
+The executor maps that work onto physical workers. For the tutorial's ``Index``
+and ``frame``, replace its tunable bundle with:
 
 .. code-block:: cpp
-
-   inline constexpr auto tile = ALPAKA_TUNE_TUNABLE("tile");
 
    auto tunables = alpakaTune::TunableBundle{
-       tile(alpakaTune::RVals<Vec2>{
-           Vec2{8, 2},
-           Vec2{16, 4}})};
+       candidates,
+       alpakaTune::tuneNumFrames(
+           frame, alpakaTune::RVals<Index>{Index{1u}, Index{2u}, Index{4u}}),
+       alpakaTune::tuneFrameExtent(
+           frame, alpakaTune::RVals<Index>{Index{32u}, Index{64u}, Index{128u}})};
 
-This produces backend dimension sizes ``{2, 2}`` and reconstructs ``Vec2``
-values ``{8,2}``, ``{8,4}``, ``{16,2}``, and ``{16,4}`` for the kernel. A
-strategy still sees only one flat normalized coordinate per component.
-For example, one three-dimensional integral vector tunable and one integral
-scalar tunable occupy exactly four entries in the strategy's
-``std::vector<float>`` configuration.
+The helpers use reserved launch names; **do not** add their markers to the
+kernel arguments. They replace the relevant fields in the launch specification.
+This space has ``3 × 3 × 3 = 27`` candidates. Increase the tutorial's training
+launch count or guard if you want to measure them all repeatedly.
 
-Dependent component combinations do not change the backend representation.
-Express them as a lazy unary restriction over the reconstructed vector:
-
-.. code-block:: cpp
-
-   alpakaTune::restrict(tile, [](auto const& value) {
-       return value == Vec2{8, 2} || value == Vec2{16, 4};
-   })
-
-Constraint relations
---------------------
-
-Build the normal Cartesian product first, then attach relationships between
-named parameter values with ``restrict``. For example, this space exposes all
-tile and worker choices while accepting only combinations in which the worker
-count fits into the tile:
+Changing geometry can change which elements a kernel visits. The tutorial's
+``makeIdxMap`` traverses the whole problem range with any of these shapes.
+A kernel that handles only one element per physical worker may instead need
+exact coverage. Attach that requirement explicitly:
 
 .. code-block:: cpp
 
-   inline constexpr auto tile = ALPAKA_TUNE_TUNABLE("tile");
-   inline constexpr auto workers = ALPAKA_TUNE_TUNABLE("workers");
+   auto launchChoices = alpakaTune::makeFrameSpecTuning(
+       alpakaTune::tuneFrameExtent(frame, extentCandidates),
+       alpakaTune::tuneNumFrames(frame, frameCountCandidates),
+       alpakaTune::preserveCoverage(frame));
+
+Here the two candidate lists are application-defined. ``preserveCoverage``
+requires exact logical coverage; ``doesNotExceedCoverage`` permits less than
+or equal coverage in every dimension. Neither relation is added by the
+individual ``tune...`` helpers.
+
+For generated defaults, ``makeFrameSpecTuning(frame)`` bundles default frame
+extents, frame counts, and a less-than-or-equal coverage restriction. Default
+extents use power-of-two factorizations of 32 through 1024, plus the original
+extent. Frame counts use halvings of the original count and their midpoints.
+Use these only when reduced coverage still lets your kernel traverse all data.
+
+Tune physical blocks and threads
+--------------------------------
+
+``ThreadSpec`` describes exact physical ``numBlocks`` and ``numThreads``.
+``tuneNumBlocks``, ``tuneNumThreads``, and ``makeThreadSpecTuning`` provide
+its corresponding interface. A tuner must use one launch-specification family;
+mixing FrameSpec and ThreadSpec names is rejected.
+
+Choose values supported by the executor. ``CpuSerial`` and ``CpuOmpBlocks``
+require a thread-block extent of one, so varying physical thread counts is not
+useful there. GPU thread counts must fit the device/kernel limits; use a small
+valid set suited to the algorithm. Logical ``frameExtent`` is not a direct
+GPU thread-count setting.
+
+Restrict combinations
+---------------------
+
+Candidate dimensions form a Cartesian product. Use ``constrain`` and
+``restrict`` to reject incompatible combinations before they run:
+
+.. code-block:: cpp
 
    auto tunables = alpakaTune::constrain(
        alpakaTune::TunableBundle{
-           tile(alpakaTune::RVals{1, 2, 3}),
-           workers(alpakaTune::RVals{1, 2, 3})},
-       alpakaTune::restrict(
-           workers,
-           tile,
-           [](alpaka::concepts::VectorOrScalar auto const& workerCount,
-              alpaka::concepts::VectorOrScalar auto const& tileExtent) {
+           tile(alpakaTune::RVals{32u, 64u}),
+           workers(alpakaTune::RVals{32u, 64u})},
+       alpakaTune::restrict(workers, tile,
+           [](std::uint32_t workerCount, std::uint32_t tileExtent) {
                return workerCount <= tileExtent;
            }));
 
-The relation is evaluated only when the scheduler reaches a candidate. It is
-not expanded into a second list and needs no separate relation identifier.
-The same workflow accepts scalar values and Alpaka vectors. ``CTypes``
-candidates such as ``alpaka::CVec`` and ``std::integer_sequence`` are
-materialized as their vector values before the predicate is called.
+``tile`` and ``workers`` are named markers declared like ``batchSize``.
+Relations are evaluated lazily during admission. ``info().candidateCount``
+counts the original Cartesian space, including combinations later rejected.
+Inspect ``restrictionRejectedCount`` for rejections; use
+:doc:`post_evaluation_validation` when validity depends on the result.
 
-``tuner.info()`` returns a read-only snapshot including the Cartesian
-candidate count, the numbers rejected before launch or invalidated after
-launch, the number measured, the execution count, and the selected
-configuration when tuning is complete. See :doc:`post_evaluation_validation`
-for application-side result checks and the ordered execution history, or
-:doc:`custom_metrics` to replace runtime as the minimized objective.
-
-Reserved launch names
----------------------
-
-The names ``frameExtent``, ``numFrames``, ``numThreads``, and ``numBlocks``
-need no marker. ``numFrames`` and ``frameExtent`` replace the corresponding
-fields of a ``FrameSpec``; ``numBlocks`` and ``numThreads`` do the same for a
-``ThreadSpec``. A tuner targets one of these launch specifications. Combining
-FrameSpec and ThreadSpec parameters in one tuner is rejected because it
-duplicates the logical and physical decomposition in the same search space.
-
-Choose launch candidates that are valid for the selected Alpaka executor. For
-example, ``CpuSerial`` and ``CpuOmpBlocks`` require a thread-block extent of
-one, so ``numBlocks`` is their meaningful physical launch parameter. A CUDA or
-HIP tuner can additionally tune ``numThreads`` (usually warp-aligned values)
-and may tune ``numBlocks`` when the kernel is valid for every Cartesian pair.
-``numFrames`` is the portable logical alternative; it commonly maps to host
-blocks. ``frameExtent`` changes only the logical decomposition, not a direct
-thread count.
-
-Noise-cancelling scheduling
----------------------------
-
-Each ``tuner.enqueue`` performs one launch. The internal queue keeps up to 50
-active candidates and measures a candidate no more than three consecutive
-times while alternatives exist when a ``queue`` section enables it. These YAML
-defaults reduce thermal, frequency, and operating-system noise. Warm-up
-launches are scheduled but excluded from the measured result. Without a queue,
-accepted strategy recommendations are measured directly after mandatory
-constraints and optional horizon rejection.
-
-Measured tuning calls require a timing-enabled non-blocking queue. An
-``offline`` winner or a completed ``online_fixed`` winner may instead use a
-timing-disabled queue when ``replay_fast_path`` is explicitly enabled; that
-production replay bypasses the timer and runtime-history instrumentation.
+For a vector tunable, each component is an independent dimension. For example,
+``RVals<Vec2>{Vec2{8, 2}, Vec2{16, 4}}`` also allows ``{8,4}`` and ``{16,2}``.
+If only the two listed pairs are legal, add a unary restriction on the rebuilt
+vector. This rule also applies to compile-time vectors in
+:doc:`compile_time_tuning`.

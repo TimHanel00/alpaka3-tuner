@@ -1,29 +1,68 @@
 alpakaTune
 ==========
 
-alpakaTune tunes Alpaka3 ``KernelBundle`` launches with a mutable
-``TunerConfig`` and a device-bound ``Tuner``. A tuner represents one particular
-tuning context. Depending on its execution mode, it either performs finite
-tuning, adapts continuously, or replays the best compatible persisted result.
+alpakaTune chooses a fast configuration for an Alpaka3 kernel while your
+application runs. You supply a small set of meaningful choices, such as batch
+sizes or launch shapes. The tuner tries them, measures their cost, and uses
+those measurements to select later launches. By default it minimizes runtime;
+you can instead provide an application-defined score.
 
-Alpaka3 provides two host-side launch descriptions:
+Start with :doc:`getting_started`: build a complete CPU example, tune three
+batch sizes, and check the output. Then follow :doc:`launch_tuning` to tune
+launch geometry or :doc:`history_workflows` to reuse a winner in another run.
+The core guide describes the ``dev`` API. GPU availability depends on the Alpaka
+backends enabled in your build.
 
-* ``FrameSpec`` for portable logical work decomposition;
-* ``ThreadSpec`` for an exact physical block/thread launch shape.
+Five concepts to keep in mind
+-----------------------------
+
+* **Tunable:** a named choice the tuner may change. ``RVals`` supplies runtime
+  values; ``CVals`` and ``CTypes`` supply compiled alternatives.
+* **TunableBundle:** the candidate space and its restrictions. The tuner
+  snapshots it when constructed.
+* **KernelBundle:** the launch prototype. Tunable markers in its arguments
+  are replaced with selected values; ordinary arguments are passed through.
+* **Tuner:** state for one device, kernel-bundle type, and launch prototype.
+  Keep it alive across calls so it can learn.
+* **Mode:** tune once and replay, keep adapting, or replay saved history.
+  Your application owns the loop in every mode.
 
 .. toctree::
    :maxdepth: 2
-   :caption: User guide
+   :caption: Start here
 
    getting_started
+   launch_tuning
+   execution_modes
    configuration
    history_workflows
-   execution_modes
-   strategies
-   launch_tuning
-   post_evaluation_validation
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Everyday extensions
+
    compile_time_tuning
-   instrumentation
+   post_evaluation_validation
    custom_metrics
-   advanced_objectives
+   instrumentation
+   troubleshooting
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Further reading
+
+   strategies
    persistence
+   execution_reference
+   advanced_objectives
+
+Experimental metrics
+--------------------
+
+The ``tunerEnhancedMetrics`` feature branch integrates the optional
+`alpakaMetrics <https://github.com/TimHanel00/alpakaMetrics>`_ dependency and
+adds counter-based objectives. Its `branch-specific guide
+<https://github.com/TimHanel00/alpaka3-tuner/blob/tunerEnhancedMetrics/docs/source/experimental_metrics.rst>`_
+explains the CMake option, pinned Alpaka ownership, and metric availability. The callable scoring
+API in :doc:`custom_metrics` is already part of ``dev`` and needs no metrics
+dependency.

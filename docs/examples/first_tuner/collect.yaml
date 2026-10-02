@@ -1,0 +1,12 @@
+schema_version: 3
+tuning:
+  mode: online_fixed
+  strategy: exhaustive
+  runs_per_candidate: 3
+  minimum_runs_per_candidate: 3
+  maximum_executions: 100
+  replay_fast_path: true
+history:
+  file: .alpakaTune/tutorial.json
+  read: false
+  write: true

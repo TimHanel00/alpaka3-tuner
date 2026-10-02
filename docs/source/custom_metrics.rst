@@ -13,9 +13,15 @@ Select this interface at tuner construction with ``customMetric()``:
        config, tunables, device,
        alpakaTune::customMetric("energy_joules"), "workload-identity");
 
+   auto const before = readEnergyCounter();
    tuner.enqueue(queue, frameSpec, bundle);
-   auto const energy = readEnergyCounter();
+   alpaka::onHost::wait(queue);
+   auto const energy = readEnergyCounter() - before;
    tuner.provideMetric(energy);
+
+``readEnergyCounter`` is an application-provided collector, not an alpakaTune
+function. Wait for the producing queue before reading a result or a counter.
+A timing-disabled non-blocking queue is sufficient for this objective.
 
 The ``customMetric()`` token is a compile-time policy even though its label is
 a runtime ``std::string``. It is supplied among the identity arguments after
@@ -76,15 +82,23 @@ Register a scoring function to combine application-provided measurements:
 
 .. code-block:: cpp
 
+   constexpr double timeWeight = 0.7, energyWeight = 0.3;
+   constexpr double timeScale = 0.001, energyScale = 0.01;
    auto objective = alpakaTune::customMetric(
        "weighted_cost_v1", [=](double seconds, double joules) {
            return timeWeight * seconds / timeScale
                 + energyWeight * joules / energyScale;
        });
    auto tuner = alpakaTune::makeTuner(
-       config, tunables, device, objective, objectiveConfigurationIdentity);
+       config, tunables, device, objective,
+       "weighted-v1:t=0.7:e=0.3:seconds=0.001:joules=0.01");
    tuner.enqueue(queue, frameSpec, bundle);
+   alpaka::onHost::wait(queue);
    tuner.provideMetrics(elapsedSeconds, consumedJoules);
+
+``elapsedSeconds`` and ``consumedJoules`` must be collected by your application
+for this launch. The example scales are fixed reference values in seconds and
+joules, not automatically estimated from the candidates.
 
 The callable is stored by value without type erasure. Evaluation is explicit;
 the tuner neither collects these inputs nor invokes the callable during enqueue.

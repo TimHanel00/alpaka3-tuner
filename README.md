@@ -16,7 +16,8 @@ any identity-only names or Alpaka objects.
 The [full guide](https://alpaka3-tuner.readthedocs.io/en/latest/), including the execution-mode and candidate-admission contract,
 FetchContent, installed-package, launch-tuning, and compile-time-tuning
 examples, is published on Read the Docs. Its Sphinx sources are under
-[`docs/source`](docs/source/index.rst).
+[`docs/source`](docs/source/index.rst). Start with the
+[working tutorial](https://alpaka3-tuner.readthedocs.io/en/latest/getting_started.html).
 The executable examples separately document their application-owned 50,000
 launch minimum and their explicitly configured, independent 40,000-execution tuner horizon in
 [`example/README.md`](example/README.md).

@@ -1,0 +1,9 @@
+schema_version: 3
+tuning:
+  mode: offline
+  runs_per_candidate: 3
+  replay_fast_path: true
+history:
+  file: .alpakaTune/tutorial.json
+  read: true
+  write: false
