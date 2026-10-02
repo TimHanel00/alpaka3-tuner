@@ -29,8 +29,7 @@ Both libraries and all consumers share one ``alpaka::alpaka`` target.
 
 With metrics disabled, the fallback remains Alpaka revision
 ``b7d339d07056a9a2a6c4051cc3927157bc5f0d51``. Metrics and PAPI are not fetched or
-discovered in this configuration. The two current Alpaka pins happen to match;
-future metrics updates can select a different revision independently.
+discovered in this configuration.
 
 An existing build directory can be switched without removing its cache:
 
@@ -45,7 +44,7 @@ Reconfiguration regenerates the active target graph. Dependencies owned by
 metrics occupy a separate FetchContent directory from the standalone fallback;
 inactive directories remain cached. A standalone Alpaka source override and
 stale metrics-revision cache entries do not override metrics ownership when
-metrics is enabled. Other dependency settings remain intact.
+metrics is enabled.
 
 PAPI is independent of the integration option. Set
 ``alpakaMetrics_DEP_PAPI=ON`` for counters. Upstream defaults to bundled PAPI;
@@ -145,17 +144,15 @@ The examples print their objective identity and latest available component
 values, units, scopes, provider, and score. Formula version, counter selection,
 weights, and scales are included in persistence identity. Raw readings remain
 outside tuner persistence; the scalar score uses existing history formats.
-Numerical algorithms, workloads, candidate spaces, and correctness tolerances
-are retained. These examples demonstrate objectives, not measured speedups.
 
 Collection boundaries
 ---------------------
 
-Current queue counters are supported for explicit CPU serial kernels and describe
+Queue counters are supported for explicit CPU serial kernels and describe
 the queue worker thread. OpenMP/TBB and GPU kernel counters report unsupported
 scope. Counter examples require ``--backend host:cpu --executor CpuSerial``.
 Adapter elapsed time describes the queue interval, including applicable marker
-bookkeeping; it is not claimed to be kernel-exclusive time.
+bookkeeping. Include that overhead when interpreting the result.
 
 Requested unavailable counters stop the example with their status, scope, and
 diagnostic. There is no automatic runtime fallback or zero substitution.
@@ -163,16 +160,15 @@ L2 miss presets retain their hardware-dependent event meaning and are not
 transferred-byte counts. Queue elapsed time and counts must have compatible
 attribution before combining them.
 
-Energy, occupancy, and bandwidth objectives can be added when a collector supplies
-verified units and attribution. An energy tag alone does not supply a valid
-per-kernel energy measurement. Native mappings do not implement GPU attribution
-or thread-team aggregation. See `alpakaMetrics collection semantics
+The queue collector does not provide per-kernel energy, occupancy, or bandwidth
+measurements, GPU counter attribution, or thread-team aggregation.
+See `alpakaMetrics collection semantics
 <https://github.com/TimHanel00/alpakaMetrics#implemented-measurement-semantics>`_.
 Instrumentation and synchronization alter execution cost; evaluate performance
 separately with sufficient repetitions.
 
-Validation
-----------
+Run the integration tests
+-------------------------
 
 .. code-block:: sh
 
@@ -181,6 +177,5 @@ Validation
 
 Elapsed-time smoke tests validate all three algorithms. Deterministic result
 fixtures check scoring, units, scope, and unavailable-counter behavior. The real
-instruction-counter case explicitly skips when collection is unavailable. The
-dependency-switching fixture uses different Alpaka identities to prove ownership
-and recompilation independently of the currently equal real pins.
+instruction-counter case skips when collection is unavailable. Dependency tests
+check reconfiguration with metrics enabled and disabled.
