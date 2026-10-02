@@ -13,9 +13,9 @@ persisted best configuration. Runtime (`RVals`) and compile-time
 one using `tunerConfig()`; both require the tunable bundle and device before
 any identity-only names or Alpaka objects.
 
-The full guide, including the execution-mode and candidate-admission contract,
+The [full guide](https://alpaka3-tuner.readthedocs.io/en/latest/), including the execution-mode and candidate-admission contract,
 FetchContent, installed-package, launch-tuning, and compile-time-tuning
-examples, is built with Sphinx for Read the Docs under
+examples, is published on Read the Docs. Its Sphinx sources are under
 [`docs/source`](docs/source/index.rst).
 The executable examples separately document their application-owned 50,000
 launch minimum and their explicitly configured, independent 40,000-execution tuner horizon in
