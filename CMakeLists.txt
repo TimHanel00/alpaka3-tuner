@@ -17,18 +17,8 @@ set(alpakaTune_BUNDLED_MODEL
     "Approved learned-hybrid model artifact bundled with alpakaTune"
 )
 
-if(NOT TARGET alpaka::alpaka)
-    include(FetchContent)
-    FetchContent_Declare(
-        alpaka3
-        GIT_REPOSITORY https://github.com/alpaka-group/alpaka3.git
-        GIT_TAG b7d339d07056a9a2a6c4051cc3927157bc5f0d51
-        # The pinned Alpaka revision is not necessarily the remote tip, so a
-        # shallow clone cannot reliably resolve it.
-        GIT_SHALLOW FALSE
-    )
-    FetchContent_MakeAvailable(alpaka3)
-endif()
+option(alpakaTune_DEP_METRICS "Enable optional alpakaMetrics integration" OFF)
+include(cmake/Dependencies.cmake)
 
 if(NOT TARGET yaml-cpp::yaml-cpp)
     include(FetchContent)
@@ -101,6 +91,12 @@ if(alpakaTune_ENABLE_PERSISTENCE)
     target_compile_definitions(alpakaTune INTERFACE ALPAKA_TUNE_HAS_JSON=1)
 else()
     target_compile_definitions(alpakaTune INTERFACE ALPAKA_TUNE_HAS_JSON=0)
+endif()
+
+if(alpakaTune_DEP_METRICS)
+    add_library(alpakaTune_metrics INTERFACE)
+    add_library(alpakaTune::metrics ALIAS alpakaTune_metrics)
+    target_link_libraries(alpakaTune_metrics INTERFACE alpakaTune::alpakaTune alpakaMetrics::alpakaMetrics)
 endif()
 
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
