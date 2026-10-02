@@ -61,8 +61,12 @@ Experimental metrics
 
 The ``tunerEnhancedMetrics`` feature branch integrates the optional
 `alpakaMetrics <https://github.com/TimHanel00/alpakaMetrics>`_ dependency and
-adds counter-based objectives. Its `branch-specific guide
-<https://github.com/TimHanel00/alpaka3-tuner/blob/tunerEnhancedMetrics/docs/source/experimental_metrics.rst>`_
-explains the CMake option, pinned Alpaka ownership, and metric availability. The callable scoring
+adds counter-based objectives. Its :doc:`experimental_metrics` guide explains the CMake option, pinned Alpaka
+ownership, and metric availability. The callable scoring
 API in :doc:`custom_metrics` is already part of ``dev`` and needs no metrics
 dependency.
+
+.. toctree::
+   :maxdepth: 1
+
+   experimental_metrics

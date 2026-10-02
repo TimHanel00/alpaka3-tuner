@@ -45,6 +45,9 @@ endif()
 if(FETCHCONTENT_SOURCE_DIR_ALPAKA3)
   message(FATAL_ERROR "Standalone source override leaked into metrics")
 endif()
+if(NOT FETCHCONTENT_TRY_FIND_PACKAGE_MODE STREQUAL "NEVER")
+  message(FATAL_ERROR "Pinned metrics must not be replaced by automatic package discovery")
+endif()
 if(NOT FETCHCONTENT_BASE_DIR MATCHES "/_deps/metrics$")
   message(FATAL_ERROR "Metrics dependencies must have a separate directory")
 endif()
@@ -89,6 +92,7 @@ target_link_libraries(consumer PRIVATE alpaka::alpaka)
                 f"-DFETCHCONTENT_SOURCE_DIR_ALPAKA3={directory / 'standalone'}",
                 f"-DFETCHCONTENT_SOURCE_DIR_ALPAKAMETRICS={metrics}",
                 "-DalpakaMetrics_ALPAKA_REVISION=stale-fallback-pin",
+                "-DFETCHCONTENT_TRY_FIND_PACKAGE_MODE=ALWAYS",
             )
             run("cmake", "--build", str(build))
             run(str(build / "consumer"))

@@ -30,3 +30,9 @@ and the hierarchical block/warp/thread tiling described by
 build/example/matrixMultiplication/alpakaTune_matrixMultiplication \
   --backend cuda:nvidiaGpu --executor gpuCuda -m 512 -n 512 -k 512
 ```
+
+On the `tunerEnhancedMetrics` branch, an optional
+`-DalpakaTune_DEP_METRICS=ON` build supports queue elapsed time, CPU serial
+instructions, L2 misses, and a user-defined weighted objective. Runtime remains
+the default. See `docs/source/experimental_metrics.rst` for build commands,
+normalization, collection scope, and runnable examples.
