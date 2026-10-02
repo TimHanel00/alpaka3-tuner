@@ -47,16 +47,15 @@ result instead of treating a partial configuration as final.
 Timing records and comparisons
 ------------------------------
 
-The record model follows the former ``ConfigRecord``/``MetricContainer``
-design. It retains raw samples, tracks raw min/max/mean, and computes a robust
-median and mean after MAD-based outlier rejection. The robust median is the
+Each timing record retains raw samples, tracks raw min/max/mean, and computes
+a robust median and mean after MAD-based outlier rejection. The robust median is the
 runtime used to select the winner and reported to strategies, so isolated host
 scheduling spikes do not distort tuning decisions.
 
-In ``online_fixed``, every ``ci_check_interval`` samples, a legacy-compatible
-99% non-parametric
-median confidence interval is checked. A record completes once the interval is
-within ``ci_relative_width`` and ``minimum_runs_per_candidate`` has been met,
+In ``online_fixed``, a non-parametric median confidence interval is checked
+every ``ci_check_interval`` samples (99% confidence by default). A record
+completes once the interval is within ``ci_relative_width`` and
+``minimum_runs_per_candidate`` has been met,
 or at ``runs_per_candidate``. If ``mann_whitney_early_stop`` is enabled, the
 tuner also compares a non-incumbent record with the current best record after
 ``mann_whitney_min_samples`` accepted samples each (eight by default). A
@@ -91,8 +90,9 @@ retained residual observations, partial-batch count, and fit count are stored
 with compatible history and restored only for the exact same model artifact.
 The core tuner still stores its full legality and runtime-history bookkeeping;
 the pool specifically bounds learned inference and learned candidate metadata.
-Model training and campaign data live in the separate ``alpakaTune-ml`` repository;
-only a promoted deployment artifact may be bundled here.
+To train a model, use the separate `alpakaTune-ml
+<https://github.com/TimHanel00/alpakaTune-ml>`_ repository. Set ``learning.model``
+to the resulting artifact's path, or use a model bundled with your installation.
 
 Select one in YAML:
 

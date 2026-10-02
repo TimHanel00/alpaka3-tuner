@@ -29,7 +29,7 @@ or residual-adapter updates. Without a horizon it remains false indefinitely.
 
 The examples configure a horizon and demonstrate an application-owned combined
 condition: at least 50,000 executions and ``completed()``. Their shipped YAML
-uses an adaptive horizon of 40,000, intentionally leaving 10,000 launches at
+uses an adaptive horizon of 40,000, leaving 10,000 launches at
 the final schedule state.
 Those numbers are independent. Applications that require exactly N launches
 should simply execute exactly N launches and need not inspect ``completed()``.
@@ -302,9 +302,7 @@ rejections advance to another candidate within the same phase. Its default
 cycle contains ten predicted-fast activations followed by one
 uncertainty/diversity activation.
 
-Strategies may deliberately recommend previously measured points. They must
-not hide duplicate ownership inside their own candidate bookkeeping. Regression
-tests also require every built-in strategy, including learned hybrid, to expose
-at least ten distinct raw candidates among 132 admitted recommendations in a
-100-candidate space. Fixed seeds make this strategy contract deterministic.
-This is proposal diversity, not a promise to exhaust the entire space.
+Strategies can recommend previously measured points. The tuner applies the
+selected mode's revisit policy to those recommendations. Use ``exhaustive``
+when you need to visit every candidate; the other strategies do not guarantee
+full coverage.

@@ -32,3 +32,19 @@ build/tests/alpakaTune_workflow_tests pipeline replay build/gpu-workflow-history
 
 Requesting CUDA fails if it was not compiled in or no CUDA device is available.
 GPU execution is explicit so compiler-only CI jobs do not require GPU hardware.
+
+## Adaptive Pi objective tests
+
+```sh
+ctest --test-dir build -R alpakaTune_adaptive_pi_tests --output-on-failure
+```
+
+These cases use available devices for each enabled backend. They check tile-area
+conservation, geometric Pi bounds, sampling only at the final depth, both
+objectives, and valid winner replay. Zero runtime or zero-error limits test the
+case where no candidate is valid.
+
+For the 10 ms acceptance limit, the inspection hook supplies deterministic 5 ms
+and 20 ms durations. Geometry and accuracy checks still use real device results;
+the timing fixture keeps acceptance tests independent of sanitizer overhead,
+backend startup, and runner speed. The example executable uses measured durations.

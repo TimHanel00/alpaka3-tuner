@@ -12,8 +12,8 @@ compile-time parameters are:
 
 `blockRows`, `blockColumns`, and `kTile` directly determine the compile-time
 `declareSharedMdArray` extents. The B tile has one padded column to avoid common
-shared-memory bank-conflict patterns. The compile-time choices are deliberately
-bounded to `3 * 3 * 2 * 2 * 2 = 72` kernel variants.
+shared-memory bank-conflict patterns. The compile-time choices produce
+`3 * 3 * 2 * 2 * 2 = 72` kernel variants.
 
 `numFrames`, `frameExtent`, and `tilesPerGroup` are runtime tunables.
 `tilesPerGroup` chooses `1`, `2`, `4`, `8`, or `16` adjacent output tiles for a

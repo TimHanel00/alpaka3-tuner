@@ -1,4 +1,4 @@
-# Tuning-example application lifetime
+# Running the tuning examples
 
 alpakaTune is a library inside these applications; it does not own their main
 loop. Every application decides independently how often its kernel is needed.
@@ -14,14 +14,13 @@ while (completedExecutions < minimumExecutions || !tuner.completed()) {
 }
 ```
 
-This means “run at least 50,000 application launches and do not stop before the
-configured tuning-policy goal has been reached.” It does **not** mean that a
-normal alpakaTune user must structure an application this way. An application
-that needs exactly `N` kernel launches should use its own `N`-iteration loop
-and may ignore `completed()` completely.
+This loop runs at least 50,000 launches and continues until the tuning-policy
+goal is reached. In your application, use the loop required by your workload:
+if it needs exactly `N` launches, run `N` iterations. Checking `completed()`
+is optional.
 
-The default tuner configuration uses `horizon: 40000`. The two
-numbers are intentionally independent:
+The shipped `alpakaTune.yaml` uses `horizon: 40000` in adaptive mode.
+That horizon controls the tuning schedule separately from the application loop:
 
 - During the first 40,000 adaptive launches, revisit admission and temperature
   progress toward their final values.

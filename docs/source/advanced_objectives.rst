@@ -55,15 +55,8 @@ quarter-circle sampling idea from `Alpaka's Monte Carlo integration example
 <https://github.com/alpaka-group/alpaka/blob/develop/example/monteCarloIntegration/src/monteCarloIntegration.cpp>`_.
 Its adaptive refinement and tuning scheme are independent.
 
-Integration tests run both objectives, check feasible winner replay, and verify
-that zero runtime or zero error tolerance leaves no valid candidate. One
-measurement per candidate bounds test duration. Tests inspect real device leaves
-and retain the geometry and accuracy checks, but supply deterministic 5 ms and
-20 ms durations through the inspection hook when testing the 10 ms constraint.
-This tests acceptance and rejection independently of sanitizer overhead, SYCL
-startup, and runner speed. The executable always uses measured durations;
-production timing comparisons should use enough repetitions for their noise
-level.
+The example takes one measurement per candidate. For runtime comparisons,
+increase the sample count enough to account for timing noise.
 
 Run the integration cases
 -------------------------
@@ -74,5 +67,6 @@ Run the integration cases
 
 Enable ``alpakaTune_BUILD_TESTING=ON``. The Pi integration case exercises all
 enabled backends with available devices.
-The algorithm, objectives, and assertions are shared between the executable
-examples and their tests.
+The tests check both objectives, valid winner replay, and rejection when no
+candidate satisfies the constraint. See ``tests/README.md`` for test workloads
+and timing fixtures.

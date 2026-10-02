@@ -1,10 +1,9 @@
 # Tuning strategy benchmark
 
 The benchmark runs every example containing an alpakaTune context with the
-four model-free strategies by default. The application owns the launch count;
-the examples own their 50000-launch default. The runner independently supplies
-an isolated tuner configuration, policy guards, and persistent history for
-each example/strategy pair.
+four model-free strategies by default. Each example/strategy pair uses an
+isolated `online_fixed` tuner configuration and history. The examples control
+their application loops, with a 50000-launch default for tuning collection.
 
 Build the examples, install the Python dependencies, and start a run:
 
@@ -39,8 +38,9 @@ python3 benchmarks/run.py --exclude-examples nBody grayScale
 
 When both options are present, exclusions are applied after inclusions.
 
-The learned strategy is opt-in because it must never silently use its random
-fallback during a model comparison. Supply a readable model artifact whenever
+The learned strategy is opt-in. Model comparisons require active inference;
+the runner rejects results collected with the random fallback.
+Supply a readable model artifact whenever
 `learned_hybrid` is selected:
 
 ```bash
@@ -59,7 +59,7 @@ pair's `run.json` record its SHA-256 provenance digest and the runtime-compatibl
 reports `learning.status: active`, `artifact_load_status: available`, and the
 expected runtime digest. A missing or fallback model therefore fails the run.
 The optional pool and batch flags are written only into learned configurations;
-they make small validation pools possible without changing production defaults.
+use them to bound the candidate pool and inference batch size.
 
 By default results are written below
 `benchmarks/results/<UTC-run-id>/<example>/<strategy>/`. Every pair contains
@@ -69,14 +69,12 @@ default to 40000 and 100000 respectively; they are tuner-policy limits and can
 be changed with the corresponding command-line options. Separately, the
 example applications default to at least 50000 launches.
 
-For a bounded comparison, add `--tune-until-terminal`. The option name is kept
-for command-line compatibility. The finite
-heatEquation2D and nBody examples then keep executing their safe kernel sequence
-through their 50000-launch application minimum and until ``completed()`` reports
-that every tuner policy reached its goal, rather than stopping after their
-normal scientific step count. With ``maximum_executions: 40000``, this records
-a deliberate 10000-launch post-horizon interval. Adaptive tuning stays active
-during it; a fixed tuner replays its current best configuration:
+For a bounded comparison, add `--tune-until-terminal`. The heatEquation2D and
+nBody examples then continue their simulation steps through the 50000-launch
+application minimum and until every tuner completes. The runner selects
+`online_fixed`, so a tuner that completes before the application minimum
+replays its best configuration for the remaining launches. For example, a
+40000-execution limit leaves at least 10000 replay launches:
 
 ```bash
 python3 benchmarks/run.py \
@@ -131,9 +129,9 @@ A pair is marked completed only if every persisted context reports
 `all_configurations` and the retired plus restriction-rejected candidates equal
 the complete Cartesian space. This verification is stored as
 `full_coverage_verified` in `run.json`, making the same runner suitable for a
-local shell or a scheduler job without weakening the dataset acceptance rule.
+local shell or a scheduler job.
 
-There is intentionally no timeout. Failures are recorded and the remaining
+The runner has no timeout. Failures are recorded and the remaining
 pairs continue. Resume an interrupted result directory without repeating
 successful pairs:
 
@@ -178,9 +176,10 @@ Results are written below `benchmarks/baseline-results/<UTC-run-id>/`. Every
 execution has separate stdout, stderr, and `run.json` files; `summary.json`
 contains median, minimum, and maximum wall times as well as the mean
 kernel/time-step runtime reported by the upstream example. It stores
-`reported_runtimes` separately for `CpuOmpBlocks` and `GpuCuda`. CpuSerial must
-remain compiled out: heatEquation2D and nBody print only `Host`, which is mapped
-to CpuOmpBlocks under that build contract. The first reported value for each
+`reported_runtimes` separately for `CpuOmpBlocks` and `GpuCuda`. Disable CpuSerial
+when building this baseline: heatEquation2D and nBody label host runtimes only
+as `Host`, so the parser needs CpuOmpBlocks to be the sole host executor.
+The first reported value for each
 executor is retained as a cold-start warmup measurement and excluded from its
 steady-state arithmetic mean. The legacy CUDA-only summary fields remain for
 older tooling. Overlay those means

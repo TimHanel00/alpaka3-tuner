@@ -1,19 +1,19 @@
 # Bundled learned model
 
-`alpakaTune-default.atml` is the optional production artifact used when
+`alpakaTune-default.atml` is the optional bundled model used when
 `tuning.strategy: learned_hybrid` is selected without an explicit
-`learning.model` path. The artifact is produced and validated by the separate
-`alpakaTune-ml` repository; raw datasets, training checkpoints, and optimizer
-state do not belong in this repository.
+`learning.model` path. Model training and validation tools are in the separate
+`alpakaTune-ml` repository. You can also set `learning.model` to an external
+artifact.
 
-A promoted artifact must be accompanied by
+## Packaging a model
+
+Include a metadata sidecar,
 `alpakaTune-default.atml.json`, containing its SHA-256 digest, artifact and
 feature-schema versions, source training-manifest hashes, supported device
 families, held-out-device metrics, license, and provenance. CMake bundles and
-installs the model only when the artifact exists, so source checkouts without
-an approved model still build normally and the learned strategy uses its
-configured fallback.
+installs the model only when the artifact exists. Without an available model,
+the learned strategy uses its configured fallback.
 
-The production artifact and sidecar together must remain below 5 MiB. Tiny
-synthetic artifacts used solely by tests belong under `tests/fixtures`, not
-here.
+The bundled artifact and sidecar together must not exceed 5 MiB. Synthetic
+models for tests are stored under `tests/fixtures`.

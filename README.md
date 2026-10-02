@@ -1,32 +1,26 @@
 # alpakaTune
 
-alpakaTune is a header-only C++20 tuner for Alpaka3 `KernelBundle` launches.
-A mutable `TunerConfig` creates device-bound `Tuner` objects through
-`makeTuner`; each `tuner.enqueue(queue, frameSpec, prototypeBundle)` call
-performs one launch. An optional tuner-side candidate queue can interleave
-accepted recommendations; without it they launch directly after mandatory
-constraints and optional horizon rejection. The execution mode selects finite tuning,
-continuous adaptation with rolling timing histories, or offline replay of a
-persisted best configuration. Runtime (`RVals`) and compile-time
-(`CVals`) candidates share one named `Tunables` configuration.
-`makeTuner` has exactly two forms: one taking an explicit `TunerConfig`, and
-one using `tunerConfig()`; both require the tunable bundle and device before
-any identity-only names or Alpaka objects.
+alpakaTune is a header-only C++20 library that chooses a fast configuration for
+an Alpaka3 kernel. Supply candidate batch sizes, launch shapes, or algorithm
+parameters; the tuner measures their cost and selects values for later launches.
+By default it minimizes runtime. You can also provide an application-defined
+score, including a weighted combination of metrics.
 
-The [full guide](https://alpaka3-tuner.readthedocs.io/en/latest/), including the execution-mode and candidate-admission contract,
-FetchContent, installed-package, launch-tuning, and compile-time-tuning
-examples, is published on Read the Docs. Its Sphinx sources are under
-[`docs/source`](docs/source/index.rst). Start with the
-[working tutorial](https://alpaka3-tuner.readthedocs.io/en/latest/getting_started.html).
-The executable examples separately document their application-owned 50,000
-launch minimum and their explicitly configured, independent 40,000-execution tuner horizon in
-[`example/README.md`](example/README.md).
+Tune once and replay the winner, keep adapting as the application runs, or
+reuse a saved configuration. Runtime (`RVals`) and compile-time (`CVals`)
+choices can share one candidate space. Your application controls the kernel
+launches and its main loop.
 
-Large exhaustive datasets, offline model training, evaluation, and HPC job
-orchestration are intentionally maintained in the separate `alpakaTune-ml`
-repository. This header-only runtime contains only automatic feature/history
-contracts, native learned-model inference, online adaptation, and an optional
-promoted model artifact.
+Start with [Your first tuner](https://alpaka3-tuner.readthedocs.io/en/latest/getting_started.html)
+to build a minimal CPU example. The [full guide](https://alpaka3-tuner.readthedocs.io/en/latest/)
+covers installation, launch tuning, saved history, and custom objectives.
+Its Sphinx sources are under [`docs/source`](docs/source/index.rst).
+See [`example/README.md`](example/README.md) for the larger examples and their
+tuning-collection loops.
+
+The optional `learned_hybrid` strategy uses an offline-trained model with online
+adaptation. Model training, datasets, and HPC campaigns are handled by
+[`alpakaTune-ml`](https://github.com/TimHanel00/alpakaTune-ml).
 
 ## Build the example and tests
 

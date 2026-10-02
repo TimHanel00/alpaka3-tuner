@@ -27,7 +27,7 @@ struct RuntimeHistoryOptions {
   /** Sample cadence for confidence-interval checks. */
   std::size_t ciCheckInterval{10u};
   /** Z score used by the non-parametric median interval. */
-  double ciZScore{2.576}; // 99 % normal approximation, as in the legacy tuner.
+  double ciZScore{2.576}; // 99 % normal approximation.
   /** Relative interval width required for confidence retirement. */
   double ciRelativeWidth{0.05};
   /** Median-absolute-deviation threshold for decision outliers. */
@@ -103,7 +103,7 @@ public:
 
   /**
    * Record a timed launch. Returns true when this record reached retirement.
-   * Warm-up launches deliberately do not enter the statistical history.
+   * Warm-up launches do not enter the statistical history.
    */
   [[nodiscard]] auto record(double seconds) -> bool {
     if (!std::isfinite(seconds) || seconds < 0.0)
@@ -186,7 +186,7 @@ public:
 
   /** @brief Restore a lossy compact summary as median-valued samples.
    *
-   * The compact schema deliberately omits the raw distribution. Repeating the
+   * The compact schema omits the raw distribution. Repeating the
    * persisted median preserves its decision estimate and retained measurement
    * weight while respecting the active rolling-window limit.
    */

@@ -50,7 +50,7 @@ To load the same observations while exploring further:
 .. literalinclude:: ../examples/first_tuner/adaptive.yaml
    :language: yaml
 
-This intentionally has no horizon. Expect ``completed=0; loaded=1`` after the
+This configuration has no horizon. Expect ``completed=0; loaded=1`` after the
 application's 20 launches. The measurements guide new decisions, but the input
 file stays unchanged. Set ``write: true`` to save updated observations.
 Starting either online mode resets run counters and scheduling state, while

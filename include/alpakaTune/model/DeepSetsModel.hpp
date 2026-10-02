@@ -31,9 +31,9 @@ struct LearnedModelPrediction {
 /**
  * Framework-independent native inference for `deepsets_ensemble_v1`.
  *
- * The implementation intentionally uses only row-major float32 affine layers
- * and ReLU, so Python export and C++ deployment can be checked bit-for-bit
- * within normal floating-point tolerances without libtorch or ONNX Runtime.
+ * Uses row-major float32 affine layers and ReLU without libtorch or ONNX
+ * Runtime. Compare Python export and C++ inference using floating-point
+ * tolerances.
  */
 class NativeDeepSetsModel {
 public:

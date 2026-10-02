@@ -1,7 +1,8 @@
 # Adaptive Pi: swap the objective and the post-evaluation constraint
 
-This example uses one calculator, one search space, and one `main()` for two
-objectives. It requires no new tuner interface.
+Choose between minimizing Pi estimation error subject to a runtime limit and
+minimizing runtime subject to an error limit. Both modes tune the same calculator
+and candidate space.
 
 ```sh
 cmake --build build --target alpakaTune_adaptivePi
@@ -91,12 +92,12 @@ calculations; 10 ms constrains one calculation, not the complete search.
 
 The integration tests validate tile-area conservation, geometric lower/upper Pi bounds,
 final-depth-only sampling, feasible winner selection, and four terminal replays.
-One measurement per candidate keeps this feature showcase short;
-increase samples per candidate for production runtime comparisons.
+The example takes one measurement per candidate. Increase the samples per
+candidate for reliable runtime comparisons.
 
 The same code is exercised by `alpakaTune_adaptive_pi_tests`, including zero
-runtime and zero-error constraints that reject every candidate without inventing
-a fallback winner. See [custom tuning metrics](../../docs/source/custom_metrics.rst)
+runtime and zero-error constraints that leave no valid winner.
+See [custom tuning metrics](../../docs/source/custom_metrics.rst)
 and [advanced objective examples](../../docs/source/advanced_objectives.rst).
 
 ## Source layout

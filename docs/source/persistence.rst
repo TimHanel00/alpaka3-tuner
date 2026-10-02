@@ -11,10 +11,10 @@ Compact history
 ---------------
 
 ``TunerConfig::history`` is the preferred restart source. Its schema contains
-only a objective-ordered selection of measured configurations and, for an active
+an objective-ordered selection of measured configurations and, for an active
 learned-hybrid strategy, the complete residual-adapter state. Each
 configuration record contains its readable values, robust median objective, and
-retained measurement count. It deliberately omits raw timings, execution
+retained measurement count. It omits raw timings, execution
 counters, policy diagnostics, and timestamps.
 
 ``history.sampleCount`` limits the configurations written for each
@@ -37,9 +37,9 @@ not include model-loading or candidate-pool diagnostics.
 Complete history
 ----------------
 
-``TunerConfig::completeHistory`` owns the former persistence schema. Complete
-history schema 13 retains raw rolling samples, sparse Cartesian candidate
-arrays, lifecycle and completion state, admission counters, metadata,
+``TunerConfig::completeHistory`` stores detailed measurements and diagnostics.
+Complete history schema 13 retains raw rolling samples, sparse Cartesian
+candidate arrays, lifecycle and completion state, admission counters, metadata,
 timestamps, learned diagnostics, residual-adapter state, and application-side
 candidate invalidations. It also identifies the compile-time-selected metric
 and records candidates rejected because their application metric was omitted.
@@ -121,7 +121,8 @@ identity entries, launch prototype, executor, restrictions, and tunable
 definitions. Strategy, execution mode, seed, budgets, history access policy,
 sampling count, and learned-model path are excluded.
 
-YAML schema 3 replaces the old ``persistence`` map with the independent
-``history`` and ``complete_history`` maps. The old map is rejected. A former
-``.alpakaTune/history.json`` full cache can be retained by moving it to
-``.alpakaTune/complete-history.json`` before starting with the new defaults.
+YAML schema 3 uses independent ``history`` and ``complete_history`` maps; the
+older ``persistence`` map is rejected. When updating an older configuration,
+use separate paths for compact and complete history. Complete-history files
+with an earlier schema require fresh measurements; renaming a file does not
+convert its schema.
