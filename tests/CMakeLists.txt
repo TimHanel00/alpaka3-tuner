@@ -219,3 +219,17 @@ add_executable(alpakaTune_execution_runtime_summary_tests execution_runtime_summ
 target_link_libraries(alpakaTune_execution_runtime_summary_tests PRIVATE alpakaTune::alpakaTune Catch2::Catch2WithMain)
 alpaka_finalize(alpakaTune_execution_runtime_summary_tests)
 add_test(NAME alpakaTune_execution_runtime_summary_tests COMMAND alpakaTune_execution_runtime_summary_tests)
+if(alpakaTune_DEP_METRICS)
+    add_executable(alpakaTune_metrics_tests metrics.cpp)
+    target_link_libraries(alpakaTune_metrics_tests PRIVATE alpakaTune::metrics Catch2::Catch2WithMain)
+    alpaka_finalize(alpakaTune_metrics_tests)
+    add_test(NAME alpakaTune_metrics_tests COMMAND alpakaTune_metrics_tests)
+endif()
+
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(
+        NAME alpakaTune_dependency_switching
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/dependency_switching.py
+    )
+endif()

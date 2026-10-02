@@ -2,6 +2,16 @@
 
 include(CMakeFindDependencyMacro)
 set(_alpakaTune_package_prefix "${PACKAGE_PREFIX_DIR}")
+# The metrics component resolves its Alpaka dependency first.
+if("metrics" IN_LIST alpakaTune_FIND_COMPONENTS)
+    if(NOT @alpakaTune_DEP_METRICS@)
+        set(alpakaTune_FOUND FALSE)
+        set(alpakaTune_NOT_FOUND_MESSAGE "This alpakaTune installation was built without metrics")
+        return()
+    endif()
+    find_dependency(alpakaMetrics CONFIG REQUIRED)
+    set(alpakaTune_metrics_FOUND TRUE)
+endif()
 find_dependency(alpaka CONFIG REQUIRED)
 find_dependency(yaml-cpp CONFIG REQUIRED)
 
@@ -52,3 +62,12 @@ if(NOT TARGET alpakaTune::alpakaTune)
             INTERFACE_COMPILE_DEFINITIONS "${_alpakaTune_compile_definitions}"
     )
 endif()
+
+if("metrics" IN_LIST alpakaTune_FIND_COMPONENTS AND NOT TARGET alpakaTune::metrics)
+    add_library(alpakaTune::metrics INTERFACE IMPORTED)
+    set_target_properties(
+        alpakaTune::metrics
+        PROPERTIES INTERFACE_LINK_LIBRARIES "alpakaTune::alpakaTune;alpakaMetrics::alpakaMetrics"
+    )
+endif()
+check_required_components(alpakaTune)
