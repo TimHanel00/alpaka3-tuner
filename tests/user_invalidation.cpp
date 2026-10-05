@@ -35,7 +35,8 @@ struct WriteKernel {
 
 [[nodiscard]] auto fixedConfig(bool queued) -> alpakaTune::TunerConfig {
   auto config = alpakaTune::TunerConfig{};
-  config.mode = alpakaTune::TuningMode::onlineFixed;
+  config.exploration = alpakaTune::ExplorationPolicy::online;
+  config.selection = alpakaTune::SelectionPolicy::fixed;
   config.strategy = alpakaTune::StrategyKind::exhaustive;
   config.queue =
       queued
@@ -272,7 +273,8 @@ TEST_CASE("user invalidation is excluded from compact persistence",
   CHECK_FALSE(completeContext.at("candidate_samples")[0u].empty());
 
   auto replayConfig = config;
-  replayConfig.mode = alpakaTune::TuningMode::offline;
+  replayConfig.exploration = alpakaTune::ExplorationPolicy::offline;
+  replayConfig.selection = alpakaTune::SelectionPolicy::fixed;
   replayConfig.maximumExecutions.reset();
   replayConfig.history.read = false;
   replayConfig.history.write = false;

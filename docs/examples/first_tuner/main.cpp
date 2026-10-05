@@ -46,7 +46,8 @@ int main(int argc, char **argv) {
   alpaka::onHost::memcpy(queue, deviceInput, input);
 
   auto config = alpakaTune::TunerConfig{};
-  config.mode = alpakaTune::TuningMode::onlineFixed;
+  config.exploration = alpakaTune::ExplorationPolicy::online;
+  config.selection = alpakaTune::SelectionPolicy::fixed;
   config.runsPerCandidate = 3u;
   config.minimumRunsPerCandidate = 3u;
   config.maximumExecutions = 100u;

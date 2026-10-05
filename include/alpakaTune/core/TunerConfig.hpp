@@ -24,40 +24,39 @@
 
 namespace alpakaTune {
 
-/** @brief Selects persistence reuse and online measurement lifecycle. */
-enum class TuningMode {
-  offline,       ///< Replay the best compatible persisted configuration.
-  onlineFixed,   ///< Tune to a terminal guard, then replay the winner.
-  onlineAdaptive ///< Continue measuring and revisiting without termination.
-};
+/** @brief Whether the tuner may search for new configurations. */
+enum class ExplorationPolicy { online, offline };
 
-/** @brief Return the stable YAML spelling of an execution mode. */
-[[nodiscard]] constexpr auto tuningModeName(TuningMode mode)
+/** @brief Whether selection keeps responding to measured performance. */
+enum class SelectionPolicy { adaptive, fixed };
+
+[[nodiscard]] constexpr auto explorationPolicyName(ExplorationPolicy policy)
     -> std::string_view {
-  switch (mode) {
-  case TuningMode::offline:
-    return "offline";
-  case TuningMode::onlineFixed:
-    return "online_fixed";
-  case TuningMode::onlineAdaptive:
-    return "online_adaptive";
-  }
-  return "unknown";
+  return policy == ExplorationPolicy::online ? "online" : "offline";
 }
 
-/** @brief Parse a YAML execution-mode spelling.
- * @throws std::runtime_error if @p name is not a supported mode.
- */
-[[nodiscard]] inline auto tuningModeFromName(std::string_view name)
-    -> TuningMode {
+[[nodiscard]] constexpr auto selectionPolicyName(SelectionPolicy policy)
+    -> std::string_view {
+  return policy == SelectionPolicy::adaptive ? "adaptive" : "fixed";
+}
+
+[[nodiscard]] inline auto explorationPolicyFromName(std::string_view name)
+    -> ExplorationPolicy {
+  if (name == "online")
+    return ExplorationPolicy::online;
   if (name == "offline")
-    return TuningMode::offline;
-  if (name == "online_fixed")
-    return TuningMode::onlineFixed;
-  if (name == "online_adaptive")
-    return TuningMode::onlineAdaptive;
+    return ExplorationPolicy::offline;
   throw std::runtime_error{
-      "YAML tuning.mode must be offline, online_fixed, or online_adaptive."};
+      "YAML tuning.exploration must be online or offline."};
+}
+
+[[nodiscard]] inline auto selectionPolicyFromName(std::string_view name)
+    -> SelectionPolicy {
+  if (name == "adaptive")
+    return SelectionPolicy::adaptive;
+  if (name == "fixed")
+    return SelectionPolicy::fixed;
+  throw std::runtime_error{"YAML tuning.selection must be adaptive or fixed."};
 }
 
 /** @brief Access policy for the compact sampled history. */
@@ -101,13 +100,18 @@ struct QueueConfig {
  */
 struct TunerConfig {
   SpaceConfig space;
-  /** Persistence reuse and online measurement lifecycle. */
-  TuningMode mode{TuningMode::onlineAdaptive};
+  /** Permission to search for configurations not yet measured. */
+  ExplorationPolicy exploration{ExplorationPolicy::online};
+  /** Selection behavior after exploration ends. */
+  SelectionPolicy selection{SelectionPolicy::adaptive};
+  /** Successful reuse launches between probes of known alternatives. */
+  std::size_t adaptiveProbeInterval{10u};
   /** Launch a terminal replay winner without runtime instrumentation. */
   bool replayFastPath{false};
   /** Optional active-candidate scheduler; omission launches directly. */
   std::optional<QueueConfig> queue;
-  /** Maximum new-run measurements per configuration in online-fixed mode. */
+  /** Maximum new-run measurements per configuration in online exploration with
+   * fixed selection. */
   std::size_t runsPerCandidate{1u};
   /** New-run measurements required before fixed-mode CI retirement. */
   std::size_t minimumRunsPerCandidate{1u};
@@ -127,11 +131,13 @@ struct TunerConfig {
   double mannWhitneyAlpha{0.05};
   /** Consecutive rejected proposals allowed in one admission attempt. */
   std::size_t maximumConsecutiveStrategyRetries{20u};
-  /** Online-fixed completion guard on launches in the current online run. */
+  /** Online exploration completion guard on launches in the current online run.
+   */
   std::optional<std::size_t> maximumExecutions;
   /** Alternative online-fixed completion guard on retired configurations. */
   std::optional<std::size_t> maximumRetiredConfigurations;
-  /** Optional new-run launch horizon used by online-adaptive mode. */
+  /** Optional new-run launch horizon used by online exploration with adaptive
+   * selection. */
   std::optional<std::size_t> horizon;
   /** Maximum number of newest timing records retained per configuration. */
   std::size_t historyWindowSize{10u};
@@ -164,7 +170,7 @@ struct TunerConfig {
   /** Maximum number of candidates sent through one learned scoring batch. */
   std::size_t learnedCandidateBatchSize{256u};
 
-  /** @brief Load a mutable configuration from schema-version-1, -2, or -3 YAML.
+  /** @brief Load a mutable configuration from schema-version-4 YAML.
    * @throws std::runtime_error for missing, malformed, or unsupported input.
    */
   [[nodiscard]] static auto fromYaml(std::filesystem::path path) -> TunerConfig;
@@ -256,9 +262,11 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
   if (!root["schema_version"])
     throw std::runtime_error{"Missing YAML key: schema_version"};
   auto const schemaVersion = root["schema_version"].as<int>();
-  if (schemaVersion != 1 && schemaVersion != 2 && schemaVersion != 3)
-    throw std::runtime_error{
-        "Unsupported alpakaTune YAML schema_version; expected 1, 2, or 3."};
+  if (schemaVersion != 4)
+    throw std::runtime_error{"Unsupported alpakaTune YAML schema_version; "
+                             "migrate to schema_version: "
+                             "4 with tuning.exploration and tuning.selection "
+                             "instead of tuning.mode."};
   if (!root["tuning"] || !root["tuning"].IsMap())
     throw std::runtime_error{"Missing YAML map: tuning"};
   if (root["queue"] && !root["queue"].IsMap())
@@ -273,13 +281,12 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
   auto const history = root["history"];
   auto const completeHistory = root["complete_history"];
   auto const learning = root["learning"];
-  if (learning && schemaVersion < 2)
-    throw std::runtime_error{
-        "YAML learning configuration requires schema_version: 2."};
   if (learning && !learning.IsMap())
     throw std::runtime_error{"YAML learning must contain a map."};
   rejectUnknown(tuning,
-                {"mode",
+                {"exploration",
+                 "selection",
+                 "adaptive_probe_interval",
                  "replay_fast_path",
                  "strategy",
                  "random_seed",
@@ -310,9 +317,6 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
                   {"disable", "warmup_runs", "noise_cancellation_window",
                    "max_consecutive_runs"},
                   "queue");
-  if ((history || completeHistory) && schemaVersion < 3)
-    throw std::runtime_error{
-        "YAML history configuration requires schema_version: 3."};
   if (history)
     rejectUnknown(history, {"file", "read", "write", "sample_count"},
                   "history");
@@ -326,9 +330,14 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
         "learning");
 
   TunerConfig defaults;
-  defaults.mode = tuning["mode"]
-                      ? tuningModeFromName(tuning["mode"].as<std::string>())
-                      : defaults.mode;
+  if (tuning["exploration"])
+    defaults.exploration =
+        explorationPolicyFromName(tuning["exploration"].as<std::string>());
+  if (tuning["selection"])
+    defaults.selection =
+        selectionPolicyFromName(tuning["selection"].as<std::string>());
+  defaults.adaptiveProbeInterval = optionalPositive(
+      tuning, "adaptive_probe_interval", defaults.adaptiveProbeInterval);
   defaults.replayFastPath = tuning["replay_fast_path"]
                                 ? tuning["replay_fast_path"].as<bool>()
                                 : defaults.replayFastPath;
@@ -404,35 +413,16 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
       defaults.maximumRetiredConfigurations =
           requirePositive(tuning, "maximum_retired_configurations");
   }
-  if (defaults.mode == TuningMode::onlineAdaptive) {
-    if (tuning["maximum_executions"].IsDefined() ||
-        tuning["maximum_retired_configurations"].IsDefined())
-      throw std::runtime_error{
-          "YAML online_adaptive accepts horizon, not maximum_executions or "
-          "maximum_retired_configurations."};
-    if (auto const horizon = tuning["horizon"]; horizon.IsDefined()) {
-      if (horizon.IsNull())
-        defaults.horizon.reset();
-      else
-        defaults.horizon = requirePositive(tuning, "horizon");
-    }
-    if (!defaults.horizon &&
-        tuning["horizon_offset_with_active_history"].IsDefined())
-      throw std::runtime_error{
-          "YAML horizon_offset_with_active_history requires horizon."};
-  } else {
-    if (tuning["horizon"].IsDefined() ||
-        tuning["horizon_offset_with_active_history"].IsDefined())
-      throw std::runtime_error{
-          "YAML horizon and horizon_offset_with_active_history are exclusive "
-          "to online_adaptive mode."};
-    if (defaults.mode == TuningMode::offline &&
-        (tuning["maximum_executions"].IsDefined() ||
-         tuning["maximum_retired_configurations"].IsDefined()))
-      throw std::runtime_error{
-          "YAML maximum_executions and maximum_retired_configurations are "
-          "exclusive to online_fixed mode."};
+  if (auto const horizon = tuning["horizon"]; horizon.IsDefined()) {
+    if (horizon.IsNull())
+      defaults.horizon.reset();
+    else
+      defaults.horizon = requirePositive(tuning, "horizon");
   }
+  if (!defaults.horizon &&
+      tuning["horizon_offset_with_active_history"].IsDefined())
+    throw std::runtime_error{
+        "YAML horizon_offset_with_active_history requires horizon."};
   defaults.historyWindowSize = optionalPositive(tuning, "history_window_size",
                                                 defaults.historyWindowSize);
   defaults.revisitAdmissionSteepness =
@@ -597,36 +587,33 @@ inline void TunerConfig::validate() const {
   if (maximumRetiredConfigurations)
     positive(*maximumRetiredConfigurations,
              "TunerConfig::maximumRetiredConfigurations");
-  if (mode == TuningMode::onlineFixed && !maximumExecutions &&
+  positive(adaptiveProbeInterval, "TunerConfig::adaptiveProbeInterval");
+  if (exploration == ExplorationPolicy::online &&
+      selection == SelectionPolicy::fixed && !maximumExecutions &&
       !maximumRetiredConfigurations)
     throw std::invalid_argument{
-        "TunerConfig::onlineFixed requires maximumExecutions or "
+        "Online fixed selection requires maximumExecutions or "
         "maximumRetiredConfigurations."};
-  if (mode == TuningMode::onlineAdaptive) {
-    if (replayFastPath)
-      throw std::invalid_argument{
-          "TunerConfig::replayFastPath is exclusive to offline and "
-          "online-fixed modes."};
-    if (horizon)
-      positive(*horizon, "TunerConfig::horizon");
-    if (maximumExecutions || maximumRetiredConfigurations)
-      throw std::invalid_argument{
-          "TunerConfig::onlineAdaptive uses horizon and does not accept "
-          "online-fixed completion guards."};
+  if (selection == SelectionPolicy::adaptive && replayFastPath)
+    throw std::invalid_argument{
+        "TunerConfig::replayFastPath requires fixed selection."};
+  if (horizon) {
+    positive(*horizon, "TunerConfig::horizon");
+    if (exploration != ExplorationPolicy::online ||
+        selection != SelectionPolicy::adaptive)
+      throw std::invalid_argument{"TunerConfig::horizon requires online "
+                                  "exploration and adaptive selection."};
   }
-  if (mode != TuningMode::onlineAdaptive && horizon)
+  if (exploration == ExplorationPolicy::offline &&
+      (maximumExecutions || maximumRetiredConfigurations))
     throw std::invalid_argument{
-        "TunerConfig::horizon is exclusive to online-adaptive mode."};
-  if (mode == TuningMode::offline &&
-      (maximumExecutions || maximumRetiredConfigurations)) {
+        "Exploration completion guards require online exploration."};
+  if (selection == SelectionPolicy::fixed &&
+      exploration == ExplorationPolicy::online &&
+      runsPerCandidate > historyWindowSize)
     throw std::invalid_argument{
-        "TunerConfig::maximumExecutions and "
-        "maximumRetiredConfigurations are exclusive to online-fixed mode."};
-  }
-  if (mode == TuningMode::onlineFixed && runsPerCandidate > historyWindowSize)
-    throw std::invalid_argument{
-        "TunerConfig::runsPerCandidate must not exceed historyWindowSize in "
-        "online-fixed mode."};
+        "TunerConfig::runsPerCandidate must not exceed historyWindowSize with "
+        "online fixed selection."};
   if (history.file && history.file->empty())
     throw std::invalid_argument{
         "TunerConfig::history.file must contain a non-empty path."};

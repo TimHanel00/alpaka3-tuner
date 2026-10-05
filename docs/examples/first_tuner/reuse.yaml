@@ -1,9 +1,9 @@
 schema_version: 4
 tuning:
-  exploration: online
+  exploration: offline
   selection: adaptive
-  strategy: random
   runs_per_candidate: 3
+  adaptive_probe_interval: 10
   history_window_size: 10
 history:
   file: .alpakaTune/tutorial.json

@@ -1,6 +1,7 @@
-schema_version: 3
+schema_version: 4
 tuning:
-  mode: offline
+  exploration: offline
+  selection: fixed
   runs_per_candidate: 3
   replay_fast_path: true
 history:

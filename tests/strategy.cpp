@@ -82,7 +82,9 @@ auto valid(alpakaTune::ParameterConfiguration const &configuration) -> bool {
 auto main() -> int {
   auto defaultConfig = alpakaTune::TunerConfig{};
   defaultConfig.validate();
-  if (defaultConfig.mode != alpakaTune::TuningMode::onlineAdaptive ||
+  if (defaultConfig.exploration != alpakaTune::ExplorationPolicy::online ||
+      defaultConfig.adaptiveProbeInterval != 10u ||
+      defaultConfig.selection != alpakaTune::SelectionPolicy::adaptive ||
       defaultConfig.replayFastPath || defaultConfig.queue ||
       defaultConfig.maximumExecutions ||
       defaultConfig.maximumRetiredConfigurations ||
@@ -120,7 +122,7 @@ auto main() -> int {
   } catch (std::invalid_argument const &) {
     mixedAdaptiveConfigRejected = true;
   }
-  if (!mixedAdaptiveConfigRejected)
+  if (mixedAdaptiveConfigRejected)
     return EXIT_FAILURE;
   auto adaptiveFastReplayConfig = defaultConfig;
   adaptiveFastReplayConfig.replayFastPath = true;
@@ -133,7 +135,8 @@ auto main() -> int {
   if (!adaptiveFastReplayRejected)
     return EXIT_FAILURE;
   auto mixedFixedConfig = defaultConfig;
-  mixedFixedConfig.mode = alpakaTune::TuningMode::onlineFixed;
+  mixedFixedConfig.exploration = alpakaTune::ExplorationPolicy::online;
+  mixedFixedConfig.selection = alpakaTune::SelectionPolicy::fixed;
   mixedFixedConfig.horizon = 10u;
   mixedFixedConfig.maximumExecutions = 10u;
   auto mixedFixedConfigRejected = false;
@@ -224,9 +227,10 @@ auto main() -> int {
     auto const configuration =
         configurationDirectory / (std::string{name} + ".yaml");
     auto yaml = std::ofstream{configuration};
-    yaml << "schema_version: 3\n"
+    yaml << "schema_version: 4\n"
             "tuning:\n"
-            "  mode: online_fixed\n"
+            "  exploration: online\n"
+            "  selection: fixed\n"
             "  strategy: "
          << name
          << "\n"
@@ -273,9 +277,10 @@ auto main() -> int {
 
   auto const memoryConfiguration = configurationDirectory / "memory-only.yaml";
   auto memoryYaml = std::ofstream{memoryConfiguration};
-  memoryYaml << "schema_version: 2\n"
+  memoryYaml << "schema_version: 4\n"
                 "tuning:\n"
-                "  mode: online_adaptive\n"
+                "  exploration: online\n"
+                "  selection: adaptive\n"
                 "  strategy: random\n"
                 "  warmup_runs: 0\n"
                 "  runs_per_candidate: 1\n"
@@ -294,9 +299,10 @@ auto main() -> int {
   auto const processLocalConfiguration =
       configurationDirectory / "process-local.yaml";
   auto processLocalYaml = std::ofstream{processLocalConfiguration};
-  processLocalYaml << "schema_version: 3\n"
+  processLocalYaml << "schema_version: 4\n"
                       "tuning:\n"
-                      "  mode: online_adaptive\n"
+                      "  exploration: online\n"
+                      "  selection: adaptive\n"
                       "  strategy: random\n"
                       "  warmup_runs: 0\n"
                       "  runs_per_candidate: 1\n"
@@ -322,9 +328,10 @@ auto main() -> int {
   auto const accessConfiguration =
       configurationDirectory / "history-access.yaml";
   auto accessYaml = std::ofstream{accessConfiguration};
-  accessYaml << "schema_version: 3\n"
+  accessYaml << "schema_version: 4\n"
                 "tuning:\n"
-                "  mode: offline\n"
+                "  exploration: offline\n"
+                "  selection: fixed\n"
                 "  replay_fast_path: true\n"
                 "  strategy: random\n"
                 "  warmup_runs: 0\n"
@@ -355,9 +362,10 @@ auto main() -> int {
   auto const writeOnlyConfiguration =
       configurationDirectory / "write-only-history.yaml";
   auto writeOnlyYaml = std::ofstream{writeOnlyConfiguration};
-  writeOnlyYaml << "schema_version: 3\n"
+  writeOnlyYaml << "schema_version: 4\n"
                    "tuning:\n"
-                   "  mode: online_fixed\n"
+                   "  exploration: online\n"
+                   "  selection: fixed\n"
                    "  strategy: random\n"
                    "  warmup_runs: 0\n"
                    "  runs_per_candidate: 1\n"
@@ -378,9 +386,10 @@ auto main() -> int {
 
   auto const learnedConfiguration = configurationDirectory / "learned-v3.yaml";
   auto learnedYaml = std::ofstream{learnedConfiguration};
-  learnedYaml << "schema_version: 3\n"
+  learnedYaml << "schema_version: 4\n"
                  "tuning:\n"
-                 "  mode: online_fixed\n"
+                 "  exploration: online\n"
+                 "  selection: fixed\n"
                  "  strategy: learned_hybrid\n"
                  "  warmup_runs: 0\n"
                  "  runs_per_candidate: 1\n"
@@ -407,9 +416,10 @@ auto main() -> int {
   auto const adaptiveConfiguration =
       configurationDirectory / "adaptive-v3.yaml";
   auto adaptiveYaml = std::ofstream{adaptiveConfiguration};
-  adaptiveYaml << "schema_version: 3\n"
+  adaptiveYaml << "schema_version: 4\n"
                   "tuning:\n"
-                  "  mode: online_adaptive\n"
+                  "  exploration: online\n"
+                  "  selection: adaptive\n"
                   "  strategy: random\n"
                   "  runs_per_candidate: 1\n"
                   "  maximum_consecutive_strategy_retries: 7\n"
@@ -428,7 +438,7 @@ auto main() -> int {
   adaptiveYaml.close();
   auto const adaptiveDefaults =
       alpakaTune::TunerConfig::fromYaml(adaptiveConfiguration);
-  if (adaptiveDefaults.mode != alpakaTune::TuningMode::onlineAdaptive ||
+  if (adaptiveDefaults.selection != alpakaTune::SelectionPolicy::adaptive ||
       !adaptiveDefaults.queue || adaptiveDefaults.queue->disable ||
       adaptiveDefaults.queue->warmupRuns != 1u ||
       adaptiveDefaults.queue->noiseCancellationWindow != 2u ||
@@ -446,9 +456,10 @@ auto main() -> int {
   auto const continuousAdaptiveConfiguration =
       configurationDirectory / "continuous-adaptive-v3.yaml";
   auto continuousAdaptiveYaml = std::ofstream{continuousAdaptiveConfiguration};
-  continuousAdaptiveYaml << "schema_version: 3\n"
+  continuousAdaptiveYaml << "schema_version: 4\n"
                             "tuning:\n"
-                            "  mode: online_adaptive\n"
+                            "  exploration: online\n"
+                            "  selection: adaptive\n"
                             "  strategy: random\n"
                             "  random_seed: nondeterministic\n"
                             "  warmup_runs: 0\n"
@@ -458,8 +469,8 @@ auto main() -> int {
   continuousAdaptiveYaml.close();
   auto const continuousAdaptiveDefaults =
       alpakaTune::TunerConfig::fromYaml(continuousAdaptiveConfiguration);
-  if (continuousAdaptiveDefaults.mode !=
-          alpakaTune::TuningMode::onlineAdaptive ||
+  if (continuousAdaptiveDefaults.selection !=
+          alpakaTune::SelectionPolicy::adaptive ||
       continuousAdaptiveDefaults.queue || continuousAdaptiveDefaults.horizon ||
       continuousAdaptiveDefaults.randomSeed)
     return EXIT_FAILURE;
@@ -467,9 +478,10 @@ auto main() -> int {
   auto const disabledQueueConfiguration =
       configurationDirectory / "disabled-queue-v3.yaml";
   auto disabledQueueYaml = std::ofstream{disabledQueueConfiguration};
-  disabledQueueYaml << "schema_version: 3\n"
+  disabledQueueYaml << "schema_version: 4\n"
                        "tuning:\n"
-                       "  mode: online_adaptive\n"
+                       "  exploration: online\n"
+                       "  selection: adaptive\n"
                        "  strategy: random\n"
                        "  runs_per_candidate: 1\n"
                        "queue:\n"
@@ -490,9 +502,10 @@ auto main() -> int {
       configurationDirectory / "offset-without-horizon-v3.yaml";
   auto offsetWithoutHorizonYaml =
       std::ofstream{offsetWithoutHorizonConfiguration};
-  offsetWithoutHorizonYaml << "schema_version: 3\n"
+  offsetWithoutHorizonYaml << "schema_version: 4\n"
                               "tuning:\n"
-                              "  mode: online_adaptive\n"
+                              "  exploration: online\n"
+                              "  selection: adaptive\n"
                               "  strategy: random\n"
                               "  warmup_runs: 0\n"
                               "  runs_per_candidate: 1\n"
@@ -513,9 +526,10 @@ auto main() -> int {
   auto const adaptiveFastReplayConfiguration =
       configurationDirectory / "adaptive-fast-replay-v3.yaml";
   auto adaptiveFastReplayYaml = std::ofstream{adaptiveFastReplayConfiguration};
-  adaptiveFastReplayYaml << "schema_version: 3\n"
+  adaptiveFastReplayYaml << "schema_version: 4\n"
                             "tuning:\n"
-                            "  mode: online_adaptive\n"
+                            "  exploration: online\n"
+                            "  selection: adaptive\n"
                             "  replay_fast_path: true\n"
                             "  runs_per_candidate: 1\n";
   adaptiveFastReplayYaml.close();
@@ -532,9 +546,10 @@ auto main() -> int {
   auto const mixedAdaptiveConfiguration =
       configurationDirectory / "mixed-adaptive-v2.yaml";
   auto mixedAdaptiveYaml = std::ofstream{mixedAdaptiveConfiguration};
-  mixedAdaptiveYaml << "schema_version: 2\n"
+  mixedAdaptiveYaml << "schema_version: 4\n"
                        "tuning:\n"
-                       "  mode: online_adaptive\n"
+                       "  exploration: online\n"
+                       "  selection: adaptive\n"
                        "  strategy: random\n"
                        "  warmup_runs: 0\n"
                        "  runs_per_candidate: 1\n"
@@ -550,15 +565,16 @@ auto main() -> int {
   } catch (std::runtime_error const &) {
     mixedAdaptiveRejected = true;
   }
-  if (!mixedAdaptiveRejected)
+  if (mixedAdaptiveRejected)
     return EXIT_FAILURE;
 
   auto const mixedFixedConfiguration =
       configurationDirectory / "mixed-fixed-v2.yaml";
   auto mixedFixedYaml = std::ofstream{mixedFixedConfiguration};
-  mixedFixedYaml << "schema_version: 2\n"
+  mixedFixedYaml << "schema_version: 4\n"
                     "tuning:\n"
-                    "  mode: online_fixed\n"
+                    "  exploration: online\n"
+                    "  selection: fixed\n"
                     "  strategy: random\n"
                     "  warmup_runs: 0\n"
                     "  runs_per_candidate: 1\n"
@@ -571,7 +587,7 @@ auto main() -> int {
   try {
     static_cast<void>(
         alpakaTune::TunerConfig::fromYaml(mixedFixedConfiguration));
-  } catch (std::runtime_error const &) {
+  } catch (std::invalid_argument const &) {
     mixedFixedRejected = true;
   }
   if (!mixedFixedRejected)
@@ -580,9 +596,10 @@ auto main() -> int {
   auto const retiredOnlyConfiguration =
       configurationDirectory / "retired-only-v3.yaml";
   auto retiredOnlyYaml = std::ofstream{retiredOnlyConfiguration};
-  retiredOnlyYaml << "schema_version: 3\n"
+  retiredOnlyYaml << "schema_version: 4\n"
                      "tuning:\n"
-                     "  mode: online_fixed\n"
+                     "  exploration: online\n"
+                     "  selection: fixed\n"
                      "  strategy: random\n"
                      "  warmup_runs: 0\n"
                      "  runs_per_candidate: 1\n"
@@ -595,7 +612,7 @@ auto main() -> int {
   retiredOnlyYaml.close();
   auto const retiredOnlyDefaults =
       alpakaTune::TunerConfig::fromYaml(retiredOnlyConfiguration);
-  if (retiredOnlyDefaults.mode != alpakaTune::TuningMode::onlineFixed ||
+  if (retiredOnlyDefaults.selection != alpakaTune::SelectionPolicy::fixed ||
       retiredOnlyDefaults.maximumExecutions ||
       retiredOnlyDefaults.maximumRetiredConfigurations != 7u)
     return EXIT_FAILURE;
@@ -625,9 +642,10 @@ auto main() -> int {
 
   auto const legacyConfiguration = configurationDirectory / "legacy.yaml";
   auto legacyYaml = std::ofstream{legacyConfiguration};
-  legacyYaml << "schema_version: 2\n"
+  legacyYaml << "schema_version: 4\n"
                 "tuning:\n"
-                "  mode: online_adaptive\n"
+                "  exploration: online\n"
+                "  selection: adaptive\n"
                 "  strategy: random\n"
                 "  warmup_runs: 0\n"
                 "  runs_per_candidate: 1\n"

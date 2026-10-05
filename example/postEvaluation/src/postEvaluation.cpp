@@ -36,7 +36,8 @@ struct ApproximatePiKernel {
 
 [[nodiscard]] auto tuningConfig() -> alpakaTune::TunerConfig {
   auto config = alpakaTune::TunerConfig{};
-  config.mode = alpakaTune::TuningMode::onlineFixed;
+  config.exploration = alpakaTune::ExplorationPolicy::online;
+  config.selection = alpakaTune::SelectionPolicy::fixed;
   config.strategy = alpakaTune::StrategyKind::exhaustive;
   config.queue.reset();
   config.runsPerCandidate = 3u;

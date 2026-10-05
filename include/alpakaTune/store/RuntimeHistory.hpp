@@ -93,10 +93,10 @@ public:
   }
 
   /** Start a new queue activation; each activation receives its own warm-up. */
-  void beginActivation() {
+  void beginActivation(bool warmup = true) {
     if (isFinished())
       return;
-    m_warmupRemaining = m_options.warmupRuns;
+    m_warmupRemaining = warmup ? m_options.warmupRuns : 0u;
     m_state = m_warmupRemaining == 0u ? ConfigurationState::measuring
                                       : ConfigurationState::warmingUp;
   }

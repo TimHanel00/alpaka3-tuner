@@ -17,7 +17,8 @@ inline constexpr auto maximumSplits = ALPAKA_TUNE_TUNABLE("maximumSplits");
 inline constexpr auto pointsPerTile = ALPAKA_TUNE_TUNABLE("pointsPerTile");
 inline auto tuningConfig() -> alpakaTune::TunerConfig {
   auto config = alpakaTune::TunerConfig{};
-  config.mode = alpakaTune::TuningMode::onlineFixed;
+  config.exploration = alpakaTune::ExplorationPolicy::online;
+  config.selection = alpakaTune::SelectionPolicy::fixed;
   config.replayFastPath = true;
   config.strategy = alpakaTune::StrategyKind::exhaustive;
   config.queue.reset();
