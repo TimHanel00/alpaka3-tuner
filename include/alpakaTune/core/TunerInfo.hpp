@@ -82,7 +82,7 @@ struct ExecutedConfiguration {
   std::optional<double> runtimeSeconds;
   /** Tuning objective attached to this launch, when one was provided. */
   std::optional<double> metricValue;
-  /** Whether this launch supplied a sample used by online tuning. */
+  /** Whether this launch supplied a sample used by tuning. */
   bool measured{};
   /** Application decision, shared by all entries for this candidate. */
   mutable ConfigurationValidity valid;
@@ -125,13 +125,14 @@ runtimeMeasurementSourceName(RuntimeMeasurementSource source) noexcept
   return "host_clock";
 }
 
-/** @brief Terminal reason recorded by tuner policies. */
+/** @brief Reason exploration ended. */
 enum class TunerCompletionReason {
-  none,                         ///< No terminal state has been entered.
-  offlineReplay,                ///< Offline mode loaded a persisted winner.
-  allConfigurations,            ///< Every legal candidate was retired.
-  maximumExecutions,            ///< Fixed-mode launch guard was reached.
-  maximumRetiredConfigurations, ///< Fixed-mode retirement guard was reached.
+  none,              ///< No terminal state has been entered.
+  offlineReplay,     ///< Offline exploration loaded measured history.
+  allConfigurations, ///< Every legal candidate was retired.
+  maximumExecutions, ///< Online exploration launch guard was reached.
+  maximumRetiredConfigurations, ///< Online exploration retirement guard was
+                                ///< reached.
   /** Fixed-mode admission could not accept repeated strategy proposals. */
   maximumConsecutiveStrategyRetries,
   /** Every measured candidate was invalidated or rejected. */
@@ -185,8 +186,14 @@ completionReasonName(TunerCompletionReason reason) noexcept -> char const * {
 /** @brief Read-only snapshot of tuner policy, coverage, and diagnostics. */
 struct TunerInfo {
   SpaceInfo space;
-  /** Execution mode used by this tuner. */
-  TuningMode mode{TuningMode::onlineAdaptive};
+  /** Permission to search for new configurations. */
+  ExplorationPolicy exploration{ExplorationPolicy::online};
+  /** Whether configuration selection continues adapting. */
+  SelectionPolicy selection{SelectionPolicy::adaptive};
+  /** Whether exploration has ended, independently of continuing selection. */
+  bool explorationComplete{};
+  /** Whether a valid winner is locked for replay. */
+  bool selectionLocked{};
   /** Cartesian candidate count before restrictions are evaluated lazily. */
   std::size_t candidateCount{};
   /** Candidates permanently rejected by tuning-space restrictions. */
@@ -209,7 +216,7 @@ struct TunerInfo {
   double adaptiveHorizonProgress{};
   /** Configured online-adaptive new-run horizon, when active. */
   std::optional<std::size_t> horizon;
-  /** Configured online-fixed execution guard, if present. */
+  /** Configured online exploration execution guard, if present. */
   std::optional<std::size_t> maximumExecutions;
   /** Rejected proposals allowed in one bounded refill attempt. */
   std::size_t maximumConsecutiveStrategyRetries{};
@@ -220,13 +227,13 @@ struct TunerInfo {
   /** Measured adaptive fallbacks after bounded refill attempts were exhausted.
    */
   std::size_t adaptiveRetryFallbackCount{};
-  /** Policy completion; horizon-less adaptive mode never signals completion. */
+  /** Exploration completion; adaptive selection may continue afterward. */
   bool tuningComplete{};
-  /** Terminal reason when one exists; absent for an adaptive horizon. */
+  /** Exploration completion reason when one exists. */
   std::optional<TunerCompletionReason> completionReason;
   /** Whether compatible persistent state initialized this tuner. */
   bool loadedFromCache{};
-  /** Whether fixed mode terminated specifically at the execution guard. */
+  /** Whether exploration ended specifically at the execution guard. */
   bool executionBudgetReached{};
   /** Present after the first measured runtime below 200 microseconds. */
   std::optional<InstrumentationOverheadWarning> instrumentationOverheadWarning;

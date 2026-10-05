@@ -100,9 +100,10 @@ auto writeConfiguration() -> std::filesystem::path {
   std::filesystem::create_directories(directory);
   auto const configuration = directory / "tuning.yaml";
   std::ofstream output{configuration};
-  output << R"(schema_version: 3
+  output << R"(schema_version: 4
 tuning:
-  mode: online_fixed
+  exploration: online
+  selection: fixed
   strategy: exhaustive
   random_seed: 0
   runs_per_candidate: 2
@@ -191,7 +192,8 @@ auto main() -> int {
   // A numeric seed reproduces one context while the fingerprint separates
   // otherwise identical random strategies belonging to different contexts.
   auto contextSeedConfig = oneRunConfig();
-  contextSeedConfig.mode = alpakaTune::TuningMode::onlineAdaptive;
+  contextSeedConfig.exploration = alpakaTune::ExplorationPolicy::online;
+  contextSeedConfig.selection = alpakaTune::SelectionPolicy::adaptive;
   contextSeedConfig.strategy = alpakaTune::StrategyKind::random;
   contextSeedConfig.horizon.reset();
   contextSeedConfig.maximumExecutions.reset();
@@ -530,7 +532,8 @@ auto main() -> int {
   // A present but disabled queue has the same direct path. Its activation
   // parameters are deliberately ignored.
   auto directAdaptiveConfig = directFixedConfig;
-  directAdaptiveConfig.mode = alpakaTune::TuningMode::onlineAdaptive;
+  directAdaptiveConfig.exploration = alpakaTune::ExplorationPolicy::online;
+  directAdaptiveConfig.selection = alpakaTune::SelectionPolicy::adaptive;
   directAdaptiveConfig.queue =
       alpakaTune::QueueConfig{.disable = true,
                               .warmupRuns = 99u,
@@ -548,7 +551,7 @@ auto main() -> int {
       directAdaptiveTuner.enqueueObserved(queue, frameSpec, bundle);
   if (!directAdaptiveObservation.measured ||
       !directAdaptiveObservation.runtimeSeconds ||
-      !directAdaptiveObservation.tuningComplete ||
+      directAdaptiveObservation.tuningComplete ||
       directAdaptiveTuner.info().retiredConfigurationCount != 1u ||
       directAdaptiveTuner.candidateRuntimeSamples(0u).size() != 1u)
     return EXIT_FAILURE;
@@ -593,7 +596,8 @@ auto main() -> int {
     return EXIT_FAILURE;
 
   auto adaptiveRetryConfig = retryLimitConfig;
-  adaptiveRetryConfig.mode = alpakaTune::TuningMode::onlineAdaptive;
+  adaptiveRetryConfig.exploration = alpakaTune::ExplorationPolicy::online;
+  adaptiveRetryConfig.selection = alpakaTune::SelectionPolicy::adaptive;
   adaptiveRetryConfig.maximumExecutions.reset();
   adaptiveRetryConfig.maximumRetiredConfigurations.reset();
   adaptiveRetryConfig.maximumConsecutiveStrategyRetries = 1u;
@@ -729,7 +733,8 @@ auto main() -> int {
   // burst. Warm-ups remain queue-controlled and do not enter the rolling
   // timing window: 4 consecutive launches - 1 warm-up = 3 samples.
   auto adaptiveConfig = oneRunConfig();
-  adaptiveConfig.mode = alpakaTune::TuningMode::onlineAdaptive;
+  adaptiveConfig.exploration = alpakaTune::ExplorationPolicy::online;
+  adaptiveConfig.selection = alpakaTune::SelectionPolicy::adaptive;
   adaptiveConfig.maximumExecutions.reset();
   adaptiveConfig.maximumRetiredConfigurations.reset();
   adaptiveConfig.horizon = 4u;
@@ -746,8 +751,8 @@ auto main() -> int {
   for (std::size_t launch = 0u; launch < 4u; ++launch)
     adaptiveTuner.enqueue(queue, frameSpec, bundle);
   auto const firstAdaptiveInfo = adaptiveTuner.info();
-  if (!firstAdaptiveInfo.tuningComplete || !adaptiveTuner.completed() ||
-      !adaptiveTuner.isTuningComplete() ||
+  if (firstAdaptiveInfo.tuningComplete || adaptiveTuner.completed() ||
+      adaptiveTuner.isTuningComplete() ||
       firstAdaptiveInfo.executionCount != 4u ||
       firstAdaptiveInfo.retiredConfigurationCount != 1u ||
       adaptiveTuner.candidateRuntimeSamples(0u).size() != 3u)
@@ -789,13 +794,13 @@ auto main() -> int {
       adaptiveTuner.enqueueObserved(queue, frameSpec, bundle);
   if (!postHorizonObservation.measured ||
       !postHorizonObservation.runtimeSeconds ||
-      !postHorizonObservation.tuningComplete)
+      postHorizonObservation.tuningComplete)
     return EXIT_FAILURE;
   for (std::size_t launch = 1u; launch < 4u; ++launch)
     adaptiveTuner.enqueue(queue, frameSpec, bundle);
   auto const secondAdaptiveInfo = adaptiveTuner.info();
-  if (!secondAdaptiveInfo.tuningComplete || !adaptiveTuner.completed() ||
-      !adaptiveTuner.isTuningComplete() ||
+  if (secondAdaptiveInfo.tuningComplete || adaptiveTuner.completed() ||
+      adaptiveTuner.isTuningComplete() ||
       secondAdaptiveInfo.executionCount != 8u ||
       secondAdaptiveInfo.retiredConfigurationCount != 2u ||
       secondAdaptiveInfo.revisitAcceptedCount == 0u ||
@@ -812,8 +817,9 @@ auto main() -> int {
       return EXIT_FAILURE;
   }
   resumedAdaptiveTuner.enqueue(queue, frameSpec, bundle);
-  if (!resumedAdaptiveTuner.loadedFromCache() ||
-      !resumedAdaptiveTuner.completed() ||
+  if (resumedAdaptiveTuner.loadedFromCache() !=
+          static_cast<bool>(ALPAKA_TUNE_HAS_JSON) ||
+      resumedAdaptiveTuner.completed() ||
       resumedAdaptiveTuner.info().executionCount != 4u ||
       resumedAdaptiveTuner.info().adaptiveHorizonExecutionCount != 4u ||
       std::abs(resumedAdaptiveTuner.info().adaptiveHorizonProgress - 1.0) >
@@ -825,7 +831,8 @@ auto main() -> int {
   // no terminal completion reason, launches its recorded best, and does not
   // collect a timing sample or instantiate a strategy.
   auto offlineConfig = adaptiveConfig;
-  offlineConfig.mode = alpakaTune::TuningMode::offline;
+  offlineConfig.exploration = alpakaTune::ExplorationPolicy::offline;
+  offlineConfig.selection = alpakaTune::SelectionPolicy::fixed;
   offlineConfig.horizon.reset();
   auto offlineTuner = alpakaTune::makeTuner(offlineConfig, adaptiveTunables,
                                             device, "adaptive-burst-test");
@@ -838,7 +845,8 @@ auto main() -> int {
       !offlineObservation.tuningComplete ||
       !offlineTuner.info().tuningComplete || offlineObservation.measured ||
       offlineObservation.runtimeSeconds ||
-      offlineTuner.info().mode != alpakaTune::TuningMode::offline ||
+      offlineTuner.info().exploration !=
+          alpakaTune::ExplorationPolicy::offline ||
       offlineTuner.candidateRuntimeSamples(0u).size() != 3u)
     return EXIT_FAILURE;
 
@@ -969,8 +977,11 @@ auto main() -> int {
   }
   if (!runtimeVectorTuner.isTuningComplete() || runtimeResults.size() != 2000u)
     return EXIT_FAILURE;
+#if ALPAKA_TUNE_HAS_JSON
   auto runtimeVectorOfflineConfig = oneRunConfig();
-  runtimeVectorOfflineConfig.mode = alpakaTune::TuningMode::offline;
+  runtimeVectorOfflineConfig.exploration =
+      alpakaTune::ExplorationPolicy::offline;
+  runtimeVectorOfflineConfig.selection = alpakaTune::SelectionPolicy::fixed;
   runtimeVectorOfflineConfig.maximumExecutions.reset();
   runtimeVectorOfflineConfig.maximumRetiredConfigurations.reset();
   auto runtimeVectorOffline =
@@ -980,6 +991,8 @@ auto main() -> int {
   if (!runtimeVectorOffline.loadedFromCache() ||
       !runtimeVectorOffline.isTuningComplete())
     return EXIT_FAILURE;
+
+#endif
 
   using CompileVectorA = alpaka::CVec<std::size_t, 1u, 10u>;
   using CompileVectorB = std::integer_sequence<std::size_t, 2u, 20u>;
@@ -1003,8 +1016,11 @@ auto main() -> int {
   }
   if (!compileVectorTuner.isTuningComplete() || compileResults.size() != 2000u)
     return EXIT_FAILURE;
+#if ALPAKA_TUNE_HAS_JSON
   auto compileVectorOfflineConfig = oneRunConfig();
-  compileVectorOfflineConfig.mode = alpakaTune::TuningMode::offline;
+  compileVectorOfflineConfig.exploration =
+      alpakaTune::ExplorationPolicy::offline;
+  compileVectorOfflineConfig.selection = alpakaTune::SelectionPolicy::fixed;
   compileVectorOfflineConfig.maximumExecutions.reset();
   compileVectorOfflineConfig.maximumRetiredConfigurations.reset();
   auto compileVectorOffline =
@@ -1015,7 +1031,6 @@ auto main() -> int {
       !compileVectorOffline.isTuningComplete())
     return EXIT_FAILURE;
 
-#if ALPAKA_TUNE_HAS_JSON
   alpakaTune::flushPersistence();
   auto compactHistory = nlohmann::json{};
   auto compactHistoryInput =

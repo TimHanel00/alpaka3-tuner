@@ -1,3 +1,22 @@
+add_executable(alpakaTune_policy_tests policies.cpp)
+target_link_libraries(alpakaTune_policy_tests PRIVATE alpakaTune::alpakaTune Catch2::Catch2WithMain)
+alpaka_finalize(alpakaTune_policy_tests)
+add_test(NAME alpakaTune_policy_tests COMMAND alpakaTune_policy_tests "~[policy-process]")
+set_tests_properties(alpakaTune_policy_tests PROPERTIES TIMEOUT 120)
+if(alpakaTune_ENABLE_PERSISTENCE)
+    foreach(_phase IN ITEMS stage replay)
+        add_test(NAME alpakaTune_policy_process_${_phase} COMMAND alpakaTune_policy_tests "[policy-process]")
+        set_tests_properties(
+            alpakaTune_policy_process_${_phase}
+            PROPERTIES
+                ENVIRONMENT "ALPAKA_TUNE_POLICY_PROCESS=${_phase}"
+                WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
+        )
+    endforeach()
+    set_tests_properties(alpakaTune_policy_process_stage PROPERTIES FIXTURES_SETUP alpakaTune_policy_history)
+    set_tests_properties(alpakaTune_policy_process_replay PROPERTIES FIXTURES_REQUIRED alpakaTune_policy_history)
+endif()
+
 add_executable(alpakaTune_tuner_tests tuner.cpp)
 target_link_libraries(alpakaTune_tuner_tests PRIVATE alpakaTune::alpakaTune)
 alpaka_finalize(alpakaTune_tuner_tests)
@@ -136,7 +155,7 @@ foreach(_tutorial_variant IN ITEMS runtime compile_time)
     if(alpakaTune_ENABLE_PERSISTENCE)
         set(_tutorial_workdir "${CMAKE_CURRENT_BINARY_DIR}/tutorial-${_tutorial_variant}")
         file(MAKE_DIRECTORY "${_tutorial_workdir}")
-        foreach(_tutorial_policy IN ITEMS collect replay adaptive)
+        foreach(_tutorial_policy IN ITEMS collect replay adaptive reuse)
             add_test(
                 NAME ${_tutorial_target}_${_tutorial_policy}
                 COMMAND ${_tutorial_target} ${PROJECT_SOURCE_DIR}/docs/examples/first_tuner/${_tutorial_policy}.yaml
@@ -152,6 +171,10 @@ foreach(_tutorial_variant IN ITEMS runtime compile_time)
         )
         set_tests_properties(
             ${_tutorial_target}_replay
+            PROPERTIES FIXTURES_REQUIRED ${_tutorial_target}_history PASS_REGULAR_EXPRESSION "completed=1.*loaded=1"
+        )
+        set_tests_properties(
+            ${_tutorial_target}_reuse
             PROPERTIES FIXTURES_REQUIRED ${_tutorial_target}_history PASS_REGULAR_EXPRESSION "completed=1.*loaded=1"
         )
         set_tests_properties(

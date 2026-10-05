@@ -1,6 +1,7 @@
-schema_version: 3
+schema_version: 4
 tuning:
-  mode: online_fixed
+  exploration: online
+  selection: fixed
   strategy: exhaustive
   runs_per_candidate: 3
   minimum_runs_per_candidate: 3

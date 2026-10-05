@@ -44,7 +44,8 @@ TEST_CASE("an active strategy recommendation is accepted", "[scheduler]") {
   auto output = alpaka::onHost::allocLike(device, host);
 
   auto config = alpakaTune::TunerConfig{};
-  config.mode = alpakaTune::TuningMode::onlineAdaptive;
+  config.exploration = alpakaTune::ExplorationPolicy::online;
+  config.selection = alpakaTune::SelectionPolicy::adaptive;
   config.queue = alpakaTune::QueueConfig{.disable = false,
                                          .warmupRuns = 0u,
                                          .noiseCancellationWindow = 50u,

@@ -390,17 +390,9 @@ public:
       return MeasurementTimer::measurementSource();
   }
 
-  /** Whether the configured tuning-policy goal has been reached.
-   *
-   * Online-fixed and offline completion is terminal. Online-adaptive
-   * completion means that its optional horizon was reached; recommendation,
-   * measurement, and rolling-history updates continue afterward. Adaptive
-   * mode without a horizon never signals policy completion.
-   */
+  /** Whether exploration ended. Adaptive selection continues afterward. */
   [[nodiscard]] auto isTuningComplete() const noexcept -> bool {
-    if (m_defaults.mode == TuningMode::onlineAdaptive)
-      return adaptiveHorizonReached();
-    return m_terminal;
+    return m_explorationComplete;
   }
   /** Backward-compatible policy-completion query.
    *
@@ -409,19 +401,12 @@ public:
   [[nodiscard]] auto completed() const noexcept -> bool {
     return isTuningComplete();
   }
-  /** @brief Explain why an actual terminal state was entered.
-   *
-   * This is a post-completion diagnostic, not a configuration input or a
-   * general status field.
-   *
-   * @throws std::logic_error if no terminal state exists. Reaching the
-   * adaptive schedule horizon makes isTuningComplete() true but does not
-   * create a terminal reason.
+  /** @brief Explain why exploration ended.
+   * @throws std::logic_error while exploration remains active.
    */
   [[nodiscard]] auto completionReason() const -> TunerCompletionReason {
-    if (!m_terminal)
-      throw std::logic_error{
-          "The tuner has not entered a terminal completion state."};
+    if (!m_explorationComplete)
+      throw std::logic_error{"Exploration has not completed."};
     return m_completionReason;
   }
   /** @brief Whether compatible persistence initialized this tuner. */
@@ -433,17 +418,19 @@ public:
   [[nodiscard]] auto strategyKind() const noexcept -> StrategyKind {
     return m_defaults.strategy;
   }
-  /** @brief Return the terminal winner's Cartesian index.
-   * @throws std::logic_error before completion or after winnerless termination.
+  /** @brief Return the current measured winner's Cartesian index.
+   * @throws std::logic_error before exploration completion or without a valid
+   * winner.
    */
   [[nodiscard]] auto bestCandidateIndex() const -> std::size_t {
-    if (!m_terminal)
-      throw std::logic_error{"The tuner has no measured winner."};
+    if (!m_explorationComplete)
+      throw std::logic_error{"Exploration has not completed."};
     if (auto const best = currentBestCandidate())
       return *best;
     throw std::logic_error{"The tuner has no measured winner."};
   }
-  /** @brief Return the terminal winner's normalized parameter vector. */
+  /** @brief Return the current measured winner's normalized parameter vector.
+   */
   [[nodiscard]] auto bestConfiguration() const -> ParameterConfiguration {
     return candidateConfiguration(bestCandidateIndex());
   }
@@ -487,7 +474,10 @@ public:
           candidateUsable(candidate) && !m_histories.at(candidate).empty())
         ++measured;
     auto result = TunerInfo{
-        .mode = m_defaults.mode,
+        .exploration = m_defaults.exploration,
+        .selection = m_defaults.selection,
+        .explorationComplete = m_explorationComplete,
+        .selectionLocked = m_terminal && currentBestCandidate().has_value(),
         .candidateCount = m_candidateCount,
         .rejectedCandidateCount = m_rejectedCount,
         .userInvalidatedCandidateCount = m_userInvalidatedCount,
@@ -497,10 +487,11 @@ public:
         .retiredConfigurationCount = m_retiredConfigurationCount,
         .executionCount = m_executionCount,
         .adaptiveHorizonExecutionCount = m_adaptiveHorizonExecutionCount,
-        .adaptiveHorizonProgress = m_defaults.mode == TuningMode::onlineAdaptive
-                                       ? adaptiveProgress()
-                                       : 0.0,
-        .horizon = m_defaults.mode == TuningMode::onlineAdaptive
+        .adaptiveHorizonProgress =
+            m_defaults.selection == SelectionPolicy::adaptive
+                ? adaptiveProgress()
+                : 0.0,
+        .horizon = m_defaults.selection == SelectionPolicy::adaptive
                        ? m_defaults.horizon
                        : std::nullopt,
         .maximumExecutions = m_defaults.maximumExecutions,
@@ -511,7 +502,7 @@ public:
         .adaptiveRetryFallbackCount = m_adaptiveRetryFallbackCount,
         .tuningComplete = isTuningComplete(),
         .completionReason =
-            m_terminal
+            m_explorationComplete
                 ? std::optional<TunerCompletionReason>{m_completionReason}
                 : std::nullopt,
         .loadedFromCache = m_loadedFromCache,
@@ -633,7 +624,7 @@ public:
   void enqueue(Queue const &queue, FrameSpec const &frameSpec,
                alpaka::KernelBundle<Kernel, Args...> const &prototype) {
     if (m_defaults.replayFastPath &&
-        (m_terminal || m_defaults.mode == TuningMode::offline) &&
+        (m_terminal || m_defaults.exploration == ExplorationPolicy::offline) &&
         tryFastReplay(queue, frameSpec, prototype))
       return;
     static_cast<void>(enqueueObserved(queue, frameSpec, prototype));
@@ -681,11 +672,9 @@ public:
             "offline or online-fixed winner."};
     }
 
-    if (m_defaults.mode == TuningMode::onlineFixed && !m_terminal &&
-        executionBudgetReached())
+    if (!m_explorationComplete && executionBudgetReached())
       finishTuningAtBudget(TunerCompletionReason::maximumExecutions);
-    if (m_defaults.mode == TuningMode::onlineFixed && !m_terminal &&
-        retiredConfigurationBudgetReached())
+    if (!m_explorationComplete && retiredConfigurationBudgetReached())
       finishTuningAtBudget(TunerCompletionReason::maximumRetiredConfigurations);
 
     using Bundle = std::remove_cvref_t<decltype(prototype)>;
@@ -694,6 +683,7 @@ public:
         m_terminal ? detail::CandidateQueue::Selection{m_bestCandidate, false,
                                                        false, false}
                    : nextCandidate();
+    auto const reuseLaunch = m_explorationComplete && !m_terminal;
     auto const candidate = selection.candidateIndex;
     LaunchCall<Queue, FrameSpec, Bundle> call{.tuner = this,
                                               .queue = &queue,
@@ -705,6 +695,11 @@ public:
         &call, candidate, selection.measure, selection.beginActivation,
         selection.endActivation, !(m_defaults.replayFastPath && m_terminal));
     auto const executionIndex = recordExecution(candidate, call.runtimeSeconds);
+    if (reuseLaunch) {
+      ++m_reuseLaunchCount;
+      if (m_reuseLaunchCount % m_defaults.adaptiveProbeInterval == 0u)
+        m_nextProbeCandidate = (candidate + 1u) % m_candidateCount;
+    }
     if constexpr (usesCustomMetric)
       m_pendingMetric =
           PendingMetric{.executionIndex = executionIndex,
@@ -713,8 +708,8 @@ public:
                         .beginActivation = selection.beginActivation,
                         .endActivation = selection.endActivation};
 
-    if (m_defaults.mode == TuningMode::onlineFixed && !m_terminal && m_queue &&
-        m_queue->empty() && allFixedCandidatesAdmitted())
+    if (m_defaults.selection == SelectionPolicy::fixed && !m_terminal &&
+        m_queue && m_queue->empty() && allFixedCandidatesAdmitted())
       finishTuning();
 
     auto const tunerInfo = info();
@@ -1047,15 +1042,32 @@ private:
     resizeCandidateStorage();
   }
 
+  [[nodiscard]] auto finishResolvedCatalog() -> bool {
+    if (m_explorationComplete || !m_space.usesCandidateCatalog() ||
+        m_space.canExpand())
+      return false;
+    for (std::size_t candidate = 0u; candidate < m_candidateCount; ++candidate)
+      if (!m_rejected.at(candidate) && candidateUsable(candidate) &&
+          (m_histories.at(candidate).empty() ||
+           (m_defaults.selection == SelectionPolicy::fixed &&
+            !m_histories.at(candidate).isFinished())))
+        return false;
+    finishTuning();
+    return true;
+  }
+
   void applySpaceFeedback() {
-    if (!m_refinementPending || m_defaults.mode == TuningMode::offline)
+    if (!m_refinementPending || m_explorationComplete ||
+        m_defaults.exploration == ExplorationPolicy::offline)
       return;
     m_refinementPending = false;
     expandSpace();
+    static_cast<void>(finishResolvedCatalog());
   }
 
   void replenishResolvedSpace() {
-    if (!m_space.canExpand() || m_defaults.mode == TuningMode::offline)
+    if (!m_space.canExpand() || m_explorationComplete ||
+        m_defaults.exploration == ExplorationPolicy::offline)
       return;
     for (std::size_t id{}; id < m_candidateCount; ++id)
       if (!m_rejected[id] && candidateUsable(id) &&
@@ -1522,7 +1534,7 @@ private:
   void removeCandidateFromSchedulers(std::size_t candidate) {
     if (m_queue)
       static_cast<void>(m_queue->retire(candidate));
-    if (m_defaults.mode == TuningMode::onlineAdaptive &&
+    if (m_defaults.selection == SelectionPolicy::adaptive &&
         m_scheduled.at(candidate)) {
       m_scheduled.at(candidate) = false;
       --m_scheduledCount;
@@ -1588,7 +1600,7 @@ private:
       removeCandidateFromSchedulers(pending.candidateIndex);
       rebuildBestAfterCandidateRemoval();
     }
-    if (m_defaults.mode == TuningMode::onlineFixed &&
+    if (m_defaults.selection == SelectionPolicy::fixed &&
         allFixedCandidatesResolved()) {
       finishTuning();
       return;
@@ -1628,12 +1640,12 @@ private:
 
     auto &history = m_histories.at(candidate);
     auto const revisit = !history.empty();
-    if (revisit && m_defaults.mode == TuningMode::onlineFixed &&
+    if (revisit && m_defaults.selection == SelectionPolicy::fixed &&
         history.isFinished()) {
       ++m_revisitRejectedCount;
       return RecommendationDisposition::revisitRejected;
     }
-    if (revisit && m_defaults.mode == TuningMode::onlineAdaptive) {
+    if (revisit && m_defaults.selection == SelectionPolicy::adaptive) {
       if (m_defaults.horizon) {
         auto const progress = adaptiveProgress();
         auto const revisitProbability = detail::normalizedLogisticAdmission(
@@ -1662,7 +1674,7 @@ private:
       ++m_activeDuplicateAcceptedCount;
       return RecommendationDisposition::activeDuplicate;
     }
-    if (revisit && m_defaults.mode == TuningMode::onlineAdaptive) {
+    if (revisit && m_defaults.selection == SelectionPolicy::adaptive) {
       history.reopen();
       ++m_revisitAcceptedCount;
     } else if (!revisit) {
@@ -1690,13 +1702,7 @@ private:
             m_defaults.ciRelativeWidth,
             m_defaults.outlierMadScale,
             m_defaults.historyWindowSize,
-            m_defaults.mode == TuningMode::onlineFixed};
-  }
-
-  /** @brief Whether this online-adaptive run reached its schedule horizon. */
-  [[nodiscard]] auto adaptiveHorizonReached() const noexcept -> bool {
-    return m_defaults.horizon &&
-           m_adaptiveHorizonExecutionCount >= *m_defaults.horizon;
+            m_defaults.selection == SelectionPolicy::fixed};
   }
 
   /** @brief Whether the online-fixed execution guard has been reached. */
@@ -1720,7 +1726,8 @@ private:
     for (std::size_t candidate = 0u; candidate < m_histories.size();
          ++candidate) {
       auto const &history = m_histories.at(candidate);
-      if (!candidateUsable(candidate) || history.empty())
+      if (!candidateUsable(candidate) || m_rejected.at(candidate) ||
+          history.empty())
         continue;
       auto const estimate = history.statistics().estimate();
       if (estimate < bestEstimate) {
@@ -1824,7 +1831,7 @@ private:
       return id < m_tuner.m_candidateCount && !m_tuner.m_rejected.at(id) &&
              m_tuner.candidateUsable(id) &&
              (!m_tuner.m_queue || !m_tuner.m_queue->contains(id)) &&
-             (m_tuner.m_defaults.mode != TuningMode::onlineFixed ||
+             (m_tuner.m_defaults.selection != SelectionPolicy::fixed ||
               !m_tuner.m_histories.at(id).isFinished());
     }
     [[nodiscard]] auto candidateValid(std::size_t id) const -> bool override {
@@ -1848,7 +1855,7 @@ private:
   /** @brief Request and process exactly one strategy recommendation. */
   [[nodiscard]] auto recommendCandidate()
       -> std::optional<CandidateRecommendation> {
-    if (m_queue && m_defaults.mode == TuningMode::onlineFixed &&
+    if (m_queue && m_defaults.selection == SelectionPolicy::fixed &&
         allFixedCandidatesAdmitted())
       return std::nullopt;
     auto const start = std::chrono::steady_clock::now();
@@ -1914,15 +1921,19 @@ private:
     auto const compactLoaded = loadHistory();
     auto const completeLoaded = loadCompleteHistory();
     auto const loaded = compactLoaded || completeLoaded;
-    if (loaded && m_defaults.mode != TuningMode::offline)
+    if (loaded && (m_defaults.exploration == ExplorationPolicy::online ||
+                   m_defaults.selection == SelectionPolicy::adaptive))
       prepareOnlineRunWithLoadedHistory();
     m_loadedFromCache = loaded || m_loadedLearnedAdapterState.has_value();
-    if (m_defaults.mode == TuningMode::offline) {
-      if (!loaded)
+    if (m_defaults.exploration == ExplorationPolicy::offline) {
+      validateKnownCandidates();
+      if (!loaded || !currentBestCandidate())
         throw std::runtime_error{
             "Offline tuning requires a compatible history with at least one "
             "measured configuration."};
-      m_terminal = true;
+      m_explorationComplete = true;
+      m_terminal = m_defaults.selection == SelectionPolicy::fixed;
+      m_bestCandidate = *currentBestCandidate();
       m_completionReason = TunerCompletionReason::offlineReplay;
       return;
     }
@@ -2001,6 +2012,9 @@ private:
     m_bestCandidate = std::numeric_limits<std::size_t>::max();
     m_completionReason = TunerCompletionReason::none;
     m_terminal = false;
+    m_explorationComplete = false;
+    m_reuseLaunchCount = 0u;
+    m_nextProbeCandidate = 0u;
     m_executionBudgetReached = false;
     m_startedAtUnixSeconds =
         std::chrono::duration<double>{
@@ -2018,21 +2032,21 @@ private:
    */
   void refillQueue() {
     applySpaceFeedback();
-    if (!m_queue || m_terminal)
+    if (!m_queue || m_terminal || m_explorationComplete)
       return;
-    if (m_defaults.mode == TuningMode::onlineFixed &&
+    if (m_defaults.selection == SelectionPolicy::fixed &&
         allFixedCandidatesResolved()) {
       finishTuning();
       return;
     }
     while (!m_queue->full()) {
-      if (m_defaults.mode == TuningMode::onlineFixed &&
+      if (m_defaults.selection == SelectionPolicy::fixed &&
           allFixedCandidatesAdmitted())
         return;
       if (m_consecutiveStrategyRetries >=
           m_defaults.maximumConsecutiveStrategyRetries) {
         if (m_queue->empty()) {
-          if (m_defaults.mode == TuningMode::onlineAdaptive) {
+          if (m_defaults.selection == SelectionPolicy::adaptive) {
             if (auto const fallback = prepareAdaptiveRetryFallback()) {
               if (!m_queue->insert(*fallback))
                 throw std::logic_error{
@@ -2122,16 +2136,18 @@ private:
   /** @brief Obtain one accepted strategy result without queue residency. */
   [[nodiscard]] auto nextDirectCandidate()
       -> detail::CandidateQueue::Selection {
-    while (!m_terminal) {
+    while (!m_explorationComplete) {
       applySpaceFeedback();
-      if (m_defaults.mode == TuningMode::onlineFixed &&
+      if (m_explorationComplete)
+        break;
+      if (m_defaults.selection == SelectionPolicy::fixed &&
           allFixedCandidatesResolved()) {
         finishTuning();
         break;
       }
       if (m_consecutiveStrategyRetries >=
           m_defaults.maximumConsecutiveStrategyRetries) {
-        if (m_defaults.mode == TuningMode::onlineAdaptive) {
+        if (m_defaults.selection == SelectionPolicy::adaptive) {
           if (auto const fallback = prepareAdaptiveRetryFallback())
             return {*fallback, true, true, true};
         } else {
@@ -2153,14 +2169,65 @@ private:
     if (m_bestCandidate == std::numeric_limits<std::size_t>::max())
       throw std::invalid_argument{
           "No valid measured configuration is available to launch."};
+    if (!m_terminal)
+      return nextKnownCandidate();
     return {m_bestCandidate, false, false, false};
+  }
+
+  void validateKnownCandidates() {
+    for (std::size_t candidate = 0u; candidate < m_candidateCount;
+         ++candidate) {
+      if (m_histories.at(candidate).empty() || !candidateUsable(candidate) ||
+          m_rejected.at(candidate))
+        continue;
+      if (!candidateAccepted(indicesFor(candidate)) ||
+          (m_launchValidator &&
+           !m_launchValidator(*this, indicesFor(candidate)))) {
+        m_rejected.at(candidate) = true;
+        ++m_rejectedCount;
+      }
+    }
+  }
+
+  /** @brief Select the incumbent or a periodic measured known alternative. */
+  [[nodiscard]] auto nextKnownCandidate() -> detail::CandidateQueue::Selection {
+    validateKnownCandidates();
+    auto const best = currentBestCandidate();
+    if (!best) {
+      m_terminal = true;
+      m_completionReason = TunerCompletionReason::noValidConfiguration;
+      writeCache();
+      throw std::logic_error{
+          "No valid measured configuration is available to launch."};
+    }
+    auto candidate = *best;
+    if ((m_reuseLaunchCount + 1u) % m_defaults.adaptiveProbeInterval == 0u) {
+      for (std::size_t offset = 0u; offset < m_candidateCount; ++offset) {
+        auto const alternative =
+            (m_nextProbeCandidate + offset) % m_candidateCount;
+        if (alternative != *best && candidateUsable(alternative) &&
+            !m_rejected.at(alternative) &&
+            !m_histories.at(alternative).empty() &&
+            candidateAccepted(indicesFor(alternative)) &&
+            (!m_launchValidator ||
+             m_launchValidator(*this, indicesFor(alternative)))) {
+          candidate = alternative;
+          break;
+        }
+      }
+    }
+    return {candidate, true, true, true};
   }
 
   /** @brief Select an admitted candidate or a terminal winner replay. */
   [[nodiscard]] auto nextCandidate() -> detail::CandidateQueue::Selection {
+    if (m_explorationComplete && !m_terminal)
+      return nextKnownCandidate();
     if (!m_queue)
       return nextDirectCandidate();
     refillQueue();
+    if (m_explorationComplete && !m_terminal)
+      return nextKnownCandidate();
     if (m_terminal) {
       if (m_bestCandidate == std::numeric_limits<std::size_t>::max())
         throw std::logic_error{
@@ -2562,7 +2629,8 @@ private:
 
     if (trackExecution) {
       ++m_executionCount;
-      if (m_defaults.mode == TuningMode::onlineAdaptive)
+      if (!m_explorationComplete &&
+          m_defaults.selection == SelectionPolicy::adaptive)
         ++m_adaptiveHorizonExecutionCount;
     }
     if (!measure) {
@@ -2590,12 +2658,21 @@ private:
   void recordMetric(std::size_t candidate, double value, bool beginActivation,
                     bool endActivation) {
     auto &history = m_histories.at(candidate);
+    if (m_explorationComplete &&
+        m_defaults.selection == SelectionPolicy::adaptive) {
+      history.reopen();
+      history.beginActivation(false);
+      static_cast<void>(history.record(value));
+      history.retire(detail::RuntimeCompletion::adaptiveVisit);
+      stageCache(candidate, true);
+      return;
+    }
     if (beginActivation)
       history.beginActivation();
     static_cast<void>(history.record(value));
-    if (m_defaults.mode == TuningMode::onlineFixed)
+    if (m_defaults.selection == SelectionPolicy::fixed)
       retireByMannWhitneyIfWarranted(candidate);
-    if (m_defaults.mode == TuningMode::onlineAdaptive && endActivation)
+    if (m_defaults.selection == SelectionPolicy::adaptive && endActivation)
       history.retire(detail::RuntimeCompletion::adaptiveVisit);
     auto const schedulingChanged = history.isFinished();
     auto const completedScore = history.statistics().estimate();
@@ -2606,26 +2683,26 @@ private:
       if (m_queue && !m_queue->retire(candidate))
         throw std::logic_error{
             "The completed configuration was not active in the queue."};
-      if (m_defaults.mode == TuningMode::onlineAdaptive) {
+      if (m_defaults.selection == SelectionPolicy::adaptive) {
         m_scheduled.at(candidate) = false;
         --m_scheduledCount;
       }
     }
-    if (m_defaults.mode == TuningMode::onlineFixed &&
-        executionBudgetReached()) {
+    if (!m_explorationComplete && executionBudgetReached()) {
       finishTuningAtBudget(TunerCompletionReason::maximumExecutions);
       return;
     }
-    if (m_defaults.mode == TuningMode::onlineFixed &&
-        retiredConfigurationBudgetReached()) {
+    if (!m_explorationComplete && retiredConfigurationBudgetReached()) {
       finishTuningAtBudget(TunerCompletionReason::maximumRetiredConfigurations);
       return;
     }
+    if (schedulingChanged && finishResolvedCatalog())
+      return;
     if (schedulingChanged && m_queue) {
       m_consecutiveStrategyRetries = 0u;
       refillQueue();
     }
-    if (m_defaults.mode == TuningMode::onlineFixed && !m_queue &&
+    if (m_defaults.selection == SelectionPolicy::fixed && !m_queue &&
         allFixedCandidatesResolved()) {
       finishTuning();
       return;
@@ -2990,7 +3067,7 @@ private:
     m_retiredConfigurationCount = restoredCount;
     m_scheduled.assign(m_candidateCount, false);
     m_scheduledCount = 0u;
-    if (m_defaults.mode == TuningMode::onlineFixed) {
+    if (m_defaults.selection == SelectionPolicy::fixed) {
       for (std::size_t candidate = 0u; candidate < m_candidateCount;
            ++candidate) {
         if (!m_histories.at(candidate).empty()) {
@@ -3105,7 +3182,7 @@ private:
       }
       m_scheduled.assign(m_candidateCount, false);
       m_scheduledCount = 0u;
-      if (m_defaults.mode == TuningMode::onlineFixed) {
+      if (m_defaults.selection == SelectionPolicy::fixed) {
         for (std::size_t candidate = 0u; candidate < m_candidateCount;
              ++candidate) {
           if (m_rejected.at(candidate) || m_userInvalidated.at(candidate) ||
@@ -3151,10 +3228,10 @@ private:
     m_executionCount = storedExecutionCount;
     m_startedAtUnixSeconds = cache.value("started_at_unix_seconds", 0.0);
     loadCompleteLearnedAdapter(cache);
-    if (m_defaults.mode == TuningMode::offline) {
+    if (m_defaults.exploration == ExplorationPolicy::offline) {
       m_terminal = true;
       m_completionReason = TunerCompletionReason::offlineReplay;
-    } else if (m_defaults.mode == TuningMode::onlineFixed &&
+    } else if (m_defaults.selection == SelectionPolicy::fixed &&
                completionReason != TunerCompletionReason::none) {
       m_terminal = true;
       m_completionReason = completionReason;
@@ -3168,6 +3245,13 @@ private:
 #else
     return false;
 #endif
+  }
+
+  void clearExplorationQueue() {
+    m_queue.reset();
+    m_scheduled.assign(m_candidateCount, false);
+    m_scheduledCount = 0u;
+    m_refinementPending = false;
   }
 
   void finishTuning() {
@@ -3188,7 +3272,9 @@ private:
       }
     }
     m_bestCandidate = best.value_or(std::numeric_limits<std::size_t>::max());
-    m_terminal = true;
+    m_explorationComplete = true;
+    m_terminal = m_defaults.selection == SelectionPolicy::fixed || !best;
+    clearExplorationQueue();
     m_completionReason = best ? spaceCompletionReason()
                               : TunerCompletionReason::noValidConfiguration;
     writeCache();
@@ -3203,11 +3289,12 @@ private:
       throw std::logic_error{"The tuning completion limit was reached before "
                              "any candidate was measured."};
     m_bestCandidate = *best;
-    m_terminal = true;
+    m_explorationComplete = true;
+    m_terminal = m_defaults.selection == SelectionPolicy::fixed;
     m_completionReason = reason;
     m_executionBudgetReached =
         reason == TunerCompletionReason::maximumExecutions;
-    m_queue.reset();
+    clearExplorationQueue();
     writeCache();
   }
 
@@ -3223,8 +3310,10 @@ private:
               ? TunerCompletionReason::maximumConsecutiveStrategyRetries
               : TunerCompletionReason::noValidConfiguration;
     }
-    m_terminal = true;
-    m_queue.reset();
+    m_explorationComplete = true;
+    m_terminal = m_defaults.selection == SelectionPolicy::fixed ||
+                 !currentBestCandidate();
+    clearExplorationQueue();
     writeCache();
   }
 
@@ -3548,24 +3637,37 @@ private:
          std::string{strategyName(m_defaults.learnedFallback)}}};
     auto const *learned =
         dynamic_cast<LearnedHybridStrategy const *>(m_strategy.get());
-    if (learned == nullptr)
+    auto const *stored = m_loadedLearnedAdapterState
+                             ? &*m_loadedLearnedAdapterState
+                         : m_loadedCompleteLearnedAdapterState
+                             ? &*m_loadedCompleteLearnedAdapterState
+                             : nullptr;
+    if (learned == nullptr && stored == nullptr)
       return result;
-    result["status"] = learnedHybridStatusName(learned->status());
-    result["artifact_load_status"] =
-        learnedModelLoadStatusName(learned->artifactLoadStatus());
-    result["status_message"] = learned->statusMessage();
-    result["initialization_seconds"] = learned->initializationSeconds();
-    result["cached_candidate_count"] = learned->cachedCandidateCount();
-    result["candidate_pool_capacity"] = learned->candidatePoolCapacity();
-    result["candidate_batch_size"] = learned->candidateBatchSize();
-    result["peak_cached_candidate_count"] = learned->peakCachedCandidateCount();
-    result["scored_candidate_count"] = learned->scoredCandidateCount();
-    result["pool_refill_count"] = learned->poolRefillCount();
-    result["candidate_stream_exhausted"] = learned->candidateStreamExhausted();
-    result["incorporated_observation_count"] =
-        learned->incorporatedObservationCount();
-    result["adapter_update_count"] = learned->adapterUpdateCount();
-    auto const state = learned->residualAdapterState();
+    if (learned != nullptr) {
+      result["status"] = learnedHybridStatusName(learned->status());
+      result["artifact_load_status"] =
+          learnedModelLoadStatusName(learned->artifactLoadStatus());
+      result["status_message"] = learned->statusMessage();
+      result["initialization_seconds"] = learned->initializationSeconds();
+      result["cached_candidate_count"] = learned->cachedCandidateCount();
+      result["candidate_pool_capacity"] = learned->candidatePoolCapacity();
+      result["candidate_batch_size"] = learned->candidateBatchSize();
+      result["peak_cached_candidate_count"] =
+          learned->peakCachedCandidateCount();
+      result["scored_candidate_count"] = learned->scoredCandidateCount();
+      result["pool_refill_count"] = learned->poolRefillCount();
+      result["candidate_stream_exhausted"] =
+          learned->candidateStreamExhausted();
+      result["incorporated_observation_count"] =
+          learned->incorporatedObservationCount();
+      result["adapter_update_count"] = learned->adapterUpdateCount();
+    } else {
+      result["status"] = "known_reuse";
+      result["adapter_update_count"] = stored->updateCount;
+    }
+    auto const state =
+        learned != nullptr ? learned->residualAdapterState() : *stored;
     auto adapter = nlohmann::json{
         {"state_version", 1},
         {"coefficients", state.coefficients},
@@ -3586,7 +3688,8 @@ private:
       -> std::optional<nlohmann::json> {
     if (m_defaults.strategy != StrategyKind::learnedHybrid)
       return std::nullopt;
-    if (learning.value("status", std::string{}) != "active" ||
+    auto const status = learning.value("status", std::string{});
+    if ((status != "active" && status != "known_reuse") ||
         !learning.contains("residual_adapter"))
       return std::nullopt;
     auto adapter = learning.at("residual_adapter");
@@ -3702,12 +3805,17 @@ private:
         {"metric",
          {{"kind", tuningMetricKindName(metricKind())},
           {"name", m_metricName}}},
-        {"mode", std::string{tuningModeName(m_defaults.mode)}},
+        {"exploration",
+         std::string{explorationPolicyName(m_defaults.exploration)}},
+        {"selection", std::string{selectionPolicyName(m_defaults.selection)}},
         {"strategy", std::string{strategyName(m_defaults.strategy)}},
         {"model_context", serializedLearnedModelContext()}};
-    cache["policy"] = {{"history_window_size", m_defaults.historyWindowSize},
-                       {"maximum_consecutive_strategy_retries",
-                        m_defaults.maximumConsecutiveStrategyRetries}};
+    cache["exploration_complete"] = m_explorationComplete;
+    cache["policy"] = {
+        {"adaptive_probe_interval", m_defaults.adaptiveProbeInterval},
+        {"history_window_size", m_defaults.historyWindowSize},
+        {"maximum_consecutive_strategy_retries",
+         m_defaults.maximumConsecutiveStrategyRetries}};
     if (m_space.usesCandidateCatalog())
       cache["policy"]["space"] = {
           {"initial_candidates", m_defaults.space.initialCandidates},
@@ -3731,7 +3839,7 @@ private:
            m_defaults.queue->noiseCancellationWindow},
           {"max_consecutive_runs", m_defaults.queue->maxConsecutiveRuns}};
     }
-    if (m_defaults.mode == TuningMode::onlineAdaptive) {
+    if (m_defaults.selection == SelectionPolicy::adaptive) {
       cache["policy"]["horizon"] = m_defaults.horizon
                                        ? nlohmann::json{*m_defaults.horizon}
                                        : nlohmann::json{nullptr};
@@ -3746,7 +3854,7 @@ private:
     cache["admission"] = serializedAdmissionStatus();
     if (learning)
       cache["learning"] = *learning;
-    if (m_defaults.mode == TuningMode::onlineFixed) {
+    if (m_defaults.exploration == ExplorationPolicy::online) {
       if (m_defaults.maximumExecutions)
         cache["limits"]["maximum_executions"] = *m_defaults.maximumExecutions;
       else
@@ -3880,6 +3988,9 @@ private:
   double m_recommendationSecondsSinceLastLaunch{};
   TunerCompletionReason m_completionReason{TunerCompletionReason::none};
   /** Terminal replay state, intentionally independent of adaptive horizon. */
+  bool m_explorationComplete{};
+  std::size_t m_reuseLaunchCount{};
+  std::size_t m_nextProbeCandidate{};
   bool m_terminal{};
   bool m_schedulingInitialised{};
   bool m_loadedFromCache{};

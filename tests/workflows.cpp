@@ -31,8 +31,9 @@ void require(bool condition, std::string const &message) {
 auto configFor(std::filesystem::path const &directory, std::string const &name,
                bool replay) -> alpakaTune::TunerConfig {
   auto config = alpakaTune::TunerConfig{};
-  config.mode = replay ? alpakaTune::TuningMode::offline
-                       : alpakaTune::TuningMode::onlineFixed;
+  config.exploration = replay ? alpakaTune::ExplorationPolicy::offline
+                              : alpakaTune::ExplorationPolicy::online;
+  config.selection = alpakaTune::SelectionPolicy::fixed;
   config.replayFastPath = true;
   config.strategy = alpakaTune::StrategyKind::exhaustive;
   config.queue = alpakaTune::QueueConfig{.warmupRuns = 1u,

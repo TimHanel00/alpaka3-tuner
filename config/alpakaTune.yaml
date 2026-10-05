@@ -1,9 +1,10 @@
 # Default alpakaTune tuner configuration.
-schema_version: 3
+schema_version: 4
 tuning:
-  # offline, online_fixed, or online_adaptive
-  mode: online_adaptive
-  # Offline and post-completion online_fixed replay may opt into a production
+  # Exploration: online or offline; selection: adaptive or fixed.
+  exploration: online
+  selection: adaptive
+  # Fixed selection after exploration completes may opt into a production
   # path with no timing events, observations, or history bookkeeping.
   replay_fast_path: false
   # exhaustive, random, simulated_annealing, bayesian_optimization, or learned_hybrid
@@ -26,10 +27,13 @@ tuning:
   mann_whitney_alpha: 0.05
   # Bound consecutive rejected strategy proposals in one admission attempt.
   maximum_consecutive_strategy_retries: 20
-  # online_adaptive-only revisit-probability and temperature horizon. It does
+  # Online/adaptive revisit-probability and temperature horizon. It does
   # not terminate tuning. The surrounding application owns its run count.
   horizon: 40000
-  # online_fixed-only alternative guard:
+  # End search independently; adaptive selection continues using known results.
+  maximum_executions: 40000
+  adaptive_probe_interval: 10
+  # Alternative online exploration guard:
   # maximum_retired_configurations: 100000
   # Retain a rolling window per configuration independently of revisit count.
   history_window_size: 10

@@ -41,7 +41,8 @@ auto hostDevice() {
 }
 auto configFor(bool queued = false) {
   auto config = alpakaTune::TunerConfig{};
-  config.mode = alpakaTune::TuningMode::onlineFixed;
+  config.exploration = alpakaTune::ExplorationPolicy::online;
+  config.selection = alpakaTune::SelectionPolicy::fixed;
   config.strategy = alpakaTune::StrategyKind::exhaustive;
   config.runsPerCandidate = config.minimumRunsPerCandidate = 1u;
   config.mannWhitneyEarlyStop = false;
@@ -292,7 +293,8 @@ TEST_CASE("adaptive revisits continue after growth reaches its budget",
   auto launch =
       alpaka::onHost::FrameSpec{Vec{1u}, Vec{1u}, alpaka::exec::cpuSerial};
   auto config = configFor();
-  config.mode = alpakaTune::TuningMode::onlineAdaptive;
+  config.exploration = alpakaTune::ExplorationPolicy::online;
+  config.selection = alpakaTune::SelectionPolicy::adaptive;
   config.maximumExecutions.reset();
   config.space.maximumCandidates = 3u;
   auto tunables = alpakaTune::TunableBundle{
@@ -303,8 +305,10 @@ TEST_CASE("adaptive revisits continue after growth reaches its budget",
     tuner.enqueue(queue, launch, alpaka::KernelBundle{Kernel{}, value});
     tuner.provideMetric(run > 9u ? 2.0 : 1.0);
   }
-  CHECK_FALSE(tuner.completed());
-  CHECK(tuner.info().revisitAcceptedCount > 0u);
+  CHECK(tuner.completed());
+  CHECK_FALSE(tuner.info().selectionLocked);
+  CHECK(tuner.lastConfig().measured);
+  CHECK(tuner.info().unseenAcceptedCount == 3u);
   CHECK(tuner.info().space.distinctMeasuredCandidateCount == 3u);
   CHECK(tuner.info().space.state == alpakaTune::SpaceState::candidateBudget);
   alpaka::onHost::wait(queue);
@@ -378,7 +382,8 @@ TEST_CASE(
       best = tuner.bestCandidateIndex();
       alpakaTune::flushPersistence();
     }
-    config.mode = alpakaTune::TuningMode::offline;
+    config.exploration = alpakaTune::ExplorationPolicy::offline;
+    config.selection = alpakaTune::SelectionPolicy::fixed;
     config.maximumExecutions.reset();
     config.history.read = compact;
     config.history.write = false;

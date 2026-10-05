@@ -204,7 +204,7 @@ class FullCoverageConfigurationTest(unittest.TestCase):
         )
 
         self.assertEqual(generated["tuning"]["strategy"], "exhaustive")
-        self.assertEqual(generated["tuning"]["mode"], "online_fixed")
+        self.assertEqual(generated["tuning"]["selection"], "fixed")
         for key, value in run.FULL_COVERAGE_TUNING.items():
             self.assertEqual(generated["tuning"][key], value)
         for key, value in run.FULL_COVERAGE_QUEUE.items():
@@ -275,7 +275,7 @@ class LearnedConfigurationTest(unittest.TestCase):
             )
 
         self.assertEqual(learned["learning"]["model"], str(model.resolve()))
-        self.assertEqual(learned["tuning"]["mode"], "online_fixed")
+        self.assertEqual(learned["tuning"]["selection"], "fixed")
         self.assertEqual(learned["learning"]["candidate_pool_size"], 64)
         self.assertEqual(learned["learning"]["candidate_batch_size"], 16)
         self.assertNotIn("model", random["learning"])
@@ -360,6 +360,15 @@ class HistoryInspectionTest(unittest.TestCase):
         self.assertEqual(diagnostics["messages"], [])
         self.assertEqual(diagnostics["contexts"][0]["legal_candidate_count"], 3)
         self.assertEqual(diagnostics["contexts"][0]["coverage"], 1.0)
+
+    def test_adaptive_search_completion_does_not_lock_selection(self) -> None:
+        context = self.context("maximum_executions", 2, [False, False, False])
+        context["metadata"].update(exploration="online", selection="adaptive")
+        context["exploration_complete"] = True
+        diagnostics = self.inspect(context)
+        self.assertTrue(diagnostics["valid"])
+        self.assertTrue(diagnostics["contexts"][0]["exploration_complete"])
+        self.assertFalse(diagnostics["all_contexts_terminal"])
 
     def test_non_terminal_history_is_rejected_by_terminal_mode(self) -> None:
         diagnostics = self.inspect(

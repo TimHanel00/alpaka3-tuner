@@ -1,11 +1,13 @@
-schema_version: 3
+schema_version: 4
 tuning:
-  mode: online_adaptive
+  exploration: online
+  selection: adaptive
   strategy: exhaustive
   random_seed: 0
   runs_per_candidate: 1
   minimum_runs_per_candidate: 1
   horizon: 1
+  maximum_executions: 1
   history_window_size: 1
 queue:
   warmup_runs: 0

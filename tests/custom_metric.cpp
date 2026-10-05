@@ -40,7 +40,8 @@ struct WriteKernel {
 [[nodiscard]] auto fixedConfig(std::size_t runs = 1u)
     -> alpakaTune::TunerConfig {
   auto config = alpakaTune::TunerConfig{};
-  config.mode = alpakaTune::TuningMode::onlineFixed;
+  config.exploration = alpakaTune::ExplorationPolicy::online;
+  config.selection = alpakaTune::SelectionPolicy::fixed;
   config.strategy = alpakaTune::StrategyKind::exhaustive;
   config.queue.reset();
   config.runsPerCandidate = runs;
@@ -288,7 +289,8 @@ TEST_CASE("custom metric identity and missing candidates persist",
         7.0);
 
   auto replayConfig = config;
-  replayConfig.mode = alpakaTune::TuningMode::offline;
+  replayConfig.exploration = alpakaTune::ExplorationPolicy::offline;
+  replayConfig.selection = alpakaTune::SelectionPolicy::fixed;
   replayConfig.maximumExecutions.reset();
   replayConfig.history.read = true;
   replayConfig.history.write = false;
@@ -385,7 +387,8 @@ TEST_CASE("function objective configuration separates persistent histories",
     tuner.provideMetrics(1.0);
     alpakaTune::flushPersistence();
   }
-  config.mode = alpakaTune::TuningMode::offline;
+  config.exploration = alpakaTune::ExplorationPolicy::offline;
+  config.selection = alpakaTune::SelectionPolicy::fixed;
   config.maximumExecutions.reset();
   config.history.read = true;
   config.history.write = false;

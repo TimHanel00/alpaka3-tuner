@@ -179,8 +179,11 @@ def benchmark_configuration(
     configuration = copy.deepcopy(base_configuration)
     tuning = configuration["tuning"]
     # The benchmark runner deliberately uses the finite policy. Direct library
-    # users inherit online_adaptive unless they make the same explicit choice.
-    tuning["mode"] = "online_fixed"
+    # users inherit online exploration with adaptive selection unless they
+    # make the same explicit choice.
+    tuning.pop("mode", None)
+    tuning["exploration"] = "online"
+    tuning["selection"] = "fixed"
     tuning["strategy"] = strategy
     tuning.pop("horizon", None)
     tuning.pop("horizon_offset_with_active_history", None)
@@ -205,7 +208,7 @@ def benchmark_configuration(
             configuration["learning"] = learning
         if not isinstance(learning, dict):
             raise ValueError("configuration learning section must be a map")
-        configuration["schema_version"] = 3
+        configuration["schema_version"] = 4
         learning["model"] = str(model.resolve())
         if learned_candidate_pool_size is not None:
             learning["candidate_pool_size"] = learned_candidate_pool_size
@@ -213,7 +216,7 @@ def benchmark_configuration(
             learning["candidate_batch_size"] = learned_candidate_batch_size
     elif isinstance(learning, dict):
         learning.pop("model", None)
-    configuration["schema_version"] = 3
+    configuration["schema_version"] = 4
     configuration.pop("persistence", None)
     configuration["history"] = {"read": False, "write": False}
     configuration["complete_history"] = {"file": str(history)}
@@ -333,6 +336,8 @@ def inspect_history(path: Path) -> dict:
                 "domain_exhausted": domain_exhausted,
                 "distinct_measured_count": distinct_count,
                 "completion_reason": reason,
+                "exploration_complete": context.get("exploration_complete", reason != "none"),
+                "selection": metadata.get("selection", "fixed") if isinstance(metadata, dict) else "fixed",
                 "complete": complete,
             }
         )
@@ -343,7 +348,7 @@ def inspect_history(path: Path) -> dict:
             summary["complete"] for summary in summaries
         ),
         "all_contexts_terminal": valid and bool(summaries) and all(
-            summary["completion_reason"]
+            summary["selection"] == "fixed" and summary["completion_reason"]
             in {
                 "all_configurations",
                 "maximum_executions",
