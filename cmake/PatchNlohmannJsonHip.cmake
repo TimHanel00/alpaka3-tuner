@@ -1,0 +1,27 @@
+# HIP Clang 22 cannot resolve basic_json's conversion operator in these two
+# arithmetic from_json overloads. Calling the equivalent public type() member
+# keeps nlohmann/json 3.12.0 usable in HIP translation units.
+function(alpakatune_patch_nlohmann_json_hip source_dir)
+    set(_header "${source_dir}/include/nlohmann/detail/conversions/from_json.hpp")
+    if(NOT EXISTS "${_header}")
+        message(FATAL_ERROR "Cannot find the nlohmann/json conversion header: ${_header}")
+    endif()
+
+    file(READ "${_header}" _original)
+    set(_before "switch (static_cast<value_t>(j))")
+    set(_after "switch (j.type())")
+    string(REGEX MATCHALL "switch \\(static_cast<value_t>\\(j\\)\\)" _matches "${_original}")
+    list(LENGTH _matches _match_count)
+    if(_match_count EQUAL 2)
+        string(REPLACE "${_before}" "${_after}" _patched "${_original}")
+        file(WRITE "${_header}" "${_patched}")
+    elseif(_match_count EQUAL 0)
+        string(REGEX MATCHALL "switch \\(j\\.type\\(\\)\\)" _patched_matches "${_original}")
+        list(LENGTH _patched_matches _patched_count)
+        if(NOT _patched_count EQUAL 2)
+            message(FATAL_ERROR "Unexpected nlohmann/json conversion header; HIP patch not applied")
+        endif()
+    else()
+        message(FATAL_ERROR "Unexpected nlohmann/json conversion header; HIP patch not applied")
+    endif()
+endfunction()

@@ -163,8 +163,7 @@ private:
     if (m_artifact->architecture() != detail::learnedArchitectureName)
       throw std::invalid_argument{
           "The model artifact has an unsupported architecture."};
-    if (m_artifact->featureSchema() !=
-        LearnedModelContextDescriptor::featureSchemaVersion)
+    if (m_artifact->featureSchema() != m_descriptor.schemaVersion)
       throw std::invalid_argument{
           "The model and native feature schemas differ."};
     if (m_artifact->dimensionFeatureCount() !=

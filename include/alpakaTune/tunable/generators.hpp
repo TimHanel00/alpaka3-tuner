@@ -7,6 +7,7 @@
 
 #include <alpaka/Vec.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <stdexcept>
 #include <vector>
@@ -100,4 +101,57 @@ template <alpaka::concepts::VectorOrScalar T>
   return RVals<T>{std::move(values)};
 }
 
+namespace detail {
+template <auto Minimum, auto Maximum, std::size_t... I>
+consteval auto compileLinear(std::index_sequence<I...>) {
+  static_assert(Minimum <= Maximum);
+  return CVals<static_cast<decltype(Minimum)>(
+      Minimum + (static_cast<long double>(Maximum) - Minimum) * I /
+                    (sizeof...(I) > 1u ? sizeof...(I) - 1u : 1u))...>{};
+}
+template <auto Minimum, auto Maximum, auto Current, auto... Values>
+consteval auto compileLog() {
+  static_assert(Minimum > 0 && Minimum <= Maximum);
+  if constexpr (Current >= Maximum)
+    return CVals<Values..., Maximum>{};
+  else if constexpr (Current > Maximum / 2)
+    return CVals<Values..., Current, Maximum>{};
+  else
+    return compileLog<Minimum, Maximum, Current * 2, Values..., Current>();
+}
+} // namespace detail
 } // namespace alpakaTune::generate
+
+namespace alpakaTune::domain {
+/** Generate at most eight linearly spaced compiled alternatives from bounds. */
+template <auto Minimum, auto Maximum>
+[[nodiscard]] consteval auto compileInterval(hint::Linear = {}) {
+  static_assert(std::integral<decltype(Minimum)> &&
+                std::integral<decltype(Maximum)>);
+  static_assert(Minimum <= Maximum);
+  constexpr auto count = static_cast<std::size_t>(
+      std::min(8.0L, static_cast<long double>(Maximum) - Minimum + 1.0L));
+  return generate::detail::compileLinear<Minimum, Maximum>(
+      std::make_index_sequence<count>{});
+}
+/** Generate powers of two relative to the lower bound, including both bounds.
+ */
+template <auto Minimum, auto Maximum>
+[[nodiscard]] consteval auto compileInterval(hint::Logarithmic) {
+  return generate::detail::compileLog<Minimum, Maximum, Minimum>();
+}
+} // namespace alpakaTune::domain
+
+namespace alpakaTune {
+/** Concise automatic compiled domain declared using bounds only. */
+template <auto Minimum, auto Maximum, typename... Hints>
+[[nodiscard]] auto autoCandidates(Hints... hints) {
+  if constexpr ((std::same_as<std::remove_cvref_t<Hints>, hint::Logarithmic> ||
+                 ... || false))
+    return autoCandidates(
+        domain::compileInterval<Minimum, Maximum>(hint::logarithmic), hints...);
+  else
+    return autoCandidates(domain::compileInterval<Minimum, Maximum>(),
+                          hints...);
+}
+} // namespace alpakaTune

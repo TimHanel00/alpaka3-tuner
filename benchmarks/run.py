@@ -267,17 +267,24 @@ def inspect_history(path: Path) -> dict:
             and len(rejected) == candidate_count
             and all(isinstance(value, bool) for value in rejected)
         )
+        space = context.get("candidate_space")
+        managed = isinstance(space, dict)
+        domain_exhausted = not managed or space.get("domain_exhausted") is True
+        declared_count = space.get("declared_combination_count") if managed else candidate_count
+        distinct_count = space.get("distinct_measured_count") if managed else retired_count
+        counts_valid = counts_valid and isinstance(distinct_count, int) and distinct_count >= 0
         rejected_count = sum(rejected) if counts_valid else None
         legal_count = candidate_count - rejected_count if counts_valid else None
-        accounted_count = retired_count + rejected_count if counts_valid else None
+        accounted_count = distinct_count + rejected_count if counts_valid else None
         coverage = (
-            retired_count / legal_count
+            distinct_count / legal_count
             if counts_valid and legal_count not in (None, 0)
             else (1.0 if counts_valid and legal_count == 0 else None)
         )
         complete = (
             counts_valid
             and reason == "all_configurations"
+            and domain_exhausted
             and accounted_count == candidate_count
         )
         if not counts_valid:
@@ -295,6 +302,12 @@ def inspect_history(path: Path) -> dict:
                 f"context {kernel} was capped by maximum_retired_configurations after "
                 f"{retired_count}/{legal_count} legal candidates ({coverage:.1%})"
             )
+        elif reason in {"candidate_budget", "plateau", "generation_stalled"}:
+            messages.append(f"context {kernel} stopped generation at {reason}; "
+                            f"registered pool coverage is {coverage:.1%}, full domain coverage is unproven")
+        elif reason == "all_configurations" and not domain_exhausted:
+            valid = False
+            messages.append(f"context {kernel} reports all_configurations without a domain exhaustion proof")
         elif reason != "all_configurations":
             messages.append(
                 f"context {kernel} exited before tuning completed after "
@@ -315,6 +328,10 @@ def inspect_history(path: Path) -> dict:
                 "rejected_candidate_count": rejected_count,
                 "retired_configuration_count": retired_count,
                 "coverage": coverage,
+                "registered_pool_coverage": coverage,
+                "declared_combination_count": declared_count,
+                "domain_exhausted": domain_exhausted,
+                "distinct_measured_count": distinct_count,
                 "completion_reason": reason,
                 "complete": complete,
             }
@@ -331,6 +348,7 @@ def inspect_history(path: Path) -> dict:
                 "all_configurations",
                 "maximum_executions",
                 "maximum_retired_configurations",
+                "candidate_budget", "plateau", "generation_stalled",
             }
             for summary in summaries
         ),

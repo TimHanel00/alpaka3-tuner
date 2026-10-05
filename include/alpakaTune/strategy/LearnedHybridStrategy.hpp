@@ -155,6 +155,85 @@ public:
     }
   }
 
+  [[nodiscard]] auto supportsCandidateCatalog() const noexcept
+      -> bool override {
+    return true;
+  }
+  [[nodiscard]] auto recommendCandidate(StrategyContext const &context)
+      -> std::optional<std::size_t> override {
+    m_initialised = true;
+    if (!contextMatches(context))
+      throw std::invalid_argument{"Generated learned context shape changed."};
+    if (m_status == LearnedHybridStatus::active)
+      reconcileObservations(context);
+    std::erase_if(m_candidates, [&](auto const &candidate) {
+      auto observation = context.candidateObservation(candidate.rawIndex);
+      return !context.candidateValid(candidate.rawIndex) ||
+             (!context.candidateAvailable(candidate.rawIndex) && observation &&
+              observation->isFinished());
+    });
+    auto batch = std::vector<Candidate>{};
+    while (m_catalogCursor < context.candidateCount() &&
+           m_candidates.size() + batch.size() < m_options.candidatePoolSize) {
+      auto const id = m_catalogCursor++;
+      if (!context.candidateAvailable(id))
+        continue;
+      batch.push_back(
+          Candidate{.rawIndex = id,
+                    .configuration = context.candidateConfiguration(id),
+                    .adapterFeatures = {}});
+      if (batch.size() == m_options.candidateBatchSize) {
+        appendCandidateBatch(std::move(batch));
+        batch.clear();
+      }
+    }
+    if (!batch.empty())
+      appendCandidateBatch(std::move(batch));
+    if (m_candidates.empty())
+      return std::nullopt;
+    std::optional<std::size_t> position;
+    auto bestScore = std::numeric_limits<double>::infinity();
+    auto const explore = m_selectionCount % m_options.selectionsPerCycle >=
+                         m_options.exploitationSelectionsPerCycle;
+    for (std::size_t i{}; i < m_candidates.size(); ++i) {
+      if (!context.candidateAvailable(m_candidates[i].rawIndex))
+        continue;
+      auto score = m_status == LearnedHybridStatus::active
+                       ? (explore ? -m_candidates[i].uncertainty
+                                  : adaptedLogRuntime(m_candidates[i]))
+                       : static_cast<double>(i);
+      if (explore && m_status == LearnedHybridStatus::active &&
+          !m_observations.empty()) {
+        auto distance = std::numeric_limits<double>::infinity();
+        auto const step = std::max<std::size_t>(1u, m_observations.size() / 8u);
+        for (std::size_t row{}; row < m_observations.size(); row += step) {
+          double squared{};
+          auto const &features = m_observations[row].features;
+          for (std::size_t f{}; f < features.size(); ++f)
+            squared +=
+                std::pow(m_candidates[i].adapterFeatures[f] - features[f], 2);
+          distance = std::min(distance, squared);
+        }
+        score -= m_options.diversityWeight * std::sqrt(distance);
+      }
+      if (score < bestScore) {
+        bestScore = score;
+        position = i;
+      }
+    }
+    if (!position)
+      return std::nullopt;
+    m_peakCachedCandidateCount =
+        std::max(m_peakCachedCandidateCount, m_candidates.size());
+    m_lastSelectionReason = m_status != LearnedHybridStatus::active
+                                ? LearnedSelectionReason::fallbackSpaceFilling
+                            : explore
+                                ? LearnedSelectionReason::uncertaintyDiversity
+                                : LearnedSelectionReason::predictedFast;
+    m_lastRecommended = m_candidates[*position];
+    return m_lastRecommended->rawIndex;
+  }
+
   /** @brief Propose one pool candidate or one deterministic fallback point. */
   [[nodiscard]] auto recommend(StrategyContext const &context)
       -> ParameterConfiguration override {
@@ -206,6 +285,25 @@ public:
         ++m_exploitationCursor;
     }
     m_lastRecommended.reset();
+  }
+
+  void candidateInvalidated(std::size_t id,
+                            ParameterConfiguration const &) override {
+    std::erase_if(m_candidates, [id](auto const &candidate) {
+      return candidate.rawIndex == id;
+    });
+    std::erase_if(m_pendingCandidates, [id](auto const &candidate) {
+      return candidate.rawIndex == id;
+    });
+    std::erase_if(m_observations, [id](auto const &observation) {
+      return observation.rawIndex == id;
+    });
+    m_adapter.clear();
+    m_observationsSinceUpdate = 0u;
+    if (!m_observations.empty())
+      fitResidualAdapter();
+    rebuildExploitationOrder();
+    buildExplorationOrder();
   }
 
   void configurationInvalidated(
@@ -320,7 +418,10 @@ public:
         !std::ranges::all_of(state.coefficients,
                              [](double value) { return std::isfinite(value); }))
       return false;
-    auto const candidateCount = detail::candidateCount(m_descriptor.dimensions);
+    auto const candidateCount =
+        m_descriptor.schemaVersion == 1u
+            ? detail::candidateCount(m_descriptor.dimensions)
+            : std::numeric_limits<std::size_t>::max();
     auto indices = std::vector<std::size_t>{};
     indices.reserve(state.observations.size());
     for (auto const &observation : state.observations) {
@@ -357,7 +458,11 @@ public:
     if (m_initialised)
       return;
     auto const started = std::chrono::steady_clock::now();
-    initialise(context);
+    if (context.hasCandidateCatalog()) {
+      static_cast<void>(recommendCandidate(context));
+      m_lastRecommended.reset();
+    } else
+      initialise(context);
     m_initializationSeconds =
         std::chrono::duration<double>{std::chrono::steady_clock::now() -
                                       started}
@@ -379,6 +484,8 @@ private:
     double uncertainty{};
     std::vector<float> adapterFeatures;
   };
+
+  std::size_t m_catalogCursor{};
 
   struct ResidualObservation {
     std::size_t rawIndex{};
@@ -575,7 +682,10 @@ private:
     auto stillPending = std::vector<Candidate>{};
     stillPending.reserve(m_pendingCandidates.size());
     for (auto &candidate : m_pendingCandidates) {
-      auto const observation = context.runtimeFor(candidate.configuration);
+      auto const observation =
+          context.hasCandidateCatalog()
+              ? context.candidateObservation(candidate.rawIndex)
+              : context.runtimeFor(candidate.configuration);
       if (!observation || !observation->isFinished()) {
         stillPending.push_back(std::move(candidate));
         continue;

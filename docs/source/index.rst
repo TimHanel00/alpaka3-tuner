@@ -33,6 +33,7 @@ Five concepts to keep in mind
 
    getting_started
    launch_tuning
+   automatic_spaces
    execution_modes
    configuration
    history_workflows

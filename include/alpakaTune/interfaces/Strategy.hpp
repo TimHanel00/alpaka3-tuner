@@ -139,6 +139,10 @@ public:
   [[nodiscard]] virtual auto parameterSizes() const noexcept
       -> std::span<std::size_t const> = 0;
 
+  [[nodiscard]] virtual auto candidateValid(std::size_t id) const -> bool {
+    return candidateAvailable(id);
+  }
+
   /**
    * Stable runtime observation for a normalized configuration, if sampled.
    *
@@ -149,6 +153,26 @@ public:
   [[nodiscard]] virtual auto
   runtimeFor(ParameterConfiguration const &configuration) const
       -> std::optional<RuntimeObservation> = 0;
+
+  /** Catalog candidates have immutable IDs, independent of domain coordinates.
+   */
+  [[nodiscard]] virtual auto hasCandidateCatalog() const noexcept -> bool {
+    return false;
+  }
+  [[nodiscard]] virtual auto candidateCount() const noexcept -> std::size_t {
+    return 0u;
+  }
+  [[nodiscard]] virtual auto candidateConfiguration(std::size_t) const
+      -> ParameterConfiguration {
+    return {};
+  }
+  [[nodiscard]] virtual auto candidateAvailable(std::size_t) const -> bool {
+    return false;
+  }
+  [[nodiscard]] virtual auto candidateObservation(std::size_t) const
+      -> std::optional<RuntimeObservation> {
+    return std::nullopt;
+  }
 };
 
 /** @brief Tuner-owned result of applying legality and admission policy. */
@@ -177,6 +201,16 @@ public:
   [[nodiscard]] virtual auto recommend(StrategyContext const &context)
       -> ParameterConfiguration = 0;
 
+  /** Optional stable-ID path. Old custom strategies retain their Cartesian API.
+   */
+  [[nodiscard]] virtual auto supportsCandidateCatalog() const noexcept -> bool {
+    return false;
+  }
+  [[nodiscard]] virtual auto recommendCandidate(StrategyContext const &)
+      -> std::optional<std::size_t> {
+    return std::nullopt;
+  }
+
   /** @brief Observe the tuner-owned result of the preceding recommendation.
    *
    * Called exactly once for every vector returned by recommend(). Strategies
@@ -184,6 +218,20 @@ public:
    */
   virtual void recommendationResult(ParameterConfiguration const &,
                                     RecommendationDisposition) {}
+
+  /** Exact-ID feedback for generated spaces; the default preserves old
+   * callbacks. */
+  virtual void
+  candidateRecommendationResult(std::size_t,
+                                ParameterConfiguration const &configuration,
+                                RecommendationDisposition disposition) {
+    recommendationResult(configuration, disposition);
+  }
+  virtual void
+  candidateInvalidated(std::size_t,
+                       ParameterConfiguration const &configuration) {
+    configurationInvalidated(configuration);
+  }
 
   /** @brief Remove a post-evaluation-invalid candidate from strategy state. */
   virtual void configurationInvalidated(ParameterConfiguration const &) {}

@@ -1,6 +1,7 @@
 // Copyright 2026 Tim Hanel
 // SPDX-License-Identifier: MPL-2.0
 #include "AdaptivePi.hpp"
+#include "DeviceRequirements.hpp"
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/interfaces/catch_interfaces_capture.hpp>
@@ -158,8 +159,10 @@ TEST_CASE("adaptive Pi optimizes enabled parallel backends",
         INFO(alpaka::onHost::DeviceSpec{backend}.getApi().getName());
         INFO(alpaka::onHost::demangledName(alpaka::getExecutor(backend)));
         ++available;
-        piTests::checkOptimization(selector.makeDevice(0u),
-                                   alpaka::getExecutor(backend));
+        auto device = selector.makeDevice(0u);
+        alpakaTune::test::runIfSupported<double>(device, [&] {
+          piTests::checkOptimization(device, alpaka::getExecutor(backend));
+        });
         return 0;
       },
       alpaka::onHost::allBackends(alpaka::onHost::enabledDeviceSpecs,

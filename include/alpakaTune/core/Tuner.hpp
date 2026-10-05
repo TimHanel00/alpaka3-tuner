@@ -10,6 +10,7 @@
 #include "alpakaTune/core/peripherals/CandidateQueue.hpp"
 #include "alpakaTune/core/timing/KernelTimer.hpp"
 #include "alpakaTune/model/LearnedModelContext.hpp"
+#include "alpakaTune/space/CandidateSpace.hpp"
 #include "alpakaTune/store/RuntimeHistory.hpp"
 #include "alpakaTune/strategy/StrategyFactory.hpp"
 #include "alpakaTune/tunable/Tunables.hpp"
@@ -544,6 +545,7 @@ public:
       result.learnedStatus = learnedHybridStatusName(learned->status());
       result.learnedAdapterUpdateCount = learned->adapterUpdateCount();
     }
+    result.space = m_space.info();
     return result;
   }
   /** @brief Current robust statistics for one Cartesian candidate. */
@@ -661,6 +663,7 @@ public:
         detail::typeName<
             typename std::remove_cvref_t<decltype(prototype)>::KernelFn>(),
         launchDescription(frameSpec));
+    bindLaunchValidator<Queue>(frameSpec, prototype);
     initialiseScheduling();
     reconcileUserInvalidations();
     reconcileMissingMetric();
@@ -761,6 +764,7 @@ private:
         detail::typeName<
             typename std::remove_cvref_t<decltype(prototype)>::KernelFn>(),
         launchDescription(frameSpec));
+    bindLaunchValidator<Queue>(frameSpec, prototype);
     initialiseScheduling();
     reconcileUserInvalidations();
     reconcileMissingMetric();
@@ -846,14 +850,231 @@ private:
           (appendEntryDimensions(entries), ...);
         },
         m_tunables.entries());
-    auto rawCandidateCount = std::size_t{1u};
-    for (auto const size : m_dimensionSizes) {
-      if (size == 0u ||
-          rawCandidateCount > std::numeric_limits<std::size_t>::max() / size)
-        throw std::overflow_error{"The Cartesian tuning space is too large."};
-      rawCandidateCount *= size;
+    m_space.initialise(m_dimensionSizes, Traits::generatesCandidates,
+                       Traits::enumerable, m_defaults.space, m_baseRandomSeed);
+    m_candidateCount = m_space.size();
+    initialiseDependencies();
+    auto preferred = CandidateIndices{};
+    auto categorical = std::array<bool, dimensionCount>{};
+    bool hasPreferred{};
+    std::apply(
+        [&](auto const &...entries) {
+          (
+              [&] {
+                using Entry = std::remove_cvref_t<decltype(entries)>;
+                using Values = typename Entry::values_type;
+                if constexpr (detail::isAutomaticCandidates<Values>) {
+                  constexpr auto offset =
+                      Traits::template dimensionOffset<Entry::name>;
+                  constexpr auto arity =
+                      detail::candidateDimensionCount<Values>;
+                  for (std::size_t d{}; d < arity; ++d)
+                    categorical[offset + d] = entries.values.categorical();
+                  if constexpr (arity == 1u)
+                    if (auto value = entries.values.preferredIndex()) {
+                      preferred[offset] = *value;
+                      hasPreferred = true;
+                    }
+                }
+              }(),
+              ...);
+        },
+        m_tunables.entries());
+    m_space.setHints(preferred, hasPreferred, categorical);
+  }
+
+  using CandidateIndices = std::array<std::size_t, dimensionCount>;
+
+  template <typename Names, std::size_t Parent = 0u, typename Function,
+            typename... Args>
+  auto invokeParents(CandidateIndices const &indices, Function &&function,
+                     Args const &...args) const -> bool {
+    if constexpr (Parent == std::tuple_size_v<Names>)
+      return static_cast<bool>(
+          std::invoke(std::forward<Function>(function), args...));
+    else {
+      using Name = std::tuple_element_t<Parent, Names>;
+      static_assert(Traits::template has<Name::name>,
+                    "A dependent domain refers to an undeclared parent.");
+      return withCandidateValue<Name::name>(indices, [&](auto const &value) {
+        return invokeParents<Names, Parent + 1u>(
+            indices, std::forward<Function>(function), args..., value);
+      });
     }
-    m_candidateCount = rawCandidateCount;
+  }
+
+  template <typename Entry>
+  void appendDomainProjector(Entry const &entry,
+                             std::vector<std::vector<std::size_t>> &parents) {
+    using Values = typename Entry::values_type;
+    constexpr auto index = Traits::template index<Entry::name>;
+    constexpr auto offset = Traits::template dimensionOffset<Entry::name>;
+    constexpr auto arity = detail::candidateDimensionCount<Values>;
+    if constexpr (requires { typename Values::parent_names; }) {
+      using Names = typename Values::parent_names;
+      [&]<std::size_t... I>(std::index_sequence<I...>) {
+        (parents[index].push_back(
+             Traits::template index<std::tuple_element_t<I, Names>::name>),
+         ...);
+      }(std::make_index_sequence<std::tuple_size_v<Names>>{});
+    }
+    m_domainProjectors.emplace_back([](Tuner const &self,
+                                       CandidateIndices &indices,
+                                       bool sampleGlobal) {
+      auto const &entry = std::get<Traits::template index<Entry::name>>(
+          self.m_tunables.entries());
+      if constexpr (detail::isAutomaticCandidates<Values> && arity == 1u) {
+        auto projected = entry.values.project(indices[offset], sampleGlobal);
+        if (!projected)
+          return false;
+        indices[offset] = *projected;
+      }
+      if constexpr (detail::isAutomaticCandidates<Values>) {
+        if (entry.values.alignment() > 1u) {
+          auto aligned = self.template withCandidateValue<Entry::name>(
+              indices, [&](auto const &value) {
+                auto check = [&](auto const &scalar) {
+                  using Scalar = std::remove_cvref_t<decltype(scalar)>;
+                  if constexpr (std::integral<Scalar>)
+                    return static_cast<long double>(scalar) /
+                               entry.values.alignment() ==
+                           std::floor(static_cast<long double>(scalar) /
+                                      entry.values.alignment());
+                  else
+                    return false;
+                };
+                if constexpr (alpaka::isVector_v<
+                                  std::remove_cvref_t<decltype(value)>>) {
+                  for (std::size_t d{}; d < arity; ++d)
+                    if (!check(value[d]))
+                      return false;
+                  return true;
+                } else
+                  return check(value);
+              });
+          if (!aligned)
+            return false;
+        }
+      }
+      if constexpr (requires { typename Values::parent_names; }) {
+        static_assert(
+            arity == 1u && detail::isRVals<Values>,
+            "Dependent domains currently require a scalar runtime child.");
+        using Names = typename Values::parent_names;
+        return self.template invokeParents<Names>(
+            indices, [&](auto const &...values) {
+              auto const allowed =
+                  std::invoke(entry.values.generator, values...);
+              auto const selected = entry.values.at(indices[offset]);
+              if (allowed.indexOf(selected))
+                return true;
+              if (allowed.size() == 0u)
+                return false;
+              auto const replacement = entry.values.indexOf(
+                  allowed.at(indices[offset] % allowed.size()));
+              if (!replacement)
+                return false;
+              auto const projected = entry.values.project(*replacement);
+              if (!projected || !allowed.indexOf(entry.values.at(*projected)))
+                return false;
+              indices[offset] = *projected;
+              return true;
+            });
+      }
+      return true;
+    });
+  }
+
+  void initialiseDependencies() {
+    auto parents = std::vector<std::vector<std::size_t>>(Traits::size);
+    std::apply(
+        [&](auto const &...entries) {
+          (appendDomainProjector(entries, parents), ...);
+        },
+        m_tunables.entries());
+    auto unsorted = std::move(m_domainProjectors);
+    auto marks = std::vector<unsigned>(Traits::size);
+    auto visit = [&](auto &&self, std::size_t index) -> void {
+      if (marks[index] == 2u)
+        return;
+      if (marks[index] == 1u)
+        throw std::invalid_argument{"Dependent tuning domains form a cycle."};
+      marks[index] = 1u;
+      for (auto parent : parents[index])
+        self(self, parent);
+      marks[index] = 2u;
+      m_domainProjectors.push_back(std::move(unsorted[index]));
+    };
+    for (std::size_t index{}; index < Traits::size; ++index)
+      visit(visit, index);
+  }
+
+  void resizeCandidateStorage() {
+    m_candidateCount = m_space.size();
+    m_histories.resize(m_candidateCount,
+                       detail::RuntimeHistory{runtimeHistoryOptions()});
+    m_scheduled.resize(m_candidateCount, false);
+    m_rejected.resize(m_candidateCount, false);
+    m_userInvalidated.resize(m_candidateCount, false);
+    m_missingMetric.resize(m_candidateCount, false);
+    m_loadedFromHistoryCandidates.resize(m_candidateCount, false);
+    while (m_candidateValidity.size() < m_candidateCount)
+      m_candidateValidity.push_back(
+          std::make_shared<detail::ConfigurationValidityState>());
+  }
+
+  void expandSpace() {
+    auto ranked = std::vector<std::pair<double, std::size_t>>{};
+    for (std::size_t id{}; id < m_histories.size(); ++id)
+      if (candidateUsable(id) && !m_histories[id].empty())
+        ranked.emplace_back(m_histories[id].statistics().estimate(), id);
+    std::ranges::sort(ranked);
+    auto best = std::vector<std::size_t>{};
+    for (std::size_t i{}; i < std::min<std::size_t>(4u, ranked.size()); ++i)
+      best.push_back(ranked[i].second);
+    m_space.expand(
+        [this](CandidateIndices &indices, bool sampleGlobal) {
+          for (auto const &project : m_domainProjectors)
+            if (!project(*this, indices, sampleGlobal))
+              return false;
+          return true;
+        },
+        [this](CandidateIndices const &indices) {
+          return candidateAccepted(indices) &&
+                 (!m_launchValidator || m_launchValidator(*this, indices));
+        },
+        best);
+    resizeCandidateStorage();
+  }
+
+  void applySpaceFeedback() {
+    if (!m_refinementPending || m_defaults.mode == TuningMode::offline)
+      return;
+    m_refinementPending = false;
+    expandSpace();
+  }
+
+  void replenishResolvedSpace() {
+    if (!m_space.canExpand() || m_defaults.mode == TuningMode::offline)
+      return;
+    for (std::size_t id{}; id < m_candidateCount; ++id)
+      if (!m_rejected[id] && candidateUsable(id) &&
+          !m_histories[id].isFinished())
+        return;
+    expandSpace();
+  }
+
+  [[nodiscard]] auto spaceCompletionReason() const -> TunerCompletionReason {
+    switch (m_space.state()) {
+    case SpaceState::candidateBudget:
+      return TunerCompletionReason::candidateBudget;
+    case SpaceState::plateau:
+      return TunerCompletionReason::plateau;
+    case SpaceState::stalled:
+      return TunerCompletionReason::generationStalled;
+    default:
+      return TunerCompletionReason::allConfigurations;
+    }
   }
 
   template <typename Value>
@@ -880,10 +1101,10 @@ private:
 
   template <typename Entry>
   void appendLearnedDimensions(LearnedModelContextDescriptor &descriptor,
-                               std::size_t &offset, Entry const &) const {
+                               std::size_t &offset, Entry const &entry) const {
     using Values = typename Entry::values_type;
     constexpr auto arity = detail::candidateDimensionCount<Values>;
-    auto const kind = [] {
+    auto kind = [] {
       if constexpr (detail::isReservedLaunchName<Entry::name>)
         return LearnedDimensionKind::launch;
       else if constexpr (detail::isRVals<Values>)
@@ -893,6 +1114,10 @@ private:
       else
         return LearnedDimensionKind::categorical;
     }();
+    if constexpr (detail::isAutomaticCandidates<Values> &&
+                  !detail::isReservedLaunchName<Entry::name>)
+      if (entry.values.categorical())
+        kind = LearnedDimensionKind::categorical;
     for (std::size_t component = 0u; component < arity; ++component) {
       auto dimension = LearnedDimensionDescriptor{
           .name = std::string{Entry::nameView()},
@@ -901,8 +1126,11 @@ private:
           .componentIndex = component,
           .vectorArity = arity,
           .concreteValues = {}};
-      dimension.concreteValues.reserve(dimension.cardinality);
-      for (std::size_t candidate = 0u; candidate < dimension.cardinality;
+      if (dimension.cardinality <= 4096u)
+        dimension.concreteValues.reserve(dimension.cardinality);
+      for (std::size_t candidate = 0u;
+           candidate <
+           (dimension.cardinality <= 4096u ? dimension.cardinality : 0u);
            ++candidate) {
         auto indices = std::array<std::size_t, dimensionCount>{};
         indices[offset + component] = candidate;
@@ -936,12 +1164,18 @@ private:
   [[nodiscard]] auto learnedModelContext() const
       -> LearnedModelContextDescriptor {
     auto descriptor = LearnedModelContextDescriptor{};
+    descriptor.schemaVersion = m_space.usesCandidateCatalog() ? 2u : 1u;
     auto const properties = m_device.getDeviceProperties();
     descriptor.deviceClass = properties.warpSize > 1u ? LearnedDeviceClass::gpu
                                                       : LearnedDeviceClass::cpu;
+    auto domainSizeFeature = std::log1p(static_cast<float>(m_candidateCount));
+    if (m_space.usesCandidateCatalog()) {
+      domainSizeFeature = 0.0f;
+      for (auto size : m_dimensionSizes)
+        domainSizeFeature += std::log(static_cast<float>(size));
+    }
     descriptor.contextFeatures = {
-        {"candidate_count_log1p",
-         std::log1p(static_cast<float>(m_candidateCount))},
+        {"candidate_count_log1p", domainSizeFeature},
         {"dimension_count", static_cast<float>(dimensionCount)},
         {"multiprocessor_count",
          static_cast<float>(properties.multiProcessorCount)},
@@ -971,9 +1205,10 @@ private:
         },
         m_tunables.entries());
     if (m_defaults.strategy == StrategyKind::learnedHybrid) {
-      descriptor.legalCandidates.resize(m_candidateCount);
-      for (std::size_t candidate = 0u; candidate < m_candidateCount;
-           ++candidate)
+      if (!m_space.usesCandidateCatalog())
+        descriptor.legalCandidates.resize(m_candidateCount);
+      for (std::size_t candidate = 0u;
+           candidate < descriptor.legalCandidates.size(); ++candidate)
         descriptor.legalCandidates[candidate] =
             static_cast<std::uint8_t>(candidateUsable(candidate) &&
                                       candidateAccepted(indicesFor(candidate)));
@@ -1062,20 +1297,12 @@ private:
 
   [[nodiscard]] auto rawIndicesFor(std::size_t candidate) const
       -> std::array<std::size_t, dimensionCount> {
-    std::array<std::size_t, dimensionCount> indices{};
-    for (std::size_t position = dimensionCount; position > 0u; --position) {
-      auto const dimension = position - 1u;
-      indices[dimension] = candidate % m_dimensionSizes[dimension];
-      candidate /= m_dimensionSizes[dimension];
-    }
-    return indices;
+    return m_space.indices(candidate);
   }
 
   [[nodiscard]] auto indicesFor(std::size_t candidate) const
       -> std::array<std::size_t, dimensionCount> {
-    if (candidate >= m_candidateCount)
-      throw std::out_of_range{"The candidate index is outside this tuner."};
-    return rawIndicesFor(candidate);
+    return m_space.indices(candidate);
   }
 
   template <FixedString Name, typename Callable>
@@ -1099,7 +1326,7 @@ private:
       } else {
         return static_cast<bool>(
             std::invoke(std::forward<Callable>(callable),
-                        entry.values.values().at(indices[dimensionOffset])));
+                        entry.values.at(indices[dimensionOffset])));
       }
     } else if constexpr (detail::isCTypes<Values> &&
                          detail::candidateDimensionCount<Values> > 1u) {
@@ -1234,17 +1461,21 @@ private:
   candidateForConfiguration(ParameterConfiguration const &configuration) const
       -> std::size_t {
     validateParameterConfiguration(configuration, std::span{m_dimensionSizes});
-    auto rawCandidate = std::size_t{0u};
+    auto indices = std::array<std::size_t, dimensionCount>{};
     for (std::size_t dimension = 0u; dimension < dimensionCount; ++dimension) {
       auto const size = m_dimensionSizes[dimension];
-      auto const index =
+      auto const coordinate =
+          static_cast<long double>(configuration[dimension]);
+      indices[dimension] =
           size == 1u ? 0u
-                     : static_cast<std::size_t>(std::lround(
-                           static_cast<double>(configuration[dimension]) *
-                           static_cast<double>(size - 1u)));
-      rawCandidate = rawCandidate * size + index;
+                     : static_cast<std::size_t>(std::round(
+                           coordinate * static_cast<long double>(size - 1u)));
     }
-    return rawCandidate;
+    auto const candidate = m_space.find(indices);
+    if (!candidate)
+      throw std::invalid_argument{
+          "The configuration is not a registered candidate."};
+    return *candidate;
   }
 
   /** @brief Clamped progress through the adaptive schedule horizon. */
@@ -1296,8 +1527,14 @@ private:
       m_scheduled.at(candidate) = false;
       --m_scheduledCount;
     }
-    if (m_strategy)
-      m_strategy->configurationInvalidated(normalizedConfiguration(candidate));
+    if (m_strategy) {
+      if (m_space.usesCandidateCatalog())
+        m_strategy->candidateInvalidated(candidate,
+                                         normalizedConfiguration(candidate));
+      else
+        m_strategy->configurationInvalidated(
+            normalizedConfiguration(candidate));
+    }
   }
 
   void rebuildBestAfterCandidateRemoval() {
@@ -1380,7 +1617,9 @@ private:
       ++m_restrictionRejectedCount;
       return RecommendationDisposition::restrictionRejected;
     }
-    if (!candidateAccepted(indicesFor(candidate))) {
+    if (!candidateAccepted(indicesFor(candidate)) ||
+        (m_launchValidator &&
+         !m_launchValidator(*this, indicesFor(candidate)))) {
       m_rejected.at(candidate) = true;
       ++m_rejectedCount;
       ++m_restrictionRejectedCount;
@@ -1525,28 +1764,31 @@ private:
                 .count()});
   }
 
+  [[nodiscard]] auto runtimeForCandidate(std::size_t candidate) const
+      -> std::optional<RuntimeObservation> {
+    if (candidate >= m_candidateCount || !candidateUsable(candidate) ||
+        m_histories.empty() || m_histories.at(candidate).empty())
+      return std::nullopt;
+    auto const &history = m_histories.at(candidate);
+    auto const statistics = history.statistics();
+    auto comparison = RuntimeComparison::unavailable;
+    if (auto const incumbent = currentBestCandidate();
+        incumbent && *incumbent != candidate)
+      comparison = detail::mannWhitneyUCompare(
+          history, m_histories.at(*incumbent),
+          m_defaults.mannWhitneyMinimumSamples, m_defaults.mannWhitneyAlpha);
+    return RuntimeObservation{statistics.estimate(),
+                              statistics.sampleCount,
+                              statistics.acceptedSampleCount,
+                              history.state(),
+                              comparison,
+                              statistics.confidenceReached};
+  }
   [[nodiscard]] auto
   runtimeForConfiguration(ParameterConfiguration const &configuration) const
       -> std::optional<RuntimeObservation> {
     try {
-      auto const candidate = candidateForConfiguration(configuration);
-      if (!candidateUsable(candidate) || m_histories.empty() ||
-          m_histories.at(candidate).empty())
-        return std::nullopt;
-      auto const &history = m_histories.at(candidate);
-      auto const statistics = history.statistics();
-      auto comparison = RuntimeComparison::unavailable;
-      if (auto const incumbent = currentBestCandidate();
-          incumbent && *incumbent != candidate)
-        comparison = detail::mannWhitneyUCompare(
-            history, m_histories.at(*incumbent),
-            m_defaults.mannWhitneyMinimumSamples, m_defaults.mannWhitneyAlpha);
-      return RuntimeObservation{statistics.estimate(),
-                                statistics.sampleCount,
-                                statistics.acceptedSampleCount,
-                                history.state(),
-                                comparison,
-                                statistics.confidenceReached};
+      return runtimeForCandidate(candidateForConfiguration(configuration));
     } catch (std::invalid_argument const &) {
       return std::nullopt;
     }
@@ -1567,6 +1809,33 @@ private:
       return m_tuner.runtimeForConfiguration(configuration);
     }
 
+    [[nodiscard]] auto hasCandidateCatalog() const noexcept -> bool override {
+      return m_tuner.m_space.usesCandidateCatalog();
+    }
+    [[nodiscard]] auto candidateCount() const noexcept -> std::size_t override {
+      return m_tuner.m_candidateCount;
+    }
+    [[nodiscard]] auto candidateConfiguration(std::size_t id) const
+        -> ParameterConfiguration override {
+      return m_tuner.normalizedConfiguration(id);
+    }
+    [[nodiscard]] auto candidateAvailable(std::size_t id) const
+        -> bool override {
+      return id < m_tuner.m_candidateCount && !m_tuner.m_rejected.at(id) &&
+             m_tuner.candidateUsable(id) &&
+             (!m_tuner.m_queue || !m_tuner.m_queue->contains(id)) &&
+             (m_tuner.m_defaults.mode != TuningMode::onlineFixed ||
+              !m_tuner.m_histories.at(id).isFinished());
+    }
+    [[nodiscard]] auto candidateValid(std::size_t id) const -> bool override {
+      return id < m_tuner.m_candidateCount && !m_tuner.m_rejected.at(id) &&
+             m_tuner.candidateUsable(id);
+    }
+    [[nodiscard]] auto candidateObservation(std::size_t id) const
+        -> std::optional<RuntimeObservation> override {
+      return m_tuner.runtimeForCandidate(id);
+    }
+
   private:
     Tuner const &m_tuner;
   };
@@ -1584,11 +1853,29 @@ private:
       return std::nullopt;
     auto const start = std::chrono::steady_clock::now();
     auto const strategyContext = TunerStrategyView{*this};
-    auto recommendation = m_strategy->recommend(strategyContext);
-    validateParameterConfiguration(recommendation, std::span{m_dimensionSizes});
-    auto const candidate = candidateForConfiguration(recommendation);
+    auto recommendation = ParameterConfiguration{};
+    auto candidate = std::size_t{};
+    if (m_space.usesCandidateCatalog()) {
+      auto const selected = m_strategy->recommendCandidate(strategyContext);
+      if (!selected)
+        return std::nullopt;
+      candidate = *selected;
+      if (candidate >= m_candidateCount)
+        throw std::invalid_argument{
+            "Strategy returned an unknown candidate ID."};
+      recommendation = normalizedConfiguration(candidate);
+    } else {
+      recommendation = m_strategy->recommend(strategyContext);
+      validateParameterConfiguration(recommendation,
+                                     std::span{m_dimensionSizes});
+      candidate = candidateForConfiguration(recommendation);
+    }
     auto const disposition = admitCandidate(candidate);
-    m_strategy->recommendationResult(recommendation, disposition);
+    if (m_space.usesCandidateCatalog())
+      m_strategy->candidateRecommendationResult(candidate, recommendation,
+                                                disposition);
+    else
+      m_strategy->recommendationResult(recommendation, disposition);
     m_recommendationSecondsSinceLastLaunch +=
         std::chrono::duration<double>{std::chrono::steady_clock::now() - start}
             .count();
@@ -1639,6 +1926,8 @@ private:
       m_completionReason = TunerCompletionReason::offlineReplay;
       return;
     }
+    if (m_space.size() == 0u && m_space.canExpand())
+      expandSpace();
     if (m_defaults.strategy == StrategyKind::learnedHybrid) {
       auto const context = learnedModelContext();
       auto const options = LearnedHybridOptions{
@@ -1665,6 +1954,10 @@ private:
       m_strategy =
           makeParameterStrategy(m_defaults.strategy, m_effectiveRandomSeed);
     }
+    if (m_space.usesCandidateCatalog() &&
+        !m_strategy->supportsCandidateCatalog())
+      throw std::invalid_argument{"This custom strategy does not support "
+                                  "generated candidate catalogs."};
     if (m_defaults.queue && !m_defaults.queue->disable) {
       m_queue = std::make_unique<detail::CandidateQueue>(
           m_defaults.queue->noiseCancellationWindow,
@@ -1724,8 +2017,14 @@ private:
    * enters its terminal retry-limit state.
    */
   void refillQueue() {
+    applySpaceFeedback();
     if (!m_queue || m_terminal)
       return;
+    if (m_defaults.mode == TuningMode::onlineFixed &&
+        allFixedCandidatesResolved()) {
+      finishTuning();
+      return;
+    }
     while (!m_queue->full()) {
       if (m_defaults.mode == TuningMode::onlineFixed &&
           allFixedCandidatesAdmitted())
@@ -1799,7 +2098,8 @@ private:
   }
 
   /** @brief Whether every legal fixed-mode history has retired. */
-  [[nodiscard]] auto allFixedCandidatesAdmitted() const -> bool {
+  [[nodiscard]] auto allFixedCandidatesAdmitted() -> bool {
+    replenishResolvedSpace();
     for (std::size_t candidate = 0u; candidate < m_candidateCount; ++candidate)
       if (!m_scheduled.at(candidate) && !m_rejected.at(candidate) &&
           candidateUsable(candidate))
@@ -1808,7 +2108,8 @@ private:
   }
 
   /** @brief Whether every valid fixed-mode history has retired. */
-  [[nodiscard]] auto allFixedCandidatesResolved() const -> bool {
+  [[nodiscard]] auto allFixedCandidatesResolved() -> bool {
+    replenishResolvedSpace();
     for (std::size_t candidate = 0u; candidate < m_candidateCount;
          ++candidate) {
       if (!m_rejected.at(candidate) && candidateUsable(candidate) &&
@@ -1822,6 +2123,7 @@ private:
   [[nodiscard]] auto nextDirectCandidate()
       -> detail::CandidateQueue::Selection {
     while (!m_terminal) {
+      applySpaceFeedback();
       if (m_defaults.mode == TuningMode::onlineFixed &&
           allFixedCandidatesResolved()) {
         finishTuning();
@@ -1929,6 +2231,7 @@ private:
         throw std::logic_error{
             "A tuner is bound to one KernelBundle and queue type."};
       m_compileVariants.clear();
+      m_compileValidators.clear();
       m_compileVariantIndices.clear();
     }
     std::array<std::size_t, dimensionCount> indices{};
@@ -1943,6 +2246,18 @@ private:
     if constexpr (EntryIndex == std::tuple_size_v<Entries>) {
       auto const key = compileVariantKey(indices);
       m_compileVariantIndices.emplace(key, m_compileVariants.size());
+      m_compileValidators.emplace_back(
+          [](Tuner const &self, void const *rawLaunch, void const *rawBundle,
+             CandidateIndices const &tuple) {
+            auto const &launch = *static_cast<FrameSpec const *>(rawLaunch);
+            auto const &prototype = *static_cast<Bundle const *>(rawBundle);
+            auto const bundle =
+                self.template rebuildBundle<CompileValues...>(prototype, tuple);
+            return self.template withLaunchSpec<CompileValues...>(
+                launch, bundle, tuple, [&](auto const &spec) {
+                  return self.hardwareLaunchLegal(spec, bundle);
+                });
+          });
       m_compileVariants.emplace_back(
           [](void *rawCall, std::size_t candidate, bool measure,
              bool beginActivation, bool endActivation, bool trackExecution) {
@@ -2039,7 +2354,7 @@ private:
                                         indices[dimensionOffset + dimension]);
         }};
       } else {
-        return entry.values.values().at(indices[dimensionOffset]);
+        return entry.values.at(indices[dimensionOffset]);
       }
     } else {
       using Selected =
@@ -2089,6 +2404,140 @@ private:
         prototype.getArgs());
   }
 
+  template <typename... CompileValues, typename LaunchSpec, typename Bundle,
+            typename Callable>
+  decltype(auto)
+  withLaunchSpec(LaunchSpec const &prototypeLaunch, Bundle const &bundle,
+                 CandidateIndices const &indices, Callable &&callable) const {
+
+    if constexpr (alpaka::onHost::isFrameSpec_v<
+                      std::remove_cvref_t<LaunchSpec>>) {
+      auto const numFrames = [&] {
+        if constexpr (Traits::template has<detail::numFramesName>)
+          return launchValueFor<detail::numFramesName, CompileValues...>(
+              indices);
+        else
+          return prototypeLaunch.getNumFrames();
+      }();
+      auto const frameExtent = [&] {
+        if constexpr (Traits::template has<detail::frameExtentName>)
+          return launchValueFor<detail::frameExtentName, CompileValues...>(
+              indices);
+        else
+          return prototypeLaunch.getFrameExtents();
+      }();
+      auto const frame = alpaka::onHost::FrameSpec{
+          numFrames, frameExtent,
+          std::remove_cvref_t<LaunchSpec>::getExecutor()};
+      if constexpr (Traits::template has<detail::numThreadsName> ||
+                    Traits::template has<detail::numBlocksName>) {
+        auto const derived = deriveThreadSpec(m_device, frame, bundle);
+        auto const blocks = [&] {
+          if constexpr (Traits::template has<detail::numBlocksName>)
+            return launchValueFor<detail::numBlocksName, CompileValues...>(
+                indices);
+          else
+            return derived.getNumBlocks();
+        }();
+        auto const threads = [&] {
+          if constexpr (Traits::template has<detail::numThreadsName>)
+            return launchValueFor<detail::numThreadsName, CompileValues...>(
+                indices);
+          else
+            return derived.getNumThreads();
+        }();
+        auto const thread = alpaka::onHost::ThreadSpec{
+            blocks, threads,
+            std::remove_cvref_t<decltype(derived)>::getExecutor()};
+        return std::invoke(callable, thread);
+      } else {
+        return std::invoke(callable, frame);
+      }
+    } else if constexpr (alpaka::onHost::isThreadSpec_v<
+                             std::remove_cvref_t<LaunchSpec>>) {
+      auto const blocks = [&] {
+        if constexpr (Traits::template has<detail::numBlocksName>)
+          return launchValueFor<detail::numBlocksName, CompileValues...>(
+              indices);
+        else
+          return prototypeLaunch.getNumBlocks();
+      }();
+      auto const threads = [&] {
+        if constexpr (Traits::template has<detail::numThreadsName>)
+          return launchValueFor<detail::numThreadsName, CompileValues...>(
+              indices);
+        else
+          return prototypeLaunch.getNumThreads();
+      }();
+      auto const thread = alpaka::onHost::ThreadSpec{
+          blocks, threads, std::remove_cvref_t<LaunchSpec>::getExecutor()};
+      return std::invoke(callable, thread);
+    } else {
+      static_assert(alpaka::onHost::concepts::ThreadOrFrameSpec<
+                        std::remove_cvref_t<LaunchSpec>>,
+                    "alpakaTune::Tuner::enqueue requires "
+                    "alpaka::onHost::FrameSpec or ThreadSpec.");
+    }
+  }
+
+  template <typename Spec, typename Bundle>
+  [[nodiscard]] auto hardwareLaunchLegal(Spec const &spec,
+                                         Bundle const &bundle) const -> bool {
+    if constexpr (alpaka::onHost::isFrameSpec_v<Spec>) {
+      auto const extents = spec.getFrameExtents();
+      auto const frames = spec.getNumFrames();
+      std::size_t elements{1u};
+      for (std::size_t d{}; d < ALPAKA_TYPEOF(extents)::dim(); ++d) {
+        if (extents[d] <= 0 || frames[d] <= 0 ||
+            static_cast<std::size_t>(extents[d]) >
+                std::numeric_limits<std::size_t>::max() / elements)
+          return false;
+        elements *= static_cast<std::size_t>(extents[d]);
+      }
+      return hardwareLaunchLegal(deriveThreadSpec(m_device, spec, bundle),
+                                 bundle);
+    } else {
+      auto const properties = m_device.getDeviceProperties();
+      auto const threads = spec.getNumThreads();
+      auto const blocks = spec.getNumBlocks();
+      constexpr auto dimensions = ALPAKA_TYPEOF(threads)::dim();
+      auto const threadLimits =
+          properties.template getMaxThreadsPerBlock<dimensions>();
+      auto const blockLimits =
+          properties.template getMaxBlocksPerGrid<dimensions>();
+      std::size_t threadProduct{1u}, blockProduct{1u};
+      for (std::size_t d{}; d < dimensions; ++d) {
+        if (threads[d] <= 0 || blocks[d] <= 0 || threads[d] > threadLimits[d] ||
+            blocks[d] > blockLimits[d])
+          return false;
+        if (static_cast<std::size_t>(threads[d]) >
+                properties.maxThreadsPerBlock / threadProduct ||
+            static_cast<std::size_t>(blocks[d]) >
+                properties.maxBlocksPerGrid / blockProduct)
+          return false;
+        threadProduct *= static_cast<std::size_t>(threads[d]);
+        blockProduct *= static_cast<std::size_t>(blocks[d]);
+      }
+      if constexpr (alpaka::isSeqExecutor(Spec::getExecutor()))
+        if (threadProduct != 1u)
+          return false;
+      return alpaka::onHost::getDynSharedMemBytes(spec, bundle) <=
+             properties.sharedMemPerBlockBytes;
+    }
+  }
+
+  template <typename Queue, typename LaunchSpec, typename Bundle>
+  void bindLaunchValidator(LaunchSpec const &launch, Bundle const &bundle) {
+    if constexpr (Traits::generatesCandidates) {
+      initialiseCompileVariants<Queue, LaunchSpec, Bundle>();
+      m_launchValidator = [launch, bundle](Tuner const &self,
+                                           CandidateIndices const &indices) {
+        return self.m_compileValidators.at(self.m_compileVariantIndices.at(
+            self.compileVariantKey(indices)))(self, &launch, &bundle, indices);
+      };
+    }
+  }
+
   template <typename... CompileValues, typename Queue, typename LaunchSpec,
             typename Bundle>
   void launchCandidate(Queue const &queue, LaunchSpec const &prototypeLaunch,
@@ -2100,74 +2549,15 @@ private:
     auto const bundle = rebuildBundle<CompileValues...>(prototype, indices);
 
     auto launch = [&](auto const &launchQueue) {
-      if constexpr (alpaka::onHost::isFrameSpec_v<
-                        std::remove_cvref_t<LaunchSpec>>) {
-        auto const numFrames = [&] {
-          if constexpr (Traits::template has<detail::numFramesName>)
-            return launchValueFor<detail::numFramesName, CompileValues...>(
-                indices);
-          else
-            return prototypeLaunch.getNumFrames();
-        }();
-        auto const frameExtent = [&] {
-          if constexpr (Traits::template has<detail::frameExtentName>)
-            return launchValueFor<detail::frameExtentName, CompileValues...>(
-                indices);
-          else
-            return prototypeLaunch.getFrameExtents();
-        }();
-        auto const frame = alpaka::onHost::FrameSpec{
-            numFrames, frameExtent,
-            std::remove_cvref_t<LaunchSpec>::getExecutor()};
-        if constexpr (Traits::template has<detail::numThreadsName> ||
-                      Traits::template has<detail::numBlocksName>) {
-          auto const derived = deriveThreadSpec(m_device, frame, bundle);
-          auto const blocks = [&] {
-            if constexpr (Traits::template has<detail::numBlocksName>)
-              return launchValueFor<detail::numBlocksName, CompileValues...>(
-                  indices);
-            else
-              return derived.getNumBlocks();
-          }();
-          auto const threads = [&] {
-            if constexpr (Traits::template has<detail::numThreadsName>)
-              return launchValueFor<detail::numThreadsName, CompileValues...>(
-                  indices);
-            else
-              return derived.getNumThreads();
-          }();
-          auto const thread = alpaka::onHost::ThreadSpec{
-              blocks, threads,
-              std::remove_cvref_t<decltype(derived)>::getExecutor()};
-          launchQueue.enqueue(thread, bundle);
-        } else {
-          launchQueue.enqueue(frame, bundle);
-        }
-      } else if constexpr (alpaka::onHost::isThreadSpec_v<
-                               std::remove_cvref_t<LaunchSpec>>) {
-        auto const blocks = [&] {
-          if constexpr (Traits::template has<detail::numBlocksName>)
-            return launchValueFor<detail::numBlocksName, CompileValues...>(
-                indices);
-          else
-            return prototypeLaunch.getNumBlocks();
-        }();
-        auto const threads = [&] {
-          if constexpr (Traits::template has<detail::numThreadsName>)
-            return launchValueFor<detail::numThreadsName, CompileValues...>(
-                indices);
-          else
-            return prototypeLaunch.getNumThreads();
-        }();
-        auto const thread = alpaka::onHost::ThreadSpec{
-            blocks, threads, std::remove_cvref_t<LaunchSpec>::getExecutor()};
-        launchQueue.enqueue(thread, bundle);
-      } else {
-        static_assert(alpaka::onHost::concepts::ThreadOrFrameSpec<
-                          std::remove_cvref_t<LaunchSpec>>,
-                      "alpakaTune::Tuner::enqueue requires "
-                      "alpaka::onHost::FrameSpec or ThreadSpec.");
-      }
+      withLaunchSpec<CompileValues...>(
+          prototypeLaunch, bundle, indices, [&](auto const &spec) {
+            if constexpr (Traits::generatesCandidates)
+              if (!hardwareLaunchLegal(spec, bundle))
+                throw std::invalid_argument{
+                    "The selected launch geometry exceeds current kernel or "
+                    "device resources."};
+            launchQueue.enqueue(spec, bundle);
+          });
     };
 
     if (trackExecution) {
@@ -2208,8 +2598,11 @@ private:
     if (m_defaults.mode == TuningMode::onlineAdaptive && endActivation)
       history.retire(detail::RuntimeCompletion::adaptiveVisit);
     auto const schedulingChanged = history.isFinished();
+    auto const completedScore = history.statistics().estimate();
     if (schedulingChanged) {
       recordRetiredConfiguration(candidate);
+      m_refinementPending =
+          m_space.observe(candidate, completedScore) || m_refinementPending;
       if (m_queue && !m_queue->retire(candidate))
         throw std::logic_error{
             "The completed configuration was not active in the queue."};
@@ -2294,7 +2687,10 @@ private:
           (appendTunableFingerprint(identity, entries), ...);
         },
         m_tunables.entries());
-    identity << "candidates=" << m_candidateCount << '\n';
+    if (!m_space.usesCandidateCatalog())
+      identity << "candidates=" << m_candidateCount << '\n';
+    else
+      identity << "space-generator=1\n";
     if constexpr (requires { m_tunables.restrictions(); }) {
       std::apply(
           [&identity](auto const &...restrictions) {
@@ -2311,12 +2707,29 @@ private:
                                        Entry const &entry) {
     using Values = typename Entry::values_type;
     identity << entry.nameView() << '=';
-    if constexpr (detail::isRVals<Values>) {
+    if constexpr (requires {
+                    entry.values.minimum();
+                    entry.values.maximum();
+                    entry.values.step();
+                  }) {
+      identity << "interval:" << detail::printable(entry.values.minimum())
+               << ':' << detail::printable(entry.values.maximum()) << ':'
+               << detail::printable(entry.values.step());
+    } else if constexpr (detail::isRVals<Values>) {
       for (auto const &value : entry.values.values())
         identity << detail::printable(value) << ',';
     } else {
       appendCValFingerprint<Values>(identity);
     }
+    if constexpr (detail::isAutomaticCandidates<Values>)
+      identity << ":auto:" << entry.values.logarithmic() << ':'
+               << entry.values.categorical() << ':' << entry.values.alignment()
+               << ":preferred="
+               << entry.values.preferredIndex().value_or(
+                      std::numeric_limits<std::size_t>::max());
+    if constexpr (requires { entry.values.generator; })
+      identity << ":dependent="
+               << detail::typeName<decltype(entry.values.generator)>();
     identity << ';';
   }
 
@@ -2324,7 +2737,7 @@ private:
   [[nodiscard]] auto modelWorkloadId() const -> std::string {
     std::ostringstream identity;
     identity << "model-feature-schema="
-             << LearnedModelContextDescriptor::featureSchemaVersion << '\n';
+             << (m_space.usesCandidateCatalog() ? 2u : 1u) << '\n';
     identity << "kernel=" << m_kernelName << '\n';
     identity << "launch=" << m_launchSpecification << '\n';
     identity << "metric=" << tuningMetricKindName(metricKind()) << ':'
@@ -2336,7 +2749,10 @@ private:
           (appendTunableFingerprint(identity, entries), ...);
         },
         m_tunables.entries());
-    identity << "candidates=" << m_candidateCount << '\n';
+    if (!m_space.usesCandidateCatalog())
+      identity << "candidates=" << m_candidateCount << '\n';
+    else
+      identity << "space-generator=1\n";
     return detail::hashFingerprint(identity.str());
   }
 
@@ -2411,10 +2827,85 @@ private:
       return TunerCompletionReason::maximumRetiredConfigurations;
     if (name == "maximum_consecutive_strategy_retries")
       return TunerCompletionReason::maximumConsecutiveStrategyRetries;
+    if (name == "candidate_budget")
+      return TunerCompletionReason::candidateBudget;
+    if (name == "plateau")
+      return TunerCompletionReason::plateau;
+    if (name == "generation_stalled")
+      return TunerCompletionReason::generationStalled;
     if (name == "no_valid_configuration")
       return TunerCompletionReason::noValidConfiguration;
     return TunerCompletionReason::none;
   }
+
+#if ALPAKA_TUNE_HAS_JSON
+  [[nodiscard]] auto serializedCandidateSpace() const -> nlohmann::json {
+    auto const info = m_space.info();
+    return {{"declared_combination_count",
+             info.declaredCombinationCount
+                 ? nlohmann::json(*info.declaredCombinationCount)
+                 : nlohmann::json(nullptr)},
+            {"domain_exhausted", info.domainExhausted},
+            {"distinct_measured_count", info.distinctMeasuredCandidateCount},
+            {"version", 1u},
+            {"catalog", m_space.catalog()},
+            {"global_candidates", m_space.globalCandidates()},
+            {"cursor", m_space.cursor()},
+            {"revision", m_space.revision()},
+            {"state", static_cast<unsigned>(m_space.state())},
+            {"random_state", m_space.randomState()}};
+  }
+  void updateCandidateSpaceCache(nlohmann::json &cache) const {
+    if (!m_space.usesCandidateCatalog())
+      return;
+    auto &saved = cache["candidate_space"];
+    if (!saved.is_object() || !saved.contains("catalog") ||
+        saved["catalog"].size() != m_space.size() ||
+        saved.value("state", std::numeric_limits<unsigned>::max()) !=
+            static_cast<unsigned>(m_space.state())) {
+      saved = serializedCandidateSpace();
+    } else
+      saved["distinct_measured_count"] =
+          m_space.info().distinctMeasuredCandidateCount;
+  }
+
+  auto restoreCandidateSpace(nlohmann::json const &cache) -> bool {
+    if (!m_space.usesCandidateCatalog())
+      return !cache.contains("candidate_space");
+    try {
+      auto const &saved = cache.at("candidate_space");
+      if (saved.at("version").get<unsigned>() != 1u)
+        return false;
+      auto rows =
+          saved.at("catalog").template get<std::vector<CandidateIndices>>();
+      if (rows.size() < m_space.size())
+        return false;
+      if (!std::equal(m_space.catalog().begin(), m_space.catalog().end(),
+                      rows.begin()))
+        return false;
+      for (auto const &row : rows)
+        if (!candidateAccepted(row) ||
+            (m_launchValidator && !m_launchValidator(*this, row)))
+          return false;
+      auto const state = saved.at("state").get<unsigned>();
+      if (state > static_cast<unsigned>(SpaceState::stalled))
+        return false;
+      auto restoredSpace = m_space;
+      restoredSpace.restore(
+          std::move(rows), saved.at("cursor").get<std::size_t>(),
+          saved.at("revision").get<std::size_t>(),
+          static_cast<SpaceState>(state),
+          saved.at("global_candidates").get<std::vector<bool>>());
+      restoredSpace.restoreRandomState(
+          saved.at("random_state").get<std::string>());
+      m_space = std::move(restoredSpace);
+      resizeCandidateStorage();
+      return true;
+    } catch (std::exception const &) {
+      return false;
+    }
+  }
+#endif
 
   [[nodiscard]] auto loadHistory() -> bool {
 #if ALPAKA_TUNE_HAS_JSON
@@ -2441,6 +2932,8 @@ private:
       cachePointer = &store["contexts"][m_fingerprint];
     }
     auto const &cache = *cachePointer;
+    if (!restoreCandidateSpace(cache))
+      return false;
     auto restored = std::vector<std::tuple<std::size_t, double, std::size_t>>{};
     try {
       auto const &metric = cache.at("metric");
@@ -2543,6 +3036,8 @@ private:
       cachePointer = &store["contexts"][m_fingerprint];
     }
     auto const &cache = *cachePointer;
+    if (!restoreCandidateSpace(cache))
+      return false;
     if (cache.value("fingerprint", "") != m_fingerprint)
       return false;
     if (cache.value("candidate_count", std::size_t{}) != m_candidateCount)
@@ -2694,7 +3189,7 @@ private:
     }
     m_bestCandidate = best.value_or(std::numeric_limits<std::size_t>::max());
     m_terminal = true;
-    m_completionReason = best ? TunerCompletionReason::allConfigurations
+    m_completionReason = best ? spaceCompletionReason()
                               : TunerCompletionReason::noValidConfiguration;
     writeCache();
   }
@@ -2744,7 +3239,9 @@ private:
     if (m_defaults.strategy == StrategyKind::learnedHybrid &&
         (schedulingChanged || !m_stagedCompleteHistory || !m_stagedHistory))
       learning = serializedLearningStatus();
-    if (!m_stagedCompleteHistory) {
+    if (!m_stagedCompleteHistory ||
+        m_stagedCompleteHistory->value("candidate_count", std::size_t{}) !=
+            m_candidateCount) {
       m_stagedCompleteHistory =
           std::make_shared<nlohmann::json>(serializedCache(learning));
     } else {
@@ -2777,6 +3274,7 @@ private:
         cache["best_improvements"].push_back(serializedImprovement(
             m_bestImprovements.at(cache["best_improvements"].size())));
     }
+    updateCandidateSpaceCache(*m_stagedCompleteHistory);
     m_completeHistory->stageCache(completeHistorySchemaVersion, m_fingerprint,
                                   m_stagedCompleteHistory);
     stageHistoryCache(candidate, schedulingChanged, learning);
@@ -2877,7 +3375,17 @@ private:
     using Values = typename Entry::values_type;
     constexpr auto offset = Traits::template dimensionOffset<Entry::name>;
     constexpr auto dimensions = detail::candidateDimensionCount<Values>;
-    if constexpr (dimensions == 1u) {
+    if constexpr (dimensions == 1u &&
+                  requires { std::declval<Values>().minimum(); }) {
+      auto const &entry =
+          std::get<Traits::template index<Entry::name>>(m_tunables.entries());
+      auto const index = entry.values.indexOf(
+          stored.template get<typename Values::value_type>());
+      if (!index)
+        return false;
+      indices[offset] = *index;
+      return true;
+    } else if constexpr (dimensions == 1u) {
       for (std::size_t index = 0u; index < m_dimensionSizes.at(offset);
            ++index) {
         indices[offset] = index;
@@ -2947,11 +3455,9 @@ private:
         m_tunables.entries());
     if (!valid || !candidateAccepted(indices))
       return std::nullopt;
-    auto candidate = std::size_t{0u};
-    for (std::size_t dimension = 0u; dimension < dimensionCount; ++dimension)
-      candidate =
-          candidate * m_dimensionSizes.at(dimension) + indices.at(dimension);
-    if (serializedCompactCandidateConfiguration(candidate) != configuration)
+    auto const candidate = m_space.find(indices);
+    if (!candidate ||
+        serializedCompactCandidateConfiguration(*candidate) != configuration)
       return std::nullopt;
     return candidate;
   }
@@ -2959,8 +3465,7 @@ private:
   [[nodiscard]] auto serializedLearnedModelContext() const -> nlohmann::json {
     auto const descriptor = learnedModelContext();
     auto result = nlohmann::json{
-        {"feature_schema_version",
-         LearnedModelContextDescriptor::featureSchemaVersion},
+        {"feature_schema_version", descriptor.schemaVersion},
         {"workload_id", modelWorkloadId()},
         {"device_class",
          descriptor.deviceClass == LearnedDeviceClass::gpu ? "gpu" : "cpu"},
@@ -3130,6 +3635,8 @@ private:
           {"median_metric_value", statistics.estimate()},
           {"measurement_count", statistics.sampleCount}};
     }
+    if (m_space.usesCandidateCatalog())
+      cache["candidate_space"] = serializedCandidateSpace();
     if (learning)
       if (auto adapter = serializedCompactAdapter(*learning))
         cache["adapter"] = std::move(*adapter);
@@ -3160,6 +3667,7 @@ private:
         }
       }
     }
+    updateCandidateSpaceCache(*m_stagedHistory);
     m_history->stageCache(m_fingerprint, m_stagedHistory);
   }
 
@@ -3169,6 +3677,8 @@ private:
     nlohmann::json cache;
     cache["fingerprint"] = m_fingerprint;
     cache["candidate_count"] = m_candidateCount;
+    if (m_space.usesCandidateCatalog())
+      cache["candidate_space"] = serializedCandidateSpace();
     if (auto const best = currentBestCandidate())
       cache["best_candidate_index"] = *best;
     else
@@ -3198,6 +3708,20 @@ private:
     cache["policy"] = {{"history_window_size", m_defaults.historyWindowSize},
                        {"maximum_consecutive_strategy_retries",
                         m_defaults.maximumConsecutiveStrategyRetries}};
+    if (m_space.usesCandidateCatalog())
+      cache["policy"]["space"] = {
+          {"initial_candidates", m_defaults.space.initialCandidates},
+          {"refinement_batch_size", m_defaults.space.refinementBatchSize},
+          {"refinement_interval", m_defaults.space.refinementInterval},
+          {"maximum_candidates", m_defaults.space.maximumCandidates},
+          {"maximum_generation_attempts",
+           m_defaults.space.maximumGenerationAttempts},
+          {"plateau_patience",
+           m_defaults.space.plateauPatience
+               ? nlohmann::json(*m_defaults.space.plateauPatience)
+               : nlohmann::json(nullptr)},
+          {"minimum_relative_improvement",
+           m_defaults.space.minimumRelativeImprovement}};
     cache["policy"]["queue"] = nullptr;
     if (m_defaults.queue) {
       cache["policy"]["queue"] = {
@@ -3277,6 +3801,7 @@ private:
     if (!m_stagedHistory)
       m_stagedHistory = std::make_shared<nlohmann::json>();
     *m_stagedHistory = serializedHistoryCache(learning);
+    updateCandidateSpaceCache(*m_stagedHistory);
     m_history->stageCache(m_fingerprint, m_stagedHistory);
 #endif
   }
@@ -3291,6 +3816,13 @@ private:
   std::string m_metricName;
   [[no_unique_address]] MetricPolicy m_metricPolicy;
   std::vector<std::size_t> m_dimensionSizes;
+  detail::CandidateSpace<dimensionCount> m_space;
+  std::vector<std::function<bool(
+      Tuner const &, std::array<std::size_t, dimensionCount> &, bool)>>
+      m_domainProjectors;
+  bool m_refinementPending{};
+  std::function<bool(Tuner const &, CandidateIndices const &)>
+      m_launchValidator;
   std::size_t m_candidateCount{1u};
   std::uint64_t m_baseRandomSeed{};
   std::uint64_t m_effectiveRandomSeed{};
@@ -3335,6 +3867,9 @@ private:
   std::vector<ExecutedConfiguration> m_executionHistory;
   std::optional<PendingMetric> m_pendingMetric;
   std::vector<CompileVariantFunctor> m_compileVariants;
+  std::vector<std::function<bool(Tuner const &, void const *, void const *,
+                                 CandidateIndices const &)>>
+      m_compileValidators;
   std::unordered_map<std::string, std::size_t> m_compileVariantIndices;
   std::string m_compileVariantSignature;
   std::string m_fingerprint;

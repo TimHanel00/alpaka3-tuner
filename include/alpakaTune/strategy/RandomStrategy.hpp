@@ -24,6 +24,22 @@ public:
     return configuration;
   }
 
+  [[nodiscard]] auto supportsCandidateCatalog() const noexcept
+      -> bool override {
+    return true;
+  }
+  [[nodiscard]] auto recommendCandidate(StrategyContext const &context)
+      -> std::optional<std::size_t> override {
+    std::optional<std::size_t> selected;
+    std::size_t available{};
+    for (std::size_t id{}; id < context.candidateCount(); ++id)
+      if (context.candidateAvailable(id) &&
+          std::uniform_int_distribution<std::size_t>{0u, available++}(
+              m_random) == 0u)
+        selected = id;
+    return selected;
+  }
+
 private:
   std::mt19937_64 m_random;
   std::uniform_real_distribution<float> m_distribution{0.0f, 1.0f};

@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "alpakaTune/space/SpaceConfig.hpp"
+
 #include "alpakaTune/interfaces/Strategy.hpp"
 
 #include <yaml-cpp/yaml.h>
@@ -98,6 +100,7 @@ struct QueueConfig {
  * tuner policy only; it never determines the surrounding application's loop.
  */
 struct TunerConfig {
+  SpaceConfig space;
   /** Persistence reuse and online measurement lifecycle. */
   TuningMode mode{TuningMode::onlineAdaptive};
   /** Launch a terminal replay winner without runtime instrumentation. */
@@ -248,7 +251,7 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
         "alpakaTune YAML configuration must contain a map."};
   rejectUnknown(root,
                 {"schema_version", "tuning", "queue", "history",
-                 "complete_history", "learning"},
+                 "complete_history", "learning", "space"},
                 "root");
   if (!root["schema_version"])
     throw std::runtime_error{"Missing YAML key: schema_version"};
@@ -479,6 +482,33 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
     defaults.learnedCandidateBatchSize = optionalPositive(
         learning, "candidate_batch_size", defaults.learnedCandidateBatchSize);
   }
+  if (auto const space = root["space"]; space) {
+    if (!space.IsMap())
+      throw std::runtime_error{"YAML space must contain a map."};
+    rejectUnknown(space,
+                  {"initial_candidates", "refinement_batch_size",
+                   "refinement_interval", "maximum_candidates",
+                   "maximum_generation_attempts", "plateau_patience",
+                   "minimum_relative_improvement"},
+                  "space");
+    defaults.space.initialCandidates = optionalPositive(
+        space, "initial_candidates", defaults.space.initialCandidates);
+    defaults.space.refinementBatchSize = optionalPositive(
+        space, "refinement_batch_size", defaults.space.refinementBatchSize);
+    defaults.space.refinementInterval = optionalPositive(
+        space, "refinement_interval", defaults.space.refinementInterval);
+    defaults.space.maximumCandidates = optionalPositive(
+        space, "maximum_candidates", defaults.space.maximumCandidates);
+    defaults.space.maximumGenerationAttempts =
+        optionalPositive(space, "maximum_generation_attempts",
+                         defaults.space.maximumGenerationAttempts);
+    if (space["plateau_patience"] && !space["plateau_patience"].IsNull())
+      defaults.space.plateauPatience =
+          requirePositive(space, "plateau_patience");
+    if (space["minimum_relative_improvement"])
+      defaults.space.minimumRelativeImprovement =
+          space["minimum_relative_improvement"].as<double>();
+  }
   defaults.validate();
   return defaults;
 }
@@ -509,6 +539,7 @@ inline auto defaultConfigurationPath() -> std::filesystem::path {
 } // namespace detail
 
 inline void TunerConfig::validate() const {
+  space.validate();
   auto positive = [](std::size_t value, std::string_view member) {
     if (value == 0u)
       throw std::invalid_argument{std::string{member} +

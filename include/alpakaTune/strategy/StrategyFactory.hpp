@@ -35,6 +35,23 @@ public:
     return configuration;
   }
 
+  [[nodiscard]] auto supportsCandidateCatalog() const noexcept
+      -> bool override {
+    return true;
+  }
+  [[nodiscard]] auto recommendCandidate(StrategyContext const &context)
+      -> std::optional<std::size_t> override {
+    auto const count = context.candidateCount();
+    if (count == 0u)
+      return std::nullopt;
+    for (std::size_t attempt{}; attempt < count; ++attempt) {
+      auto const id = m_nextCandidate++ % count;
+      if (context.candidateAvailable(id))
+        return id;
+    }
+    return std::nullopt;
+  }
+
 private:
   std::size_t m_nextCandidate{};
 };

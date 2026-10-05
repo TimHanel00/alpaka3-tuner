@@ -58,6 +58,69 @@ public:
     }
   }
 
+  [[nodiscard]] auto supportsCandidateCatalog() const noexcept
+      -> bool override {
+    return true;
+  }
+  [[nodiscard]] auto recommendCandidate(StrategyContext const &context)
+      -> std::optional<std::size_t> override {
+    for (auto pending = m_catalogPending.begin();
+         pending != m_catalogPending.end();) {
+      auto observation = context.candidateObservation(*pending);
+      if (!observation || !observation->isFinished()) {
+        ++pending;
+        continue;
+      }
+      auto const increase = (observation->seconds - m_currentObjective) /
+                            std::max(m_currentObjective, 1.0e-12);
+      if (!m_catalogCurrent || increase <= 0.0 ||
+          m_uniform(m_random) <
+              std::exp(-std::max(increase, 0.0) / m_temperature)) {
+        m_catalogCurrent = *pending;
+        m_currentObjective = observation->seconds;
+      }
+      m_temperature = std::max(0.02f, m_temperature * 0.995f);
+      pending = m_catalogPending.erase(pending);
+    }
+    auto target =
+        m_catalogCurrent
+            ? context.candidateConfiguration(*m_catalogCurrent)
+            : ParameterConfiguration(context.parameterSizes().size(), 0.5f);
+    for (auto &value : target)
+      value = std::clamp(value + 0.35f * m_temperature * m_normal(m_random),
+                         0.0f, 1.0f);
+    std::optional<std::size_t> selected;
+    auto best = std::numeric_limits<double>::infinity();
+    for (std::size_t id{}; id < context.candidateCount(); ++id) {
+      if (!context.candidateAvailable(id))
+        continue;
+      auto const coordinates = context.candidateConfiguration(id);
+      double distance{};
+      for (std::size_t d{}; d < target.size(); ++d)
+        distance += std::pow(coordinates[d] - target[d], 2);
+      if (distance < best) {
+        best = distance;
+        selected = id;
+      }
+    }
+    return selected;
+  }
+
+  void candidateRecommendationResult(
+      std::size_t id, ParameterConfiguration const &,
+      RecommendationDisposition disposition) override {
+    if (disposition == RecommendationDisposition::scheduled)
+      m_catalogPending.push_back(id);
+  }
+  void candidateInvalidated(std::size_t id,
+                            ParameterConfiguration const &) override {
+    std::erase(m_catalogPending, id);
+    if (m_catalogCurrent == id) {
+      m_catalogCurrent.reset();
+      m_currentObjective = std::numeric_limits<double>::infinity();
+    }
+  }
+
 private:
   /** @brief Incorporate finished admitted proposals into annealing state.
    *
@@ -103,6 +166,8 @@ private:
   std::mt19937_64 m_random;
   std::uniform_real_distribution<float> m_uniform{0.0f, 1.0f};
   std::normal_distribution<float> m_normal{0.0f, 1.0f};
+  std::optional<std::size_t> m_catalogCurrent;
+  std::vector<std::size_t> m_catalogPending;
   ParameterConfiguration m_current;
   std::vector<ParameterConfiguration> m_pending;
   double m_currentObjective{std::numeric_limits<double>::infinity()};

@@ -59,6 +59,10 @@ if(alpakaTune_ENABLE_PERSISTENCE AND NOT TARGET nlohmann_json::nlohmann_json)
         GIT_SHALLOW TRUE
     )
     FetchContent_MakeAvailable(nlohmann_json)
+    if(alpaka_DEP_HIP)
+        include(cmake/PatchNlohmannJsonHip.cmake)
+        alpakatune_patch_nlohmann_json_hip("${nlohmann_json_SOURCE_DIR}")
+    endif()
 endif()
 
 add_library(alpakaTune INTERFACE)

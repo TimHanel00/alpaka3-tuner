@@ -61,6 +61,7 @@ struct LearnedDimensionDescriptor {
 struct LearnedModelContextDescriptor {
   static constexpr std::uint32_t featureSchemaVersion = 1u;
 
+  std::uint32_t schemaVersion{featureSchemaVersion};
   LearnedDeviceClass deviceClass{LearnedDeviceClass::cpu};
   std::vector<LearnedContextFeature> contextFeatures;
   std::vector<LearnedDimensionDescriptor> dimensions;
@@ -155,7 +156,8 @@ validateLearnedContext(LearnedModelContextDescriptor const &context)
   if (context.dimensions.empty())
     return "A learned-model context needs at least one tuning dimension.";
   try {
-    auto const count = candidateCount(context.dimensions);
+    auto const count =
+        context.schemaVersion == 1u ? candidateCount(context.dimensions) : 0u;
     if (!context.legalCandidates.empty() &&
         context.legalCandidates.size() != count)
       return "The learned-model legality mask does not match the candidate "
@@ -178,6 +180,8 @@ validateLearnedContext(LearnedModelContextDescriptor const &context)
     return "Learned-model context feature names must be unique.";
 
   for (auto const &dimension : context.dimensions) {
+    if (dimension.cardinality == 0u)
+      return "Learned-model dimensions must not be empty.";
     if (dimension.name.empty())
       return "Learned-model dimension names must not be empty.";
     if (static_cast<std::uint32_t>(dimension.kind) >

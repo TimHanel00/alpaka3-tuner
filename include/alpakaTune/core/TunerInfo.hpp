@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "alpakaTune/space/SpaceConfig.hpp"
+
 #include "alpakaTune/core/TunerConfig.hpp"
 #include "alpakaTune/core/TuningMetric.hpp"
 
@@ -133,6 +135,9 @@ enum class TunerCompletionReason {
   /** Fixed-mode admission could not accept repeated strategy proposals. */
   maximumConsecutiveStrategyRetries,
   /** Every measured candidate was invalidated or rejected. */
+  candidateBudget,   ///< Generated catalog reached its size limit.
+  plateau,           ///< Generation stopped after sustained lack of gain.
+  generationStalled, ///< Bounded generation attempts found no new candidate.
   noValidConfiguration,
 };
 
@@ -165,6 +170,12 @@ completionReasonName(TunerCompletionReason reason) noexcept -> char const * {
     return "maximum_retired_configurations";
   case TunerCompletionReason::maximumConsecutiveStrategyRetries:
     return "maximum_consecutive_strategy_retries";
+  case TunerCompletionReason::candidateBudget:
+    return "candidate_budget";
+  case TunerCompletionReason::plateau:
+    return "plateau";
+  case TunerCompletionReason::generationStalled:
+    return "generation_stalled";
   case TunerCompletionReason::noValidConfiguration:
     return "no_valid_configuration";
   }
@@ -173,6 +184,7 @@ completionReasonName(TunerCompletionReason reason) noexcept -> char const * {
 
 /** @brief Read-only snapshot of tuner policy, coverage, and diagnostics. */
 struct TunerInfo {
+  SpaceInfo space;
   /** Execution mode used by this tuner. */
   TuningMode mode{TuningMode::onlineAdaptive};
   /** Cartesian candidate count before restrictions are evaluated lazily. */
