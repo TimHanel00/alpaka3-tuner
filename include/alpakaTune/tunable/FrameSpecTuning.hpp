@@ -444,4 +444,137 @@ makeFrameSpecTuning(alpaka::onHost::concepts::FrameSpec auto const &frameSpec) {
       preserveCoverage(threadSpec));
 }
 
+/** Explicitly permit changed logical coverage for a kernel that traverses its
+ * full problem. */
+struct FullTraversal {};
+inline constexpr FullTraversal fullTraversal{};
+
+namespace detail {
+template <FixedString Name, std::size_t I = 0u, typename Default,
+          typename Tuple>
+auto selectLaunchOverride(Default fallback, Tuple const &choices) {
+  if constexpr (I == std::tuple_size_v<Tuple>)
+    return fallback;
+  else {
+    using Entry = std::remove_cvref_t<std::tuple_element_t<I, Tuple>>;
+    if constexpr (sameName<Entry::name, Name>)
+      return std::get<I>(choices);
+    else
+      return selectLaunchOverride<Name, I + 1u>(std::move(fallback), choices);
+  }
+}
+template <FixedString Name, typename Default, typename... Overrides>
+auto launchOverride(Default fallback, Overrides const &...overrides) {
+  static_assert(
+      (std::size_t{} + ... + (sameName<Overrides::name, Name> ? 1u : 0u)) <= 1u,
+      "A launch parameter can only be overridden once.");
+  return selectLaunchOverride<Name>(std::move(fallback),
+                                    std::tie(overrides...));
+}
+
+// Each component contributes alternatives without materializing their product.
+// Runtime vector dimensions retain the existing independent-component contract.
+auto automaticGeometry(alpaka::concepts::Vector auto const &counts,
+                       alpaka::concepts::Vector auto const &extent,
+                       bool sequential) {
+  using Vector =
+      alpaka::Vec<ALPAKA_TYPEOF(counts[0u]), ALPAKA_TYPEOF(counts)::dim()>;
+  auto extents = std::vector<Vector>{Vector{extent}};
+  auto numbers = std::vector<Vector>{Vector{counts}};
+  for (std::size_t d{}; d < Vector::dim(); ++d) {
+    auto const originalCount = static_cast<std::uintmax_t>(counts[d]);
+    auto const originalExtent = static_cast<std::uintmax_t>(extent[d]);
+    if (originalExtent == 0u || originalCount == 0u ||
+        originalCount >
+            std::numeric_limits<std::uintmax_t>::max() / originalExtent)
+      throw std::invalid_argument{
+          "Automatic launch tuning requires positive representable coverage."};
+    auto const coverage = originalCount * originalExtent;
+    for (std::uintmax_t value{1u}; value <= 1024u; value *= 2u) {
+      if (sequential && value != 1u)
+        continue;
+      if (coverage % value != 0u ||
+          coverage / value >
+              std::numeric_limits<typename Vector::value_type>::max())
+        continue;
+      auto shape = Vector{extent};
+      shape[d] = static_cast<typename Vector::value_type>(value);
+      auto number = Vector{counts};
+      number[d] = static_cast<typename Vector::value_type>(coverage / value);
+      appendUnique(extents, shape);
+      appendUnique(numbers, number);
+    }
+  }
+  return std::pair{autoCandidates(RVals<Vector>{std::move(extents)}),
+                   autoCandidates(RVals<Vector>{std::move(numbers)})};
+}
+} // namespace detail
+
+/** Automatic FrameSpec domains preserving each axis's original coverage. */
+template <typename... Overrides>
+[[nodiscard]] auto
+makeAutomaticLaunchTuning(alpaka::onHost::concepts::FrameSpec auto const &spec,
+                          Overrides const &...overrides) {
+  static_assert(((detail::sameName<Overrides::name, detail::frameExtentName> ||
+                  detail::sameName<Overrides::name, detail::numFramesName>) &&
+                 ...),
+                "FrameSpec overrides must name frameExtent or numFrames.");
+  auto [extentValues, countValues] = detail::automaticGeometry(
+      spec.getNumFrames(), spec.getFrameExtents(), false);
+  return makeFrameSpecTuning(
+      detail::launchOverride<detail::frameExtentName>(
+          tuneFrameExtent(spec, std::move(extentValues)), overrides...),
+      detail::launchOverride<detail::numFramesName>(
+          tuneNumFrames(spec, std::move(countValues)), overrides...),
+      preserveCoverage(spec));
+}
+
+/** Automatic ThreadSpec domains, checked against the selected executor and
+ * device at first enqueue. */
+template <typename... Overrides>
+[[nodiscard]] auto
+makeAutomaticLaunchTuning(alpaka::onHost::concepts::ThreadSpec auto const &spec,
+                          Overrides const &...overrides) {
+  static_assert(((detail::sameName<Overrides::name, detail::numThreadsName> ||
+                  detail::sameName<Overrides::name, detail::numBlocksName>) &&
+                 ...),
+                "ThreadSpec overrides must name numThreads or numBlocks.");
+  auto [threadValues, blockValues] = detail::automaticGeometry(
+      spec.getNumBlocks(), spec.getNumThreads(),
+      alpaka::isSeqExecutor(ALPAKA_TYPEOF(spec)::getExecutor()));
+  return makeThreadSpecTuning(
+      detail::launchOverride<detail::numBlocksName>(
+          tuneNumBlocks(spec, std::move(blockValues)), overrides...),
+      detail::launchOverride<detail::numThreadsName>(
+          tuneNumThreads(spec, std::move(threadValues)), overrides...),
+      preserveCoverage(spec));
+}
+
+/** Wider default FrameSpec geometry requires an explicit full-traversal
+ * promise. */
+[[nodiscard]] auto
+makeAutomaticLaunchTuning(alpaka::onHost::concepts::FrameSpec auto const &spec,
+                          FullTraversal) {
+  return TunableBundle{
+      tuneFrameExtent(spec, autoCandidates(defaultFrameExtentCandidates(spec))),
+      tuneNumFrames(spec, autoCandidates(
+                              defaultNumFramesCandidates(spec.getNumFrames()))),
+  };
+}
+
+/** Wider physical geometry requires a kernel that traverses its full problem.
+ */
+[[nodiscard]] auto
+makeAutomaticLaunchTuning(alpaka::onHost::concepts::ThreadSpec auto const &spec,
+                          FullTraversal) {
+  auto logical =
+      alpaka::onHost::FrameSpec{spec.getNumBlocks(), spec.getNumThreads(),
+                                ALPAKA_TYPEOF(spec)::getExecutor()};
+  return TunableBundle{
+      tuneNumThreads(spec,
+                     autoCandidates(defaultFrameExtentCandidates(logical))),
+      tuneNumBlocks(spec, autoCandidates(defaultNumFramesCandidates(
+                              spec.getNumBlocks())))};
+}
+
 } // namespace alpakaTune

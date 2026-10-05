@@ -235,6 +235,8 @@ inline constexpr int historySchemaVersion = 2;
 
   auto result = nlohmann::json{{"configurations", nlohmann::json::array()},
                                {"metric", cache.at("metric")}};
+  if (cache.contains("candidate_space"))
+    result["candidate_space"] = cache.at("candidate_space");
   for (std::size_t rank = 0u; rank < records.size(); ++rank) {
     if (!selected.at(rank))
       continue;

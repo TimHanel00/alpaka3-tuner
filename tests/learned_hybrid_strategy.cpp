@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <set>
 #include <span>
@@ -52,7 +53,8 @@ void writeFloat(std::ofstream &output, float value) {
   writeU32(output, std::bit_cast<std::uint32_t>(value));
 }
 
-auto makeArtifact(std::filesystem::path const &path) -> void {
+auto makeArtifact(std::filesystem::path const &path, unsigned schema = 1u)
+    -> void {
   constexpr std::size_t dimensions = 18u;
   constexpr std::size_t token0Width = 2u;
   constexpr std::size_t token2Width = 3u;
@@ -93,7 +95,7 @@ auto makeArtifact(std::filesystem::path const &path) -> void {
     dimensionNames.push_back(name);
   auto metadata = nlohmann::json{
       {"artifact_version", 1},
-      {"feature_schema_version", 1},
+      {"feature_schema_version", schema},
       {"architecture", "deepsets_ensemble_v1"},
       {"ensemble_size", members},
       {"context_feature_count", context},
@@ -173,6 +175,45 @@ auto descriptor(std::size_t cardinality = 6u)
       .legalCandidates = {},
   };
 }
+
+class CatalogContext final : public alpakaTune::StrategyContext {
+public:
+  std::array<std::size_t, 3u> sizes{1000000000u, 1000000000u, 1000000000u};
+  std::size_t registered{4u};
+  std::map<std::size_t, double> measured;
+  auto parameterSizes() const noexcept
+      -> std::span<std::size_t const> override {
+    return sizes;
+  }
+  auto runtimeFor(alpakaTune::ParameterConfiguration const &) const
+      -> std::optional<alpakaTune::RuntimeObservation> override {
+    throw std::logic_error{
+        "A generated strategy must query observations by ID."};
+  }
+  auto hasCandidateCatalog() const noexcept -> bool override { return true; }
+  auto candidateCount() const noexcept -> std::size_t override {
+    return registered;
+  }
+  auto candidateConfiguration(std::size_t id) const
+      -> alpakaTune::ParameterConfiguration override {
+    return {static_cast<float>(id) / 20.0f, 0.5f, 0.5f};
+  }
+  auto candidateAvailable(std::size_t id) const -> bool override {
+    return id < registered && !measured.contains(id);
+  }
+  auto candidateValid(std::size_t id) const -> bool override {
+    return id < registered;
+  }
+  auto candidateObservation(std::size_t id) const
+      -> std::optional<alpakaTune::RuntimeObservation> override {
+    auto found = measured.find(id);
+    if (found == measured.end())
+      return std::nullopt;
+    return alpakaTune::RuntimeObservation{
+        .seconds = found->second,
+        .state = alpakaTune::ConfigurationState::retired};
+  }
+};
 
 } // namespace
 
@@ -371,6 +412,54 @@ auto main() -> int {
           alpakaTune::LearnedModelLoadStatus::fileNotFound ||
       fallback.size() != 1u)
     return EXIT_FAILURE;
+
+  auto const catalogModelPath = directory / "tiny-catalog.atml";
+  makeArtifact(catalogModelPath, 2u);
+  auto catalogDescriptor = descriptor();
+  catalogDescriptor.dimensions[0].cardinality = 1000000000u;
+  catalogDescriptor.schemaVersion = 2u;
+  catalogDescriptor.dimensions[0].concreteValues.clear();
+  auto secondDimension = catalogDescriptor.dimensions.front();
+  secondDimension.name = "second";
+  auto thirdDimension = secondDimension;
+  thirdDimension.name = "third";
+  catalogDescriptor.dimensions.push_back(secondDimension);
+  catalogDescriptor.dimensions.push_back(thirdDimension);
+  auto catalogOptions = options;
+  catalogOptions.candidatePoolSize = 4u;
+  catalogOptions.candidateBatchSize = 2u;
+  auto catalogStrategy = alpakaTune::LearnedHybridStrategy{
+      catalogModelPath, catalogDescriptor, 71u, catalogOptions};
+  auto catalogContext = CatalogContext{};
+  for (std::size_t run{}; run < 12u; ++run) {
+    if (run == 4u)
+      catalogContext.registered = 12u;
+    auto candidate = catalogStrategy.recommendCandidate(catalogContext);
+    if (!candidate || catalogContext.measured.contains(*candidate))
+      return EXIT_FAILURE;
+    catalogStrategy.candidateRecommendationResult(
+        *candidate, catalogContext.candidateConfiguration(*candidate),
+        alpakaTune::RecommendationDisposition::scheduled);
+    catalogContext.measured[*candidate] =
+        std::exp(0.2 + static_cast<double>(*candidate) / 10.0);
+  }
+  static_cast<void>(catalogStrategy.recommendCandidate(catalogContext));
+  if (catalogStrategy.status() != alpakaTune::LearnedHybridStatus::active ||
+      catalogStrategy.scoredCandidateCount() != 12u ||
+      catalogStrategy.adapterUpdateCount() == 0u ||
+      catalogStrategy.peakCachedCandidateCount() > 4u)
+    return EXIT_FAILURE;
+  auto resumedCatalog = alpakaTune::LearnedHybridStrategy{
+      catalogModelPath, catalogDescriptor, 71u, catalogOptions};
+  if (!resumedCatalog.restoreResidualAdapterState(
+          catalogStrategy.residualAdapterState()))
+    return EXIT_FAILURE;
+  auto oldSchema = alpakaTune::LearnedHybridStrategy{
+      loaded.artifact, catalogDescriptor, 71u, catalogOptions};
+  if (oldSchema.status() !=
+      alpakaTune::LearnedHybridStatus::fallbackArtifactIncompatible)
+    return EXIT_FAILURE;
+  std::filesystem::remove(catalogModelPath);
 
   std::filesystem::remove(modelPath);
   std::filesystem::remove(directory);

@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "alpakaTune/tunable/Domains.hpp"
+
 #include <alpaka/CVec.hpp>
 #include <alpaka/Vec.hpp>
 
@@ -105,6 +107,17 @@ public:
   [[nodiscard]] auto size() const noexcept -> std::size_t {
     return m_values.size();
   }
+  [[nodiscard]] auto at(std::size_t index) const ->
+      typename std::vector<T>::const_reference {
+    return m_values.at(index);
+  }
+  [[nodiscard]] auto indexOf(T const &value) const
+      -> std::optional<std::size_t> {
+    for (std::size_t index{}; index < m_values.size(); ++index)
+      if (m_values[index] == value)
+        return index;
+    return std::nullopt;
+  }
 
 private:
   void validate() const {
@@ -170,17 +183,27 @@ struct MakeCValsRange {
 
 template <typename T> struct IsRVals : std::false_type {};
 template <typename T> struct IsRVals<RVals<T>> : std::true_type {};
+template <typename Domain>
+        struct IsRVals<AutoCandidates<Domain>> : std::bool_constant <
+                                                 IsRVals<Domain>::value ||
+    requires {
+  Domain::runtimeDomain;
+}>{};
 template <typename T>
 inline constexpr bool isRVals = IsRVals<std::remove_cvref_t<T>>::value;
 
 template <typename T> struct IsCVals : std::false_type {};
 template <auto... Values> struct IsCVals<CVals<Values...>> : std::true_type {};
+template <typename Domain>
+struct IsCVals<AutoCandidates<Domain>> : IsCVals<Domain> {};
 template <typename T>
 inline constexpr bool isCVals = IsCVals<std::remove_cvref_t<T>>::value;
 
 template <typename T> struct IsCTypes : std::false_type {};
 template <typename... Values>
 struct IsCTypes<CTypes<Values...>> : std::true_type {};
+template <typename Domain>
+struct IsCTypes<AutoCandidates<Domain>> : IsCTypes<Domain> {};
 template <typename T>
 inline constexpr bool isCTypes = IsCTypes<std::remove_cvref_t<T>>::value;
 
@@ -217,8 +240,10 @@ consteval auto compileVectorDimensionCount() -> std::size_t {
   using Value = std::remove_cvref_t<T>;
   if constexpr (alpaka::isCVector_v<Value>)
     return Value::dim();
-  else
+  else if constexpr (isIntegerSequence<Value>)
     return IntegerSequenceTraits<Value>::dimensionCount;
+  else
+    return 1u;
 }
 
 template <typename T, std::size_t Dimension>
@@ -267,6 +292,19 @@ struct CandidateDimensionCount<CTypes<First, Remaining...>>
       "Every vector in CTypes must have the same number of components.");
 };
 
+template <typename Domain, typename Generator, typename... Names>
+struct CandidateDimensionCount<domain::Dependent<Domain, Generator, Names...>>
+    : CandidateDimensionCount<Domain> {};
+
+template <typename Domain>
+struct CandidateDimensionCount<AutoCandidates<Domain>>
+    : CandidateDimensionCount<Domain> {};
+template <typename T>
+struct CandidateDimensionCount<AutoCandidates<RVals<T>>>
+    : RuntimeCandidateDimensionCount<T> {};
+template <typename Values>
+inline constexpr bool isAutomaticCandidates =
+    requires { Values::automaticCandidates; };
 template <typename Values>
 inline constexpr std::size_t candidateDimensionCount =
     CandidateDimensionCount<std::remove_cvref_t<Values>>::value;
@@ -784,6 +822,15 @@ struct TunablesTraitsFromTuple<std::tuple<Entries...>> {
   static constexpr std::size_t size = sizeof...(Entries);
   static constexpr std::size_t dimensionCount =
       (candidateDimensionCount<typename Entries::values_type> + ... + 0u);
+  static constexpr bool generatesCandidates =
+      (isAutomaticCandidates<typename Entries::values_type> || ... || false);
+  static constexpr bool enumerable = ([] {
+    using Values = typename Entries::values_type;
+    if constexpr (requires { Values::enumerable; })
+      return Values::enumerable;
+    else
+      return true;
+  }() && ... && true);
 
   template <FixedString Name>
   static constexpr bool has = hasEntry<Name, Entries...>;

@@ -51,6 +51,49 @@ public:
     return best;
   }
 
+  [[nodiscard]] auto supportsCandidateCatalog() const noexcept
+      -> bool override {
+    return true;
+  }
+  [[nodiscard]] auto recommendCandidate(StrategyContext const &context)
+      -> std::optional<std::size_t> override {
+    auto observations = std::vector<Observation>{};
+    for (std::size_t id{}; id < context.candidateCount(); ++id)
+      if (auto value = context.candidateObservation(id);
+          value && value->isFinished()) {
+        observations.push_back(
+            {context.candidateConfiguration(id), value->seconds});
+        if (observations.size() > maximumObservations)
+          observations.erase(observations.begin());
+      }
+    auto model = observations.empty() ? Model{} : buildModel(observations);
+    std::optional<std::size_t> selected;
+    auto best = std::numeric_limits<double>::infinity();
+    auto pool = std::vector<std::size_t>{};
+    for (std::size_t id{}; id < context.candidateCount(); ++id)
+      if (context.candidateAvailable(id))
+        pool.push_back(id);
+    std::shuffle(pool.begin(), pool.end(), m_random);
+    for (std::size_t i{}; i < std::min(pool.size(), acquisitionSamples); ++i) {
+      auto const score =
+          observations.empty()
+              ? static_cast<double>(i)
+              : acquisition(context.candidateConfiguration(pool[i]),
+                            observations, model);
+      if (score < best) {
+        best = score;
+        selected = pool[i];
+      }
+    }
+    return selected;
+  }
+
+  void candidateRecommendationResult(std::size_t,
+                                     ParameterConfiguration const &,
+                                     RecommendationDisposition) override {}
+  void candidateInvalidated(std::size_t,
+                            ParameterConfiguration const &) override {}
+
   /** @brief Retain only tuner-admitted points as future observations. */
   void recommendationResult(ParameterConfiguration const &configuration,
                             RecommendationDisposition disposition) override {

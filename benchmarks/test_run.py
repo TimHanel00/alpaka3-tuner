@@ -385,6 +385,26 @@ class HistoryInspectionTest(unittest.TestCase):
         self.assertFalse(diagnostics["all_contexts_complete"])
         self.assertIn("exited before tuning completed", diagnostics["messages"][0])
 
+    def test_generated_pool_coverage_requires_a_domain_exhaustion_proof(self) -> None:
+        context = self.context("candidate_budget", 3, [False, False, False])
+        context["candidate_space"] = {"domain_exhausted": False,
+                                      "declared_combination_count": None, "distinct_measured_count": 3}
+        diagnostics = self.inspect(context)
+        self.assertTrue(diagnostics["all_contexts_terminal"])
+        self.assertFalse(diagnostics["all_contexts_complete"])
+        self.assertEqual(diagnostics["contexts"][0]["registered_pool_coverage"], 1.0)
+        context["completion_reason"] = "all_configurations"
+        self.assertFalse(self.inspect(context)["valid"])
+        context["candidate_space"]["domain_exhausted"] = True
+        self.assertTrue(self.inspect(context)["all_contexts_complete"])
+
+    def test_adaptive_visits_do_not_increase_distinct_pool_coverage(self) -> None:
+        context = self.context("none", 20, [False, False, False])
+        context["candidate_space"] = {"domain_exhausted": False,
+                                      "declared_combination_count": 100, "distinct_measured_count": 3}
+        diagnostics = self.inspect(context)
+        self.assertEqual(diagnostics["contexts"][0]["registered_pool_coverage"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -414,8 +414,8 @@ loadLearnedModelArtifactUncached(std::filesystem::path const &path)
       return detail::invalidModelLoad(
           LearnedModelLoadStatus::unsupportedVersion,
           "The learned-model artifact version is unsupported.");
-    if (metadata.at("feature_schema_version").get<std::uint32_t>() !=
-        LearnedModelContextDescriptor::featureSchemaVersion)
+    if (metadata.at("feature_schema_version").get<std::uint32_t>() != 1u &&
+        metadata.at("feature_schema_version").get<std::uint32_t>() != 2u)
       return detail::invalidModelLoad(
           LearnedModelLoadStatus::incompatibleFeatureSchema,
           "The learned-model feature schema is incompatible with this build.");
@@ -523,6 +523,9 @@ loadLearnedModelArtifact(std::filesystem::path const &path)
   static auto mutex = std::mutex{};
   static auto artifacts =
       std::unordered_map<std::string, LearnedModelLoadResult>{};
+  if (path.empty())
+    return detail::invalidModelLoad(LearnedModelLoadStatus::fileNotFound,
+                                    "No model path was supplied.");
   auto const normalized =
       std::filesystem::absolute(path).lexically_normal().string();
   auto lock = std::lock_guard{mutex};

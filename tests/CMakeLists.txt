@@ -112,7 +112,10 @@ endif()
 
 add_executable(alpakaTune_adaptive_pi_tests adaptive_pi.cpp)
 target_link_libraries(alpakaTune_adaptive_pi_tests PRIVATE alpakaTune::alpakaTune Catch2::Catch2WithMain)
-target_include_directories(alpakaTune_adaptive_pi_tests PRIVATE ${PROJECT_SOURCE_DIR}/example/adaptivePi/src)
+target_include_directories(
+    alpakaTune_adaptive_pi_tests
+    PRIVATE ${PROJECT_SOURCE_DIR}/example/adaptivePi/src ${CMAKE_CURRENT_SOURCE_DIR}
+)
 alpaka_finalize(alpakaTune_adaptive_pi_tests)
 add_test(NAME alpakaTune_adaptive_pi_tests COMMAND alpakaTune_adaptive_pi_tests)
 # Exhaustive device calculations and leaf inspection are substantially slower
@@ -157,3 +160,8 @@ foreach(_tutorial_variant IN ITEMS runtime compile_time)
         )
     endif()
 endforeach()
+
+add_executable(alpakaTune_managed_space_tests managed_space.cpp)
+target_link_libraries(alpakaTune_managed_space_tests PRIVATE alpakaTune::alpakaTune Catch2::Catch2WithMain)
+alpaka_finalize(alpakaTune_managed_space_tests)
+add_test(NAME alpakaTune_managed_space_tests COMMAND alpakaTune_managed_space_tests)
