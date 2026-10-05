@@ -183,6 +183,7 @@ enum class RecommendationDisposition {
   userInvalidated,     ///< Candidate failed an application-side evaluation.
   metricUnavailable,   ///< Candidate's application metric was not supplied.
   revisitRejected,     ///< Adaptive revisit-probability gate rejected it.
+  budgetRejected,      ///< Expected benefit cannot repay measurement cost.
   scoreRejected,       ///< Adaptive relative-runtime gate rejected it.
 };
 

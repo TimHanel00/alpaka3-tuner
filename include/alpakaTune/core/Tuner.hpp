@@ -7,7 +7,9 @@
 #include "alpakaTune/core/Persistence.hpp"
 #include "alpakaTune/core/TunerConfig.hpp"
 #include "alpakaTune/core/TunerInfo.hpp"
+#include "alpakaTune/core/peripherals/BenefitBudget.hpp"
 #include "alpakaTune/core/peripherals/CandidateQueue.hpp"
+#include "alpakaTune/core/peripherals/ExecutionRuntimeSummary.hpp"
 #include "alpakaTune/core/timing/KernelTimer.hpp"
 #include "alpakaTune/model/LearnedModelContext.hpp"
 #include "alpakaTune/space/CandidateSpace.hpp"
@@ -366,7 +368,21 @@ public:
         m_random(0u) {
     if (m_metricName.empty())
       throw std::invalid_argument{"A tuning metric needs a name."};
+    if (m_defaults.budget) {
+      if constexpr (!detail::isElapsedTimeMetric<MetricPolicy>)
+        throw std::invalid_argument{
+            "Benefit budgeting requires timing or elapsedTimeMetric()."};
+      m_budget.emplace(*m_defaults.budget);
+    }
     initialiseDimensions();
+  }
+
+  /** @brief Revise future work without reopening completed exploration. */
+  void setRemainingLaunches(std::uint64_t launches) {
+    if (!m_budget)
+      throw std::logic_error{"This tuner has no application-runtime budget."};
+    m_budget->remaining = launches;
+    m_budgetNextCheck = m_budget->launches;
   }
 
   /** @brief Runtime label of the compile-time-selected minimization metric. */
@@ -450,6 +466,16 @@ public:
   [[nodiscard]] auto history() const noexcept
       -> std::span<ExecutedConfiguration const> {
     return m_executionHistory;
+  }
+  /** @brief Summarize recorded launch runtimes and the minimum's configuration.
+   *
+   * Uses raw current-process execution history, excluding untimed launches and
+   * restored samples. Returns nullopt when no launch runtime was recorded.
+   * The minimum sample need not belong to the tuner's statistical winner.
+   */
+  [[nodiscard]] auto executionRuntimeSummary() const
+      -> std::optional<ExecutionRuntimeSummary> {
+    return detail::summarizeExecutionRuntimes(history());
   }
   /** @brief Most recent configuration that was successfully submitted.
    * @throws std::logic_error before the first successful enqueue.
@@ -536,6 +562,12 @@ public:
       result.learnedStatus = learnedHybridStatusName(learned->status());
       result.learnedAdapterUpdateCount = learned->adapterUpdateCount();
     }
+    if (m_budget)
+      result.budget =
+          BudgetInfo{m_budget->remaining,          m_budget->measurements,
+                     m_budget->productionLaunches, m_budget->spent,
+                     m_budget->ceiling(),          m_budget->expectedSavings,
+                     m_budgetStoppingReason};
     result.space = m_space.info();
     return result;
   }
@@ -581,6 +613,9 @@ public:
       throw std::invalid_argument{
           "A custom tuning metric must be finite and non-negative."};
     auto const pending = *m_pendingMetric;
+    auto const metricStart = m_budget && pending.measure
+                                 ? std::chrono::steady_clock::now()
+                                 : std::chrono::steady_clock::time_point{};
     if (pending.measure)
       recordMetric(pending.candidateIndex, value, pending.beginActivation,
                    pending.endActivation);
@@ -588,6 +623,18 @@ public:
     execution.metricValue = value;
     execution.measured = pending.measure;
     m_pendingMetric.reset();
+    if (m_budget && pending.measure) {
+      auto const metricCost =
+          std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                        metricStart)
+              .count();
+      auto const cost =
+          m_budgetPendingHostCost + metricCost +
+          std::max(0.0, value - m_budgetPendingIncumbent) +
+          m_budget->policy.measurementCostHintSeconds.value_or(0.0);
+      m_budget->charge(cost);
+      m_budget->observeCost(m_budgetPendingHostCost + metricCost);
+    }
   }
 
   /** @brief Evaluate the configured scoring function for the latest launch.
@@ -598,8 +645,18 @@ public:
     requires(detail::acceptsMetricInputs<MetricPolicy, Values...>)
   void provideMetrics(Values &&...values) {
     requirePendingMetric();
-    provideMetric(
-        std::invoke(m_metricPolicy.function, std::forward<Values>(values)...));
+    if (m_budget && m_pendingMetric->measure) {
+      auto const start = std::chrono::steady_clock::now();
+      auto const value =
+          std::invoke(m_metricPolicy.function, std::forward<Values>(values)...);
+      m_budgetPendingHostCost += std::chrono::duration<double>(
+                                     std::chrono::steady_clock::now() - start)
+                                     .count();
+      provideMetric(value);
+    } else {
+      provideMetric(std::invoke(m_metricPolicy.function,
+                                std::forward<Values>(values)...));
+    }
   }
 
   template <typename Queue, typename FrameSpec, typename Kernel,
@@ -623,6 +680,10 @@ public:
    */
   void enqueue(Queue const &queue, FrameSpec const &frameSpec,
                alpaka::KernelBundle<Kernel, Args...> const &prototype) {
+    if (m_budget) {
+      static_cast<void>(enqueueBudgeted(queue, frameSpec, prototype, false));
+      return;
+    }
     if (m_defaults.replayFastPath &&
         (m_terminal || m_defaults.exploration == ExplorationPolicy::offline) &&
         tryFastReplay(queue, frameSpec, prototype))
@@ -642,6 +703,8 @@ public:
   enqueueObserved(Queue const &queue, FrameSpec const &frameSpec,
                   alpaka::KernelBundle<Kernel, Args...> const &prototype)
       -> LaunchObservation {
+    if (m_budget)
+      return enqueueBudgeted(queue, frameSpec, prototype);
     m_recommendationSecondsSinceLastLaunch = 0.0;
     if (!(queue.getDevice() == m_device))
       throw std::invalid_argument{
@@ -735,6 +798,500 @@ public:
   }
 
 private:
+  void ensureBudgetStorage() {
+    auto const oldSize = m_budgetStatistics.size();
+    m_budgetStatistics.resize(m_candidateCount);
+    m_budgetInferior.resize(m_candidateCount, false);
+    m_budgetEpochFresh.resize(m_candidateCount, true);
+    m_budgetVisitSamples.resize(m_candidateCount, 0u);
+    m_budgetWarmups.resize(m_candidateCount, 0u);
+    for (auto candidate = oldSize; candidate < m_candidateCount; ++candidate)
+      m_budgetStatistics[candidate] = m_histories[candidate].statistics();
+  }
+
+  void refreshBudgetIncumbent() {
+    m_budgetIncumbent.reset();
+    auto estimate = std::numeric_limits<double>::infinity();
+    ensureBudgetStorage();
+    for (std::size_t candidate = 0u; candidate < m_candidateCount; ++candidate)
+      if (candidateUsable(candidate) && !m_rejected[candidate] &&
+          !m_histories[candidate].empty() && m_budgetEpochFresh[candidate] &&
+          m_budgetStatistics[candidate].median < estimate) {
+        estimate = m_budgetStatistics[candidate].median;
+        m_budgetIncumbent = candidate;
+      }
+    if (m_budgetIncumbent) {
+      ensureBudgetStorage();
+      m_budget->establishBaseline(
+          m_budgetStatistics[*m_budgetIncumbent].median);
+      m_bestCandidate = *m_budgetIncumbent;
+    }
+  }
+
+  [[nodiscard]] auto budgetSampleLimit() const -> std::size_t {
+    return m_defaults.selection == SelectionPolicy::fixed
+               ? m_defaults.runsPerCandidate
+               : m_defaults.historyWindowSize;
+  }
+
+  [[nodiscard]] auto budgetActivationLaunches() const -> std::uint64_t {
+    if (m_defaults.queue && !m_defaults.queue->disable)
+      return static_cast<std::uint64_t>(m_defaults.queue->maxConsecutiveRuns);
+    return 1u;
+  }
+
+  [[nodiscard]] auto budgetEstimatedCost(std::size_t candidate) const
+      -> double {
+    auto cost = m_budget->costEstimate;
+    if (m_budgetIncumbent && !m_histories[candidate].empty())
+      cost += std::max(0.0, m_budgetStatistics[candidate].median -
+                                m_budgetStatistics[*m_budgetIncumbent].median);
+    return cost + m_budget->policy.measurementCostHintSeconds.value_or(0.0);
+  }
+
+  [[nodiscard]] auto budgetCandidateGain(std::size_t candidate) const
+      -> double {
+    auto const &best = m_budgetStatistics[*m_budgetIncumbent];
+    if (!m_budgetEpochFresh[candidate]) {
+      auto prior = m_budgetStatistics[candidate];
+      prior.acceptedSampleCount = 1u;
+      prior.standardDeviation = std::max(best.median, prior.median) * 0.5;
+      return detail::BenefitBudget::expectedGain(best, prior);
+    }
+    return m_histories[candidate].empty()
+               ? m_budget->unseenGain(best.median)
+               : detail::BenefitBudget::expectedGain(
+                     best, m_budgetStatistics[candidate]);
+  }
+
+  [[nodiscard]] auto budgetCandidateWorthwhile(std::size_t candidate) -> bool {
+    ensureBudgetStorage();
+    if (m_budgetInferior[candidate] ||
+        (!m_histories[candidate].empty() &&
+         m_budgetVisitSamples[candidate] >= budgetSampleLimit()))
+      return false;
+    auto const activation = budgetActivationLaunches();
+    return m_budget->worthwhile(budgetCandidateGain(candidate),
+                                budgetEstimatedCost(candidate) *
+                                    static_cast<double>(activation),
+                                activation);
+  }
+
+  void finishBudgetExploration(TunerCompletionReason reason) {
+    m_budgetStoppingReason = reason;
+    m_budgetDirectCandidate.reset();
+    if (!m_explorationComplete)
+      finishTuningAtBudget(reason);
+  }
+
+  void retireBudgetCandidate(std::size_t candidate) {
+    if (m_queue)
+      static_cast<void>(m_queue->retire(candidate));
+    if (m_budgetDirectCandidate == candidate)
+      m_budgetDirectCandidate.reset();
+    if (m_scheduled[candidate]) {
+      m_scheduled[candidate] = false;
+      --m_scheduledCount;
+    }
+  }
+
+  /** A queued activation respects warmups and burst interleaving. */
+  auto selectBudgetActivation() -> detail::CandidateQueue::Selection {
+    auto selected = m_queue ? *m_queue->next()
+                            : detail::CandidateQueue::Selection{
+                                  *m_budgetDirectCandidate, false, true, true};
+    auto const candidate = selected.candidateIndex;
+    if (selected.beginActivation)
+      m_budgetWarmups[candidate] = m_defaults.queue->warmupRuns;
+    if (m_budgetColdStart && !m_budgetIncumbent && m_budget->remaining <= 1u)
+      m_budgetWarmups[candidate] = 0u;
+    if (m_budgetWarmups[candidate] > 0u) {
+      --m_budgetWarmups[candidate];
+      selected.measure = false;
+      m_budgetPurpose = LaunchPurpose::warmup;
+    } else
+      m_budgetPurpose = LaunchPurpose::experiment;
+    return selected;
+  }
+
+  auto nextBudgetCandidate() -> detail::CandidateQueue::Selection {
+    ensureBudgetStorage();
+    auto active = [&] {
+      return m_queue ? !m_queue->empty() : m_budgetDirectCandidate.has_value();
+    };
+
+    if (m_budgetIncumbent && !m_explorationComplete && executionBudgetReached())
+      finishBudgetExploration(TunerCompletionReason::maximumExecutions);
+    if (m_budgetIncumbent && !m_explorationComplete &&
+        retiredConfigurationBudgetReached())
+      finishBudgetExploration(
+          TunerCompletionReason::maximumRetiredConfigurations);
+    if (m_budgetIncumbent && !m_explorationComplete &&
+        m_budget->remaining == 0u)
+      finishBudgetExploration(
+          TunerCompletionReason::insufficientExpectedBenefit);
+    if (m_budgetColdStart && m_budgetBootstrapSamples < 3u && active() &&
+        !m_explorationComplete)
+      return selectBudgetActivation();
+    if (m_budgetIncumbent && !m_explorationComplete &&
+        !m_budget->affordable(
+            m_budget->costEstimate +
+            m_budget->policy.measurementCostHintSeconds.value_or(0.0)))
+      finishBudgetExploration(TunerCompletionReason::tuningOverheadBudget);
+
+    // Health checks run only during adaptive reuse and never reopen
+    // exploration.
+    if (m_explorationComplete) {
+      if (!m_budgetIncumbent)
+        throw std::logic_error{
+            "No valid measured configuration is available to launch."};
+      if (m_defaults.selection == SelectionPolicy::adaptive &&
+          m_budget->launches >= m_budgetNextCheck) {
+        m_budgetNextCheck = m_budget->launches + m_budget->policy.checkInterval;
+        if (m_budget->affordable(budgetEstimatedCost(*m_budgetIncumbent))) {
+          m_budgetPurpose = LaunchPurpose::healthCheck;
+          return {*m_budgetIncumbent, true, true, true};
+        }
+      }
+      if (m_defaults.selection == SelectionPolicy::adaptive &&
+          m_budgetEpochChanged) {
+        auto challenger = std::optional<std::size_t>{};
+        auto value = 0.0;
+        for (std::size_t candidate = 0u; candidate < m_candidateCount;
+             ++candidate)
+          if (candidate != *m_budgetIncumbent && candidateUsable(candidate) &&
+              !m_rejected[candidate] && !m_histories[candidate].empty() &&
+              budgetCandidateWorthwhile(candidate)) {
+            auto const gain = budgetCandidateGain(candidate);
+            if (gain > value) {
+              value = gain;
+              challenger = candidate;
+            }
+          }
+        if (challenger) {
+          m_budgetPurpose = LaunchPurpose::experiment;
+          return {*challenger, true, true, true};
+        }
+        m_budgetEpochChanged = false;
+      }
+      m_budgetPurpose = LaunchPurpose::production;
+      return {*m_budgetIncumbent, false, false, false};
+    }
+    if (active()) {
+      if (m_queue && !m_queue->full() && m_budgetIncumbent &&
+          m_budget->worthwhile(
+              m_budget->unseenGain(
+                  m_budgetStatistics[*m_budgetIncumbent].median),
+              (m_budget->costEstimate +
+               m_budget->policy.measurementCostHintSeconds.value_or(0.0)) *
+                  static_cast<double>(budgetActivationLaunches()),
+              budgetActivationLaunches())) {
+        auto proposal = recommendCandidate();
+        if (proposal &&
+            proposal->disposition == RecommendationDisposition::scheduled)
+          static_cast<void>(m_queue->insert(proposal->candidate));
+      }
+      auto selected = selectBudgetActivation();
+      if (!m_budgetIncumbent ||
+          budgetCandidateWorthwhile(selected.candidateIndex))
+        return selected;
+      retireBudgetCandidate(selected.candidateIndex);
+      // Retry at most once per resident slot; no strategy work on production.
+      while (active()) {
+        selected = selectBudgetActivation();
+        if (budgetCandidateWorthwhile(selected.candidateIndex))
+          return selected;
+        retireBudgetCandidate(selected.candidateIndex);
+      }
+    }
+    // Resolve measured uncertainty before spending on another proposal.
+    auto challenger = std::optional<std::size_t>{};
+    auto bestGain = 0.0;
+    if (m_budgetIncumbent)
+      for (std::size_t candidate = 0u; candidate < m_candidateCount;
+           ++candidate)
+        if (candidate != *m_budgetIncumbent && candidateUsable(candidate) &&
+            !m_rejected[candidate] && !m_histories[candidate].empty() &&
+            budgetCandidateWorthwhile(candidate)) {
+          auto const gain = budgetCandidateGain(candidate);
+          if (gain > bestGain) {
+            bestGain = gain;
+            challenger = candidate;
+          }
+        }
+    if (challenger) {
+      m_histories[*challenger].reopen();
+      if (m_queue)
+        static_cast<void>(m_queue->insert(*challenger));
+      else
+        m_budgetDirectCandidate = challenger;
+      if (!m_scheduled[*challenger]) {
+        m_scheduled[*challenger] = true;
+        ++m_scheduledCount;
+      }
+      return selectBudgetActivation();
+    }
+    if (m_budgetIncumbent &&
+        !m_budget->worthwhile(
+            m_budget->unseenGain(m_budgetStatistics[*m_budgetIncumbent].median),
+            (m_budget->costEstimate +
+             m_budget->policy.measurementCostHintSeconds.value_or(0.0)) *
+                static_cast<double>(budgetActivationLaunches()),
+            budgetActivationLaunches())) {
+      finishBudgetExploration(
+          TunerCompletionReason::insufficientExpectedBenefit);
+      return nextBudgetCandidate();
+    }
+    applySpaceFeedback();
+    ensureBudgetStorage();
+    if (m_explorationComplete)
+      return nextBudgetCandidate();
+    for (std::size_t attempt = 0u;
+         attempt < m_defaults.maximumConsecutiveStrategyRetries; ++attempt) {
+      auto const proposal = recommendCandidate();
+      if (proposal &&
+          proposal->disposition == RecommendationDisposition::scheduled) {
+        if (m_queue)
+          static_cast<void>(m_queue->insert(proposal->candidate));
+        else
+          m_budgetDirectCandidate = proposal->candidate;
+        return selectBudgetActivation();
+      }
+      // Proposal processing itself is charged by the caller; stop when all
+      // candidates have resolved rather than synthesizing a different proposal.
+      if (m_defaults.selection == SelectionPolicy::fixed &&
+          allFixedCandidatesResolved()) {
+        finishTuning();
+        return nextBudgetCandidate();
+      }
+    }
+    if (!m_budgetIncumbent)
+      throw std::invalid_argument{"No valid configuration could be admitted."};
+    finishBudgetExploration(TunerCompletionReason::insufficientExpectedBenefit);
+    return nextBudgetCandidate();
+  }
+
+  void recordBudgetMetric(std::size_t candidate, double value) {
+    ensureBudgetStorage();
+    auto const oldBest = m_budgetIncumbent
+                             ? m_budgetStatistics[*m_budgetIncumbent].median
+                             : std::numeric_limits<double>::infinity();
+    auto &history = m_histories[candidate];
+    if (!m_budgetEpochFresh[candidate]) {
+      auto samples = std::array{value};
+      history.restoreCompleted(samples);
+      m_budgetEpochFresh[candidate] = true;
+    } else {
+      history.reopen();
+      history.beginActivation(false);
+      static_cast<void>(history.record(value));
+      history.retire(detail::RuntimeCompletion::adaptiveVisit);
+    }
+    m_budgetStatistics[candidate] = history.statistics();
+    ++m_budget->measurements;
+    ++m_budgetVisitSamples[candidate];
+    if (m_budgetColdStart && m_budgetBootstrapSamples < 3u)
+      ++m_budgetBootstrapSamples;
+    if (m_budgetPurpose == LaunchPurpose::healthCheck) {
+      auto const &reference = m_budgetCheckReference;
+      auto const low =
+          reference.acceptedSampleCount >= 5u
+              ? reference.confidenceLow
+              : reference.median -
+                    2.576 * detail::BenefitBudget::uncertainty(reference);
+      auto const high =
+          reference.acceptedSampleCount >= 5u
+              ? reference.confidenceHigh
+              : reference.median +
+                    2.576 * detail::BenefitBudget::uncertainty(reference);
+      m_budgetDriftSamples =
+          value < low || value > high ? m_budgetDriftSamples + 1u : 0u;
+      if (m_budgetDriftSamples >= 2u) {
+        auto samples = std::array{m_budgetLastDriftValue, value};
+        history.restoreCompleted(samples);
+        m_budgetStatistics[candidate] = history.statistics();
+        std::fill(m_budgetEpochFresh.begin(), m_budgetEpochFresh.end(), false);
+        m_budgetEpochFresh[candidate] = true;
+        std::fill(m_budgetInferior.begin(), m_budgetInferior.end(), false);
+        std::fill(m_budgetVisitSamples.begin(), m_budgetVisitSamples.end(), 0u);
+        m_budgetEpochChanged = true;
+        m_budget->unimprovedProposals = 0u;
+        m_budgetDriftSamples = 0u;
+        m_budgetCheckReference = m_budgetStatistics[candidate];
+      }
+      m_budgetLastDriftValue = value;
+    }
+    refreshBudgetIncumbent();
+    if (m_budgetStatistics[*m_budgetIncumbent].median < oldBest)
+      m_budget->unimprovedProposals = 0u;
+    else if (m_budgetPurpose == LaunchPurpose::experiment &&
+             candidate != *m_budgetIncumbent)
+      ++m_budget->unimprovedProposals;
+    if (m_defaults.mannWhitneyEarlyStop && candidate != *m_budgetIncumbent &&
+        detail::mannWhitneyUCompare(history, m_histories[*m_budgetIncumbent],
+                                    m_defaults.mannWhitneyMinimumSamples,
+                                    m_defaults.mannWhitneyAlpha) ==
+            RuntimeComparison::slower)
+      m_budgetInferior[candidate] = true;
+    auto const bootstrapFinished =
+        m_budgetColdStart && m_budgetBootstrapSamples >= 3u;
+    if (bootstrapFinished || m_budgetInferior[candidate] ||
+        (!m_budgetColdStart &&
+         m_budgetVisitSamples[candidate] >= budgetSampleLimit())) {
+      retireBudgetCandidate(candidate);
+      if (!m_explorationComplete) {
+        recordRetiredConfiguration(candidate);
+        m_refinementPending =
+            m_space.observe(candidate, history.statistics().median) ||
+            m_refinementPending;
+      }
+      if (bootstrapFinished) {
+        m_budgetColdStart = false;
+        m_budgetCheckReference = m_budgetStatistics[*m_budgetIncumbent];
+      }
+    }
+    if (m_budgetCheckReference.acceptedSampleCount == 0u)
+      m_budgetCheckReference = m_budgetStatistics[*m_budgetIncumbent];
+    stageCache(candidate, true);
+  }
+
+  template <typename Queue, typename Spec, typename Bundle>
+  void bindBudgetContext(Queue const &queue, Spec const &spec,
+                         Bundle const &bundle) {
+    static constexpr char tag{};
+    if (!(queue.getDevice() == m_device))
+      throw std::invalid_argument{
+          "The queue device does not match this tuner's device."};
+    if (m_budgetContextTag) {
+      if (m_budgetContextTag != &tag)
+        throw std::logic_error{
+            "A tuner is bound to one kernel and one launch configuration."};
+      m_budgetContextValidator(&spec);
+      return;
+    }
+    validatePrototype(bundle);
+    bindFingerprint(makeFingerprint(spec, bundle),
+                    detail::typeName<typename Bundle::KernelFn>(),
+                    launchDescription(spec));
+    m_budgetContextValidator = [original = spec](void const *raw) {
+      auto const &current = *static_cast<Spec const *>(raw);
+      auto same = false;
+      if constexpr (alpaka::onHost::isFrameSpec_v<Spec>)
+        same = original.getNumFrames() == current.getNumFrames() &&
+               original.getFrameExtents() == current.getFrameExtents();
+      else
+        same = original.getNumBlocks() == current.getNumBlocks() &&
+               original.getNumThreads() == current.getNumThreads();
+      if (!same)
+        throw std::logic_error{
+            "A tuner is bound to one kernel and one launch configuration."};
+    };
+    bindLaunchValidator<Queue>(spec, bundle);
+    initialiseCompileVariants<Queue, Spec, Bundle>();
+    initialiseScheduling();
+    ensureBudgetStorage();
+    m_budgetColdStart = !currentBestCandidate().has_value();
+    refreshBudgetIncumbent();
+    m_budgetNextCheck = m_budget->policy.checkInterval;
+    if (m_budgetIncumbent)
+      m_budgetCheckReference = m_budgetStatistics[*m_budgetIncumbent];
+    m_budgetContextTag = &tag;
+  }
+
+  template <typename Queue, typename Spec, typename Kernel, typename... Args>
+  auto enqueueBudgeted(Queue const &queue, Spec const &spec,
+                       alpaka::KernelBundle<Kernel, Args...> const &bundle,
+                       bool observed = true) -> LaunchObservation {
+    auto const production =
+        m_budgetContextTag && m_explorationComplete && m_budgetIncumbent &&
+        !m_budgetEpochChanged &&
+        (m_defaults.selection == SelectionPolicy::fixed ||
+         m_budget->launches < m_budgetNextCheck) &&
+        m_consumedValidityGeneration == *m_validityGeneration &&
+        (!m_pendingMetric || !m_pendingMetric->measure);
+    auto const start = production ? std::chrono::steady_clock::time_point{}
+                                  : std::chrono::steady_clock::now();
+    m_recommendationSecondsSinceLastLaunch = 0.0;
+    bindBudgetContext(queue, spec, bundle);
+    reconcileUserInvalidations();
+    reconcileMissingMetric();
+    if (!production)
+      bindLaunchValidator<Queue>(spec, bundle);
+    auto const selected =
+        production ? detail::CandidateQueue::Selection{*m_budgetIncumbent,
+                                                       false, false, false}
+                   : nextBudgetCandidate();
+    if (production)
+      m_budgetPurpose = LaunchPurpose::production;
+    if constexpr (!usesCustomMetric &&
+                  !std::same_as<ALPAKA_TYPEOF(queue.getTiming()),
+                                alpaka::timing::Enabled>)
+      if (selected.measure)
+        throw std::invalid_argument{
+            "A measured tuning launch requires a timing-enabled queue."};
+    auto const hadIncumbent = m_budgetIncumbent.has_value();
+    auto const incumbentSeconds =
+        m_budgetIncumbent ? m_budgetStatistics[*m_budgetIncumbent].median : 0.0;
+    using Bundle = alpaka::KernelBundle<Kernel, Args...>;
+    if (m_budgetDispatchCandidate != selected.candidateIndex) {
+      auto const key = compileVariantKey(indicesFor(selected.candidateIndex));
+      m_budgetCachedDispatch = m_compileVariantIndices.at(key);
+      m_budgetDispatchCandidate = selected.candidateIndex;
+    }
+    LaunchCall<Queue, Spec, Bundle> call{this, &queue, &spec, &bundle,
+                                         std::nullopt};
+    m_compileVariants[m_budgetCachedDispatch](
+        &call, selected.candidateIndex, selected.measure,
+        selected.beginActivation, selected.endActivation, true);
+    m_budget->launched();
+    if (m_budgetPurpose == LaunchPurpose::production)
+      ++m_budget->productionLaunches;
+    auto const execution =
+        recordExecution(selected.candidateIndex, call.runtimeSeconds);
+    if constexpr (usesCustomMetric)
+      m_pendingMetric =
+          PendingMetric{execution, selected.candidateIndex, selected.measure,
+                        selected.beginActivation, selected.endActivation};
+    if (!production) {
+      auto const wall = std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - start)
+                            .count();
+      auto const hostCost =
+          std::max(0.0, wall - call.runtimeSeconds.value_or(0.0));
+      m_budgetPendingHostCost = hostCost;
+      m_budgetPendingIncumbent = hadIncumbent
+                                     ? incumbentSeconds
+                                     : std::numeric_limits<double>::infinity();
+      if constexpr (!usesCustomMetric) {
+        auto const cost =
+            hostCost +
+            (call.runtimeSeconds && hadIncumbent
+                 ? std::max(0.0, *call.runtimeSeconds - incumbentSeconds)
+                 : 0.0) +
+            (selected.measure
+                 ? m_budget->policy.measurementCostHintSeconds.value_or(0.0)
+                 : 0.0);
+        m_budget->charge(cost);
+        if (selected.measure)
+          m_budget->observeCost(hostCost);
+      } else if (!selected.measure)
+        m_budget->charge(hostCost);
+    }
+    if (!observed)
+      return {};
+    return LaunchObservation{
+        .purpose = m_budgetPurpose,
+        .candidateIndex = selected.candidateIndex,
+        .configuration = normalizedConfiguration(selected.candidateIndex),
+        .runtimeSeconds = call.runtimeSeconds,
+        .metricValue = call.runtimeSeconds,
+        .runtimeMeasurementSource = runtimeMeasurementSource(),
+        .recommendationSeconds = m_recommendationSecondsSinceLastLaunch,
+        .measured = call.runtimeSeconds.has_value(),
+        .tuningComplete = m_explorationComplete,
+        .loadedFromCache = m_loadedFromCache};
+  }
+
   void requirePendingMetric() const {
     if (!m_pendingMetric || m_executionHistory.empty() ||
         m_pendingMetric->executionIndex != m_executionHistory.size() - 1u)
@@ -1014,8 +1571,7 @@ private:
     m_missingMetric.resize(m_candidateCount, false);
     m_loadedFromHistoryCandidates.resize(m_candidateCount, false);
     while (m_candidateValidity.size() < m_candidateCount)
-      m_candidateValidity.push_back(
-          std::make_shared<detail::ConfigurationValidityState>());
+      m_candidateValidity.push_back(makeValidityState());
   }
 
   void expandSpace() {
@@ -1532,6 +2088,8 @@ private:
   }
 
   void removeCandidateFromSchedulers(std::size_t candidate) {
+    if (m_budgetDirectCandidate == candidate)
+      m_budgetDirectCandidate.reset();
     if (m_queue)
       static_cast<void>(m_queue->retire(candidate));
     if (m_defaults.selection == SelectionPolicy::adaptive &&
@@ -1563,7 +2121,16 @@ private:
   }
 
   /** @brief Consume application validity decisions before selecting work. */
+  auto makeValidityState()
+      -> std::shared_ptr<detail::ConfigurationValidityState> {
+    auto state = std::make_shared<detail::ConfigurationValidityState>();
+    state->generation = m_validityGeneration;
+    return state;
+  }
   void reconcileUserInvalidations() {
+    if (m_consumedValidityGeneration == *m_validityGeneration)
+      return;
+    m_consumedValidityGeneration = *m_validityGeneration;
     auto changed = false;
     for (std::size_t candidate = 0u; candidate < m_candidateCount;
          ++candidate) {
@@ -1581,6 +2148,8 @@ private:
       return;
 
     rebuildBestAfterCandidateRemoval();
+    if (m_budget)
+      refreshBudgetIncumbent();
     writeCache();
   }
 
@@ -1599,8 +2168,10 @@ private:
       ++m_missingMetricCount;
       removeCandidateFromSchedulers(pending.candidateIndex);
       rebuildBestAfterCandidateRemoval();
+      if (m_budget)
+        refreshBudgetIncumbent();
     }
-    if (m_defaults.selection == SelectionPolicy::fixed &&
+    if (!m_budget && m_defaults.selection == SelectionPolicy::fixed &&
         allFixedCandidatesResolved()) {
       finishTuning();
       return;
@@ -1638,6 +2209,8 @@ private:
       return RecommendationDisposition::restrictionRejected;
     }
 
+    if (m_budget && m_budgetIncumbent && !budgetCandidateWorthwhile(candidate))
+      return RecommendationDisposition::budgetRejected;
     auto &history = m_histories.at(candidate);
     auto const revisit = !history.empty();
     if (revisit && m_defaults.selection == SelectionPolicy::fixed &&
@@ -1646,7 +2219,7 @@ private:
       return RecommendationDisposition::revisitRejected;
     }
     if (revisit && m_defaults.selection == SelectionPolicy::adaptive) {
-      if (m_defaults.horizon) {
+      if (!m_budget && m_defaults.horizon) {
         auto const progress = adaptiveProgress();
         auto const revisitProbability = detail::normalizedLogisticAdmission(
             progress, m_defaults.revisitAdmissionSteepness);
@@ -1855,7 +2428,8 @@ private:
   /** @brief Request and process exactly one strategy recommendation. */
   [[nodiscard]] auto recommendCandidate()
       -> std::optional<CandidateRecommendation> {
-    if (m_queue && m_defaults.selection == SelectionPolicy::fixed &&
+    if (m_queue && !m_budget &&
+        m_defaults.selection == SelectionPolicy::fixed &&
         allFixedCandidatesAdmitted())
       return std::nullopt;
     auto const start = std::chrono::steady_clock::now();
@@ -1915,8 +2489,7 @@ private:
     m_candidateValidity.clear();
     m_candidateValidity.reserve(m_candidateCount);
     for (std::size_t candidate = 0u; candidate < m_candidateCount; ++candidate)
-      m_candidateValidity.push_back(
-          std::make_shared<detail::ConfigurationValidityState>());
+      m_candidateValidity.push_back(makeValidityState());
     m_loadedFromHistoryCandidates.assign(m_candidateCount, false);
     auto const compactLoaded = loadHistory();
     auto const completeLoaded = loadCompleteHistory();
@@ -1973,12 +2546,13 @@ private:
       m_queue = std::make_unique<detail::CandidateQueue>(
           m_defaults.queue->noiseCancellationWindow,
           m_defaults.queue->maxConsecutiveRuns, false, m_random);
-      refillQueue();
-      if (m_terminal && !currentBestCandidate())
+      if (!m_budget)
+        refillQueue();
+      if (!m_budget && m_terminal && !currentBestCandidate())
         throw std::invalid_argument{
             "The strategy retry limit was reached before any candidate was "
             "accepted and measured."};
-      if (!m_terminal && m_queue->empty())
+      if (!m_budget && !m_terminal && m_queue->empty())
         throw std::invalid_argument{
             "The tuning-space constraints rejected every candidate."};
     }
@@ -2657,6 +3231,10 @@ private:
   /** @brief Incorporate one timing or application-provided objective value. */
   void recordMetric(std::size_t candidate, double value, bool beginActivation,
                     bool endActivation) {
+    if (m_budget) {
+      recordBudgetMetric(candidate, value);
+      return;
+    }
     auto &history = m_histories.at(candidate);
     if (m_explorationComplete &&
         m_defaults.selection == SelectionPolicy::adaptive) {
@@ -2894,6 +3472,10 @@ private:
 
   [[nodiscard]] static auto completionReasonFromName(std::string_view name)
       -> TunerCompletionReason {
+    if (name == "insufficient_expected_benefit")
+      return TunerCompletionReason::insufficientExpectedBenefit;
+    if (name == "tuning_overhead_budget")
+      return TunerCompletionReason::tuningOverheadBudget;
     if (name == "all_configurations")
       return TunerCompletionReason::allConfigurations;
     if (name == "offline_replay")
@@ -3282,7 +3864,9 @@ private:
 
   void finishTuningAtBudget(TunerCompletionReason reason) {
     if (reason != TunerCompletionReason::maximumExecutions &&
-        reason != TunerCompletionReason::maximumRetiredConfigurations)
+        reason != TunerCompletionReason::maximumRetiredConfigurations &&
+        reason != TunerCompletionReason::insufficientExpectedBenefit &&
+        reason != TunerCompletionReason::tuningOverheadBudget)
       throw std::logic_error{"Invalid completion-limit reason."};
     auto const best = currentBestCandidate();
     if (!best)
@@ -3914,6 +4498,33 @@ private:
 #endif
   }
 
+  std::optional<detail::BenefitBudget> m_budget;
+  std::optional<std::size_t> m_budgetIncumbent;
+  std::optional<std::size_t> m_budgetDirectCandidate;
+  std::vector<bool> m_budgetInferior;
+  std::vector<std::size_t> m_budgetVisitSamples;
+  std::vector<std::size_t> m_budgetWarmups;
+  std::vector<detail::RuntimeStatistics> m_budgetStatistics;
+  std::optional<TunerCompletionReason> m_budgetStoppingReason;
+  std::uint64_t m_budgetNextCheck{};
+  std::size_t m_budgetBootstrapSamples{};
+  bool m_budgetColdStart{};
+  bool m_budgetEpochChanged{};
+  double m_budgetLastDriftValue{};
+  std::vector<bool> m_budgetEpochFresh;
+  std::size_t m_budgetDriftSamples{};
+  detail::RuntimeStatistics m_budgetCheckReference;
+  LaunchPurpose m_budgetPurpose{LaunchPurpose::production};
+  double m_budgetPendingHostCost{};
+  double m_budgetPendingIncumbent{};
+  void const *m_budgetContextTag{};
+  std::function<void(void const *)> m_budgetContextValidator;
+  std::size_t m_budgetCachedDispatch{};
+  std::size_t m_budgetDispatchCandidate{
+      std::numeric_limits<std::size_t>::max()};
+  std::shared_ptr<std::uint64_t> m_validityGeneration{
+      std::make_shared<std::uint64_t>(0u)};
+  std::uint64_t m_consumedValidityGeneration{};
   TunerConfig m_defaults;
   std::shared_ptr<detail::HistoryStore> m_history;
   std::shared_ptr<detail::CompleteHistoryStore> m_completeHistory;

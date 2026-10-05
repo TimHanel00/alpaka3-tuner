@@ -19,8 +19,9 @@ Run from the repository root:
 
 ``read: false`` excludes any old file; ``write: true`` stages this run's
 measurements and writes them at normal process shutdown. You should see
-``completed=1; loaded=0``. The saved compact history is
-``.alpakaTune/tutorial.json``, relative to the working directory.
+``Tuning: complete; history: no saved measurements restored``. The saved
+compact history is ``.alpakaTune/tutorial.json``, relative to the working
+directory.
 
 Replay in another process
 -------------------------
@@ -32,8 +33,11 @@ Replay in another process
 .. literalinclude:: ../examples/first_tuner/replay.yaml
    :language: yaml
 
-Expect ``completed=1; loaded=1``. Offline exploration with fixed selection
-selects the best compatible measured candidate, performs no new measurements,
+No new timings are recorded, so the program prints
+``No launch runtimes recorded (unmeasured replay)`` instead of runtime statistics.
+Expect
+``Tuning: complete; history: restored saved measurements``. Offline exploration
+with fixed selection selects the best compatible measured candidate, performs no new measurements,
 and leaves the input file unchanged. A history need not contain a locked
 winner; measurements from adaptive selection also work. With no compatible measured candidate,
 offline initialization fails instead of silently training.
@@ -51,9 +55,10 @@ To load the same observations while exploring further:
    :language: yaml
 
 This configuration has no exploration limit or cooling horizon. Expect
-``completed=0; loaded=1`` after the
-application's 20 launches. The measurements guide new decisions, but the input
-file stays unchanged. Set ``write: true`` to save updated observations.
+``Tuning: still exploring; history: restored saved measurements`` after the
+application's 20 launches. The runtime summary covers recorded launches in
+this process, and its configuration identifies the fastest single launch. The measurements guide new
+decisions, but the input file stays unchanged. Set ``write: true`` to save updated observations.
 Starting online exploration with either selection policy resets run counters
 and scheduling state, while retaining compatible samples. A new online/fixed
 run tunes again before entering winner replay. A cooling horizon alone would
@@ -71,8 +76,9 @@ Adapt without further search
    :language: yaml
 
 This policy uses offline exploration with adaptive selection. Expect
-``completed=1; loaded=1``: exploration is already complete, while known
-configurations are measured and the winner can change as performance changes.
+``Tuning: complete; history: restored saved measurements``: exploration is
+already complete, while known configurations are measured and the winner
+can change as performance changes.
 ``adaptive_probe_interval: 10`` probes an alternative every tenth successful
 reuse launch. Set ``history.write: true`` to retain updated scores.
 No strategy or generation phase runs, including for automatic candidate spaces.

@@ -93,6 +93,17 @@ struct QueueConfig {
   std::size_t maxConsecutiveRuns{3u};
 };
 
+/** @brief Optional application-runtime budget. Cost hints are additive and
+ * optional. */
+struct BudgetConfig {
+  std::uint64_t expectedLaunches{};
+  double maximumOverheadFraction{0.05};
+  double paybackMultiplier{2.0};
+  double initialExpectedImprovement{0.10};
+  std::uint64_t checkInterval{128u};
+  std::optional<double> measurementCostHintSeconds;
+};
+
 /** @brief Complete, copyable policy used to construct one or more tuners.
  *
  * A tuner snapshots this aggregate at construction. Configuration controls
@@ -100,6 +111,7 @@ struct QueueConfig {
  */
 struct TunerConfig {
   SpaceConfig space;
+  std::optional<BudgetConfig> budget;
   /** Permission to search for configurations not yet measured. */
   ExplorationPolicy exploration{ExplorationPolicy::online};
   /** Selection behavior after exploration ends. */
@@ -284,7 +296,8 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
   if (learning && !learning.IsMap())
     throw std::runtime_error{"YAML learning must contain a map."};
   rejectUnknown(tuning,
-                {"exploration",
+                {"budget",
+                 "exploration",
                  "selection",
                  "adaptive_probe_interval",
                  "replay_fast_path",
@@ -330,6 +343,29 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
         "learning");
 
   TunerConfig defaults;
+  if (auto const budget = tuning["budget"]; budget) {
+    if (!budget.IsMap())
+      throw std::runtime_error{"YAML tuning.budget must contain a map."};
+    rejectUnknown(budget,
+                  {"expected_launches", "maximum_overhead_fraction",
+                   "payback_multiplier", "initial_expected_improvement",
+                   "check_interval", "measurement_cost_hint_seconds"},
+                  "tuning.budget");
+    defaults.budget.emplace();
+    defaults.budget->expectedLaunches =
+        requirePositive(budget, "expected_launches");
+    defaults.budget->maximumOverheadFraction =
+        optionalProbability(budget, "maximum_overhead_fraction", 0.05);
+    defaults.budget->paybackMultiplier =
+        optionalPositiveFinite(budget, "payback_multiplier", 2.0);
+    defaults.budget->initialExpectedImprovement =
+        optionalProbability(budget, "initial_expected_improvement", 0.10);
+    defaults.budget->checkInterval =
+        optionalPositive(budget, "check_interval", 128u);
+    if (budget["measurement_cost_hint_seconds"])
+      defaults.budget->measurementCostHintSeconds =
+          budget["measurement_cost_hint_seconds"].as<double>();
+  }
   if (tuning["exploration"])
     defaults.exploration =
         explorationPolicyFromName(tuning["exploration"].as<std::string>());
@@ -530,6 +566,21 @@ inline auto defaultConfigurationPath() -> std::filesystem::path {
 
 inline void TunerConfig::validate() const {
   space.validate();
+  if (budget) {
+    if (budget->expectedLaunches == 0u || budget->checkInterval == 0u ||
+        !std::isfinite(budget->maximumOverheadFraction) ||
+        budget->maximumOverheadFraction <= 0.0 ||
+        budget->maximumOverheadFraction >= 1.0 ||
+        !std::isfinite(budget->initialExpectedImprovement) ||
+        budget->initialExpectedImprovement <= 0.0 ||
+        budget->initialExpectedImprovement >= 1.0 ||
+        !std::isfinite(budget->paybackMultiplier) ||
+        budget->paybackMultiplier < 1.0 ||
+        (budget->measurementCostHintSeconds &&
+         (!std::isfinite(*budget->measurementCostHintSeconds) ||
+          *budget->measurementCostHintSeconds < 0.0)))
+      throw std::invalid_argument{"Invalid application-runtime budget."};
+  }
   auto positive = [](std::size_t value, std::string_view member) {
     if (value == 0u)
       throw std::invalid_argument{std::string{member} +
@@ -590,7 +641,7 @@ inline void TunerConfig::validate() const {
   positive(adaptiveProbeInterval, "TunerConfig::adaptiveProbeInterval");
   if (exploration == ExplorationPolicy::online &&
       selection == SelectionPolicy::fixed && !maximumExecutions &&
-      !maximumRetiredConfigurations)
+      !maximumRetiredConfigurations && !budget)
     throw std::invalid_argument{
         "Online fixed selection requires maximumExecutions or "
         "maximumRetiredConfigurations."};

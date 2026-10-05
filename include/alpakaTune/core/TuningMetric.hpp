@@ -28,6 +28,16 @@ template <typename Function> struct FunctionObjective {
   Function function;
 };
 
+/** @brief Application-provided elapsed seconds, eligible for benefit budgeting.
+ */
+struct ElapsedTime {
+  std::string name;
+};
+template <typename Function> struct ElapsedTimeObjective {
+  std::string name;
+  Function function;
+};
+
 } // namespace metric
 
 namespace detail {
@@ -36,6 +46,18 @@ template <> inline constexpr bool isCustomMetricToken<metric::Custom> = true;
 template <typename Function>
 inline constexpr bool isCustomMetricToken<metric::FunctionObjective<Function>> =
     true;
+template <>
+inline constexpr bool isCustomMetricToken<metric::ElapsedTime> = true;
+template <typename Function>
+inline constexpr bool
+    isCustomMetricToken<metric::ElapsedTimeObjective<Function>> = true;
+template <typename T> inline constexpr bool isElapsedTimeMetric = false;
+template <> inline constexpr bool isElapsedTimeMetric<metric::Timing> = true;
+template <>
+inline constexpr bool isElapsedTimeMetric<metric::ElapsedTime> = true;
+template <typename Function>
+inline constexpr bool
+    isElapsedTimeMetric<metric::ElapsedTimeObjective<Function>> = true;
 // Specialize before inspecting the callable, so timing/scalar policies never
 // instantiate an expression referring to a nonexistent function member.
 template <typename Policy, typename... Values>
@@ -43,6 +65,10 @@ inline constexpr bool acceptsMetricInputs = false;
 template <typename Function, typename... Values>
 inline constexpr bool
     acceptsMetricInputs<metric::FunctionObjective<Function>, Values...> =
+        std::is_invocable_r_v<double, Function &, Values...>;
+template <typename Function, typename... Values>
+inline constexpr bool
+    acceptsMetricInputs<metric::ElapsedTimeObjective<Function>, Values...> =
         std::is_invocable_r_v<double, Function &, Values...>;
 } // namespace detail
 
@@ -70,4 +96,18 @@ template <typename Function>
       std::move(token.name), std::forward<Function>(function)};
 }
 
+/** @brief Declare explicitly submitted elapsed seconds. Measurement cost hints
+ * remain optional; the application owns completion and measurement. */
+[[nodiscard]] inline auto elapsedTimeMetric(std::string name)
+    -> metric::ElapsedTime {
+  auto token = customMetric(std::move(name));
+  return {std::move(token.name)};
+}
+template <typename Function>
+  requires std::copy_constructible<std::decay_t<Function>>
+[[nodiscard]] auto elapsedTimeMetric(std::string name, Function &&function) {
+  auto token = elapsedTimeMetric(std::move(name));
+  return metric::ElapsedTimeObjective<std::decay_t<Function>>{
+      std::move(token.name), std::forward<Function>(function)};
+}
 } // namespace alpakaTune

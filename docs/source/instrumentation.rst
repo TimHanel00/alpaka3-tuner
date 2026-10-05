@@ -75,6 +75,16 @@ retirement and horizon counters stop advancing. For automatic spaces,
 ``info().space`` separates the registered catalog from distinct measured
 configurations and optional full domain cardinality.
 
+``tuner.executionRuntimeSummary()`` returns an optional summary of raw recorded
+launch runtimes from this process: ``sampleCount``, ``minimumSeconds``,
+``maximumSeconds``, ``medianSeconds``, and ``averageSeconds``.
+``minimumExecution`` contains the corresponding ``ExecutedConfiguration``;
+ties select the earliest launch. No recorded timings means ``std::nullopt``.
+Untimed warm-ups/replays and restored history samples are excluded. Timed
+launches remain included even if their configuration is subsequently
+invalidated. This summary uses every recorded sample without the rolling
+window or outlier filtering used for winner selection.
+
 When is online tuning worthwhile?
 ---------------------------------
 

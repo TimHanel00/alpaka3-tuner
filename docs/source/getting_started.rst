@@ -1,14 +1,11 @@
 Your first tuner
 ================
 
-This tutorial adds one to every element of an array. Its batch size changes
-how much work a worker handles at once; all candidates must produce the same
-answer. We use the host CPU so you can try the API without a GPU toolchain.
-For the underlying device and buffer vocabulary, see the
-`Alpaka getting-started tutorial
+Tune the batch size of a kernel that adds one to each array element.
+The example runs on the host CPU and needs CMake 3.25+, a C++20 compiler,
+and Git. CMake fetches the pinned dependencies.
+For Alpaka basics, see the `getting-started tutorial
 <https://alpaka3.readthedocs.io/en/latest/tutorial/motivation.html>`_.
-You need CMake 3.25 or newer, a C++20 compiler, and Git. CMake fetches the
-pinned dependencies on the first configure.
 
 Build and run
 -------------
@@ -21,9 +18,23 @@ From the repository root:
    cmake --build build-tutorial --target first_tuner --parallel 4
    ./build-tutorial/first_tuner
 
-The program checks every result after each of 20 launches and prints
-``candidates=3; completed=1; loaded=0``. A short-kernel warning is expected:
-this small example demonstrates the interface, not a guaranteed speedup.
+The program checks 20 launches and prints backend runtime statistics and the
+batch size from the fastest timed launch. Example output (times vary):
+
+.. code-block:: text
+
+   20 launches checked
+   Kernel runtimes (us; 9 timed launches): min=51.200; max=78.400; median=62.100; avg=63.500
+   Minimum-runtime configuration: batchSize=64
+   Tuning: complete; history: no saved measurements restored
+
+``executionRuntimeSummary()`` covers timed launches in this process;
+untimed replay and saved samples are excluded. The fastest single launch
+may differ from the tuner's statistical winner. ``Tuning: complete`` means
+exploration has ended; the history message reports whether saved measurements
+were restored. See :doc:`instrumentation` for details.
+
+A short-kernel warning is expected for this small workload.
 
 Read the working source
 -----------------------
@@ -32,31 +43,16 @@ Read the working source
    :language: cpp
    :start-at: #include
 
-There are three steps to the integration:
+1. **Declare choices:** ``batchSize`` names the parameter;
+   ``RVals{32u, 64u, 128u}`` lists its candidates.
+2. **Create one tuner:** ``makeTuner`` binds the configuration, candidates,
+   device, and workload identity. This example takes three samples per candidate.
+3. **Launch:** ``tuner.enqueue(queue, frame, bundle)`` runs once per call.
+   After exploration, it replays the measured winner.
 
-1. **Describe the choices.** ``batchSize`` is a marker, and
-   ``RVals{32u, 64u, 128u}`` is an explicit list of three values. The kernel
-   accepts the selected value as an ordinary argument. Its bounds check keeps
-   the final partial batch correct.
-2. **Keep one tuner.** ``makeTuner(config, tunables, device, ...)`` snapshots
-   both the settings and the candidate declarations. Here online exploration
-   with fixed selection runs a finite search, with three measurements per
-   candidate and a 100-launch
-   guard. Later calls replay the best measured candidate. The workload label
-   and array size help identify compatible history.
-3. **Replace the launch.** Use ``tuner.enqueue(queue, frame, bundle)`` where
-   you would normally use ``queue.enqueue(frame, bundle)``. Each call launches
-   once; it does not run a complete search internally. The application still
-   asks for exactly 20 launches.
-
-The timed non-blocking queue measures online launches. Copies use that same
-queue, followed by ``wait``, so results are ready even during asynchronous
-winner replay. Copies and the host correctness check are outside the measured
-kernel interval. See :doc:`instrumentation` before integrating multiple queues.
-
-Changing choices does not automatically preserve correctness: every candidate
-must be valid for your kernel, input, and executor. Express known conditions
-with restrictions, or validate produced results as described in
+Fills, copies, and correctness checks stay outside the timed kernel interval.
+Copies use the same queue, followed by ``wait`` before reading results.
+Every candidate must produce the correct answer; see
 :doc:`post_evaluation_validation`.
 
 Use it in your project
