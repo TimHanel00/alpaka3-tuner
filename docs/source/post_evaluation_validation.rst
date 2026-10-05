@@ -50,10 +50,16 @@ history. ``TunerInfo`` reports these paths separately through
 ``rejectedCandidateCount`` and ``restrictionRejectedCount`` versus
 ``userInvalidatedCandidateCount`` and ``userInvalidatedRejectedCount``.
 
-In ``online_fixed`` mode, invalid candidates count as resolved. If no measured
+In ``online/fixed`` mode, invalid candidates count as resolved. If no measured
 candidate remains valid, the tuner completes with
 ``TunerCompletionReason::noValidConfiguration``. ``bestCandidateIndex()`` and a
 later enqueue then fail instead of replaying a known-invalid configuration.
+
+Adaptive reuse also excludes invalidated configurations from ordinary launches
+and alternative probes. If no valid measured configuration remains after
+exploration has ended, enqueue fails with ``noValidConfiguration``; it does not
+restart a search or generate new configurations. This applies to both offline
+adaptive selection and online adaptive selection after exploration completes.
 
 Accuracy-versus-runtime example
 -------------------------------

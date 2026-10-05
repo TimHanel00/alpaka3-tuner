@@ -39,8 +39,9 @@ There are three steps to the integration:
    accepts the selected value as an ordinary argument. Its bounds check keeps
    the final partial batch correct.
 2. **Keep one tuner.** ``makeTuner(config, tunables, device, ...)`` snapshots
-   both the settings and the candidate space. Here ``onlineFixed`` tries a
-   finite search, with three measurements per candidate and a 100-launch
+   both the settings and the candidate declarations. Here online exploration
+   with fixed selection runs a finite search, with three measurements per
+   candidate and a 100-launch
    guard. Later calls replay the best measured candidate. The workload label
    and array size help identify compatible history.
 3. **Replace the launch.** Use ``tuner.enqueue(queue, frame, bundle)`` where
@@ -100,5 +101,9 @@ with ``-DCMAKE_PREFIX_PATH="$PWD/install"`` in a fresh build directory.
 Every target using Alpaka headers must call ``alpaka_finalize`` after linking.
 Include ``<alpakaTune/alpakaTune.hpp>`` in your source.
 
-Next, try :doc:`history_workflows` with this same executable, or change its
-batch values to compile-time candidates in :doc:`compile_time_tuning`.
+Next, try :doc:`history_workflows` with this same executable. You can replay
+a fixed winner or adapt among the saved configurations without another search.
+:doc:`execution_modes` explains these independent choices. For larger spaces,
+:doc:`automatic_spaces` generates candidates from declared domains and measured
+feedback. To compile batch alternatives ahead of time, see
+:doc:`compile_time_tuning`.

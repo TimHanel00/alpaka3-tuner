@@ -11,8 +11,8 @@ Compact history
 ---------------
 
 ``TunerConfig::history`` is the preferred restart source. Its schema contains
-an objective-ordered selection of measured configurations and, for an active
-learned-hybrid strategy, the complete residual-adapter state. Each
+an objective-ordered selection of measured configurations and compatible
+learned-hybrid residual-adapter state when available. Each
 configuration record contains its readable values, robust median objective, and
 retained measurement count. It omits raw timings, execution
 counters, policy diagnostics, and timestamps.
@@ -53,22 +53,30 @@ Read precedence
 When both reads are enabled, compact history initializes first. Its timing
 summary wins for an overlapping configuration. Complete history then supplies
 raw samples only for configurations absent from compact history and restores
-its additional lifecycle and diagnostic state. Starting either online mode
+its additional lifecycle and diagnostic state. Starting online exploration
 then resets run-local sample counts, scheduler state, execution counters, and
-completion while retaining the restored timings. Offline mode consumes the
-loaded state directly.
+completion while retaining the restored timings. Offline/fixed uses the loaded
+estimates for replay. Offline/adaptive retains the measurements, resets its
+run-local counters, and remeasures known configurations directly.
 
 A valid compact adapter also wins. Complete adapter state is used only when
 compact history has no adapter compatible with the configured model digest and
 feature dimensions. Missing or malformed optional adapter data never discards
 otherwise valid timing history.
 
-Compact-only ``offline`` mode replays the best summarized configuration.
-Compact-only online modes start with those configurations marked as measured
-for strategy decisions, with zero current-run samples, execution count, and
-terminal completion state.
+Compact-only offline/fixed replays the best summarized configuration.
+Compact-only offline/adaptive measures and switches among the summarized
+configurations; configurations omitted by compact sampling are unavailable
+unless complete history supplies their measurements. Online exploration starts
+with restored configurations marked as measured for strategy decisions, with
+zero current-run samples and execution count, and exploration incomplete.
 ``loadedFromCache()`` reports true when either source restores compatible
 timing or adapter state.
+
+Offline adaptive reuse does not construct a strategy or run learned inference.
+When writes are enabled, compatible loaded residual-adapter state is retained
+for a later online run, without fitting it to the reuse measurements. Complete
+history reports this learned state as ``known_reuse``.
 
 Access and shutdown
 -------------------
@@ -118,11 +126,18 @@ dimension, avoiding enumeration of the complete candidate space.
 
 The fingerprint includes kernel bundle type, physical device name, additional
 identity entries, launch prototype, executor, restrictions, and tunable
-definitions. Strategy, execution mode, seed, budgets, history access policy,
+definitions. Strategy, exploration and selection policies, seed, budgets, history access policy,
 sampling count, and learned-model path are excluded.
 
-YAML schema 3 uses independent ``history`` and ``complete_history`` maps; the
+Automatic histories additionally store the registered candidate catalog and
+its generation state. Their fingerprint covers the declared domains and hints,
+so catalog growth preserves compatibility. Offline selection uses the restored
+measured subset without generation; see :doc:`automatic_spaces`.
+
+YAML schema 4 uses independent ``history`` and ``complete_history`` maps; the
 older ``persistence`` map is rejected. When updating an older configuration,
 use separate paths for compact and complete history. Complete-history files
 with an earlier schema require fresh measurements; renaming a file does not
 convert its schema.
+The independent policy fields do not change the supported JSON file schemas;
+see :doc:`configuration` for the combined-mode migration.

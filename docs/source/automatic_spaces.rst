@@ -1,6 +1,12 @@
 Automatic candidate spaces
 ===========================
 
+Declare the allowed values once and let online exploration register a bounded
+set of configurations from them. Measurements guide later generation toward
+promising neighborhoods while global probes keep other parts of the domain
+represented. This avoids constructing the entire Cartesian product up front.
+The domain declaration stays fixed; the registered catalog grows.
+
 Start with launch geometry
 --------------------------
 
@@ -115,10 +121,11 @@ batch and a 4,096-candidate catalog. Small enumerable domains have a separate
 exhaustion cursor. Adaptive revisits update timing histories without counting
 as new exploration coverage.
 
-Finishing the current pool triggers another generation attempt. Fixed online
-mode finishes only when the provider stops growing and registered candidates
-are resolved, or an existing execution, retirement, or strategy-retry guard
-fires. Completion reasons distinguish:
+Finishing the current pool triggers another generation attempt. When generation
+stops, online exploration completes once all eligible registered configurations
+have measurements; fixed selection also requires their retirement. Execution
+and retirement limits can end exploration earlier. Fixed selection can also
+finish at its strategy-retry guard. Completion reasons distinguish:
 
 * ``all_configurations``: full domain exhaustion is proven;
 * ``candidate_budget``: the generated catalog reached its size limit;
@@ -131,18 +138,27 @@ count, revision, generation state, and domain exhaustion. Benchmark history
 inspection reports registered-pool coverage separately from full domain
 coverage.
 
-Online/offline and adaptive/fixed remain separate decisions. Both online
-modes can grow automatic spaces. Offline replay loads the saved catalog and
-winner without generation. Stopping generation does not freeze adaptive
-selection: adaptive mode continues revisiting and measuring registered
-candidates and updating its winner.
+Generation and adaptation have different limits. ``space.maximum_candidates``
+bounds the registered catalog; ``tuning.maximum_executions`` bounds exploration
+launches, including warm-ups and repeated measurements. Neither limits the
+application's launch loop. ``candidate_budget`` does not mean that every value
+in the declared domain was tested.
+
+Online exploration can grow automatic spaces with either selection policy.
+Offline exploration loads the saved catalog and performs no generation.
+After exploration ends, fixed selection replays its winner; adaptive selection
+remeasures only valid configurations that already have measurements, probing
+an alternative at ``adaptive_probe_interval``. Registered but unmeasured
+configurations cannot enter this reuse path. See :doc:`execution_modes`.
 
 Configure generation separately from execution budgets::
 
-   schema_version: 3
+   schema_version: 4
    tuning:
-     mode: online_fixed
+     exploration: online
+     selection: fixed
      strategy: bayesian_optimization
+     runs_per_candidate: 3
      maximum_executions: 10000
    space:
      initial_candidates: 32
@@ -153,6 +169,12 @@ Configure generation separately from execution budgets::
      plateau_patience: null
      minimum_relative_improvement: 0.01
 
+This is a complete policy file; it uses process-local history. Add the
+``history`` settings from :doc:`history_workflows` to save the catalog and
+measurements. Generation settings belong to ``config.space`` in C++, for
+example ``config.space.maximumCandidates = 4096u``. They affect automatic
+spaces; explicit Cartesian candidate lists retain their existing enumeration.
+
 Persistence and learned models
 ------------------------------
 
@@ -160,8 +182,11 @@ Compact and complete histories store a versioned catalog, its enumeration
 cursor, revision, and random generator state. A context fingerprint describes
 the domains and hints; it does not change when the catalog grows. Online
 reload retains candidate IDs and measurements while execution budgets and
-admission counters start a new run. Manual histories keep their existing
-format.
+admission counters start a new run. Offline adaptive selection reuses the
+measured subset of the restored catalog, so a changed workload need not trigger
+another generation phase. Compact sampling can reduce that measured subset;
+use enough retained configurations to provide useful alternatives. Manual
+histories keep their existing format.
 
 Automatic spaces use learned feature schema 2 and score registered candidates
 in bounded batches, including candidates added later. Schema 1 artifacts

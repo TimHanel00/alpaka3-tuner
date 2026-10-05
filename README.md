@@ -6,10 +6,20 @@ parameters; the tuner measures their cost and selects values for later launches.
 By default it minimizes runtime. You can also provide an application-defined
 score, including a weighted combination of metrics.
 
-Tune once and replay the winner, keep adapting as the application runs, or
-reuse a saved configuration. Runtime (`RVals`) and compile-time (`CVals`)
+Use explicit candidate lists for a small search, or declare
+[automatic candidate spaces](https://alpaka3-tuner.readthedocs.io/en/latest/automatic_spaces.html)
+for launch geometry and kernel parameters. Automatic spaces grow a bounded
+catalog using measured feedback, while keeping configuration identities stable
+for history reuse.
+
+Choose exploration (`online` or `offline`) independently from selection
+(`adaptive` or `fixed`). Adaptive selection can remeasure known configurations
+and switch winners as workloads change, including after a finite search ends
+or with exploration disabled. Runtime (`RVals`) and compile-time (`CVals`)
 choices can share one candidate space. Your application controls the kernel
-launches and its main loop.
+launches and its main loop. See
+[exploration and selection policies](https://alpaka3-tuner.readthedocs.io/en/latest/execution_modes.html)
+for the four combinations and their measurement behaviour.
 
 Start with [Your first tuner](https://alpaka3-tuner.readthedocs.io/en/latest/getting_started.html)
 to build a minimal CPU example. The [full guide](https://alpaka3-tuner.readthedocs.io/en/latest/)

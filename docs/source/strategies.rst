@@ -11,21 +11,26 @@ fallback. No strategy can compensate for an invalid candidate space.
 Change ``config.strategy`` in C++, or the ``tuning.strategy`` field in your
 complete YAML file. The snippet below is only a configuration fragment.
 
-Constraints, the horizon gate, the optional queue, the execution mode, and the
-strategy have separate responsibilities. A ``ParameterStrategy`` recommends a
+Strategies run only during online exploration. Offline adaptive selection and
+adaptation after exploration completes reuse measured configurations directly,
+without asking a strategy to search again.
+
+Constraints, the horizon gate, the optional queue, the exploration/selection
+policies, and the strategy have separate responsibilities. A ``ParameterStrategy`` recommends a
 configuration. The tuner always applies constraints, then applies adaptive
 horizon rejection when configured. A configured ``CandidateQueue`` next
 interleaves accepted candidates and limits consecutive runs; without it, the
 accepted recommendation launches directly. The selected
-:doc:`execution_modes` policy owns measurement lifetime, revisits, and
+:doc:`execution_modes` policies own measurement lifetime, revisits, and
 production launches.
 
 Strategy interface
 ------------------
 
-A parameter configuration is ``std::vector<float>`` with one normalized value
+For an explicit Cartesian space, a parameter configuration is
+``std::vector<float>`` with one normalized value
 in ``[0, 1]`` per tuning dimension. A strategy receives a read-only
-``StrategyContext`` with exactly two operations:
+``StrategyContext`` with these basic operations:
 
 * ``parameterSizes()`` gives the number of discrete values in each dimension;
 * ``runtimeFor(configuration)`` returns a read-only ``RuntimeObservation``, if
@@ -44,6 +49,16 @@ counts, record state, confidence status, and the result of a rank comparison to
 the current best record. ``isFinished()`` lets a strategy wait for a stable
 result instead of treating a partial configuration as final.
 
+Automatic spaces use stable candidate IDs rather than nearest-coordinate
+mapping. The context exposes ``hasCandidateCatalog()``, ``candidateCount()``,
+``candidateConfiguration(id)``, ``candidateAvailable(id)``,
+``candidateValid(id)``, and ``candidateObservation(id)``. A custom strategy must
+opt in through ``supportsCandidateCatalog()`` and implement
+``recommendCandidate()`` to return a registered ID. It can handle exact-ID
+feedback through ``candidateRecommendationResult()`` and
+``candidateInvalidated()``. Existing normalized custom strategies continue to
+work with manual spaces. See :doc:`automatic_spaces` for catalog generation.
+
 Timing records and comparisons
 ------------------------------
 
@@ -52,7 +67,7 @@ a robust median and mean after MAD-based outlier rejection. The robust median is
 runtime used to select the winner and reported to strategies, so isolated host
 scheduling spikes do not distort tuning decisions.
 
-In ``online_fixed``, a non-parametric median confidence interval is checked
+In ``online/fixed``, a non-parametric median confidence interval is checked
 every ``ci_check_interval`` samples (99% confidence by default). A record
 completes once the interval is within ``ci_relative_width`` and
 ``minimum_runs_per_candidate`` has been met,
@@ -68,9 +83,11 @@ This rank-based retirement is performed before a strategy receives the final
 observation, so random, annealing, and Bayesian strategies all operate on the
 same statistically filtered history without mutable access to it.
 
-``online_adaptive`` instead ends a candidate residency after its configured
+``online/adaptive`` instead ends a candidate residency after its configured
 activation burst and maintains a rolling fixed-size sample window. It does not
 apply confidence, maximum-sample, or rank-test retirement inside that burst.
+Adaptive reuse under either exploration policy updates the same rolling window,
+without residency bursts or retirement checks.
 
 Built-in strategies
 -------------------
@@ -79,7 +96,9 @@ Built-in strategies
 uniform normalized points. ``simulated_annealing`` owns an accepted state and
 perturbs it with a cooling radius. ``bayesian_optimization`` owns its requested
 points and queries their runtimes to fit a bounded RBF surrogate, selecting a
-lower-confidence-bound proposal.
+lower-confidence-bound proposal. For automatic spaces, built-in strategies
+select registered candidate IDs and incorporate newly generated catalog entries;
+``exhaustive`` covers the current catalog, which may trigger further generation.
 
 ``learned_hybrid`` loads a compact offline-trained candidate ranker and scores
 a bounded, deterministically sampled candidate pool in batches. It reserves
@@ -93,6 +112,9 @@ the pool specifically bounds learned inference and learned candidate metadata.
 To train a model, use the separate `alpakaTune-ml
 <https://github.com/TimHanel00/alpakaTune-ml>`_ repository. Set ``learning.model``
 to the resulting artifact's path, or use a model bundled with your installation.
+Automatic spaces require learned feature schema 2; schema 1 remains supported
+for manual spaces. A catalog's numeric coordinates are model features, while
+its stable IDs identify the configurations and their measurements.
 
 Select one in YAML:
 

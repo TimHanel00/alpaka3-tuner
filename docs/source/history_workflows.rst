@@ -32,10 +32,10 @@ Replay in another process
 .. literalinclude:: ../examples/first_tuner/replay.yaml
    :language: yaml
 
-Expect ``completed=1; loaded=1``. Offline mode selects the best compatible
-measured candidate, performs no new measurements, and leaves the input file
-unchanged. A history need not contain a terminal fixed-mode winner; measured
-history from adaptive mode also works. With no compatible measured candidate,
+Expect ``completed=1; loaded=1``. Offline exploration with fixed selection
+selects the best compatible measured candidate, performs no new measurements,
+and leaves the input file unchanged. A history need not contain a locked
+winner; measurements from adaptive selection also work. With no compatible measured candidate,
 offline initialization fails instead of silently training.
 
 Continue adapting
@@ -50,20 +50,44 @@ To load the same observations while exploring further:
 .. literalinclude:: ../examples/first_tuner/adaptive.yaml
    :language: yaml
 
-This configuration has no horizon. Expect ``completed=0; loaded=1`` after the
+This configuration has no exploration limit or cooling horizon. Expect
+``completed=0; loaded=1`` after the
 application's 20 launches. The measurements guide new decisions, but the input
 file stays unchanged. Set ``write: true`` to save updated observations.
-Starting either online mode resets run counters and scheduling state, while
-retaining compatible samples. A new fixed run tunes again before entering
-winner replay.
+Starting online exploration with either selection policy resets run counters
+and scheduling state, while retaining compatible samples. A new online/fixed
+run tunes again before entering winner replay. A cooling horizon alone would
+not end the search; add ``maximum_executions`` to bound exploration while
+continuing adaptive selection afterward.
+
+Adapt without further search
+----------------------------
+
+.. code-block:: sh
+
+   ./build-tutorial/first_tuner docs/examples/first_tuner/reuse.yaml
+
+.. literalinclude:: ../examples/first_tuner/reuse.yaml
+   :language: yaml
+
+This policy uses offline exploration with adaptive selection. Expect
+``completed=1; loaded=1``: exploration is already complete, while known
+configurations are measured and the winner can change as performance changes.
+``adaptive_probe_interval: 10`` probes an alternative every tenth successful
+reuse launch. Set ``history.write: true`` to retain updated scores.
+No strategy or generation phase runs, including for automatic candidate spaces.
+Only valid configurations with restored measurements can be selected. A
+sampled compact history therefore determines which alternatives remain available.
 
 Keep histories meaningful
 -------------------------
 
 A tuner identifies history from its device, kernel-bundle type, launch
 prototype, candidates, restrictions, objective, and extra identity entries.
-Strategy and mode can change between collection and replay. A changing buffer
-address is ordinary launch data, not a new workload identity.
+Strategy and both policies can change between collection and replay. Automatic
+catalog growth preserves configuration IDs and history compatibility; changing
+the declared domains or hints changes the context. A changing buffer address is
+ordinary launch data, not a new workload identity.
 
 Supply a stable workload label, problem size, precision or algorithm version,
 and other inputs that change performance or validity:
