@@ -45,3 +45,22 @@ ctest --test-dir build --output-on-failure
 
 Alpaka3 is downloaded through CMake FetchContent at the pinned upstream
 revision recorded in `CMakeLists.txt`.
+
+## Known limitations
+
+A defect in nvcc, observed across CUDA 12.5–13.0 in CI, rejects a compile-time
+candidate binding nested directly inside a deduced `TunableBundle`, such as
+`alpakaTune::TunableBundle{choice(alpakaTune::CVals<0, 1>{})}`. Diagnostics can
+report the wrong number of template arguments or an undefined compiler-generated
+identifier such as `__T11`.
+
+Assign the bound tunable to a variable before constructing the bundle:
+
+```cpp
+auto const choice = ALPAKA_TUNE_TUNABLE("choice");
+auto const tunable = choice(alpakaTune::CVals<0, 1>{});
+auto tuner = alpakaTune::makeTuner(
+    config, alpakaTune::TunableBundle{tunable}, device);
+```
+
+This preserves compile-time candidates and the same tuning behavior.

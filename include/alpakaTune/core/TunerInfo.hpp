@@ -9,6 +9,7 @@
 #include "alpakaTune/core/TuningMetric.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -25,6 +26,7 @@ namespace detail {
 struct ConfigurationValidityState {
   bool valid{true};
   bool invalidationConsumed{};
+  std::shared_ptr<std::uint64_t> generation;
 };
 } // namespace detail
 
@@ -54,6 +56,8 @@ public:
     if (valid && m_state->invalidationConsumed)
       throw std::logic_error{
           "A consumed configuration invalidation cannot be restored."};
+    if (m_state->valid != valid && m_state->generation)
+      ++*m_state->generation;
     m_state->valid = valid;
     return *this;
   }
@@ -86,6 +90,22 @@ struct ExecutedConfiguration {
   bool measured{};
   /** Application decision, shared by all entries for this candidate. */
   mutable ConfigurationValidity valid;
+};
+
+/** @brief Raw runtime statistics across timed launches in this process.
+ *
+ * Unmeasured launches and restored samples are excluded. Invalidated launches
+ * remain included because this describes executions, rather than winner scores.
+ */
+struct ExecutionRuntimeSummary {
+  std::size_t sampleCount{};
+  double minimumSeconds{};
+  double maximumSeconds{};
+  double medianSeconds{};
+  double averageSeconds{};
+  /** Earliest timed launch attaining minimumSeconds, including its parameters.
+   */
+  ExecutedConfiguration minimumExecution;
 };
 
 /** @brief Clock source used for synchronized kernel runtime observations. */
@@ -139,6 +159,8 @@ enum class TunerCompletionReason {
   candidateBudget,   ///< Generated catalog reached its size limit.
   plateau,           ///< Generation stopped after sustained lack of gain.
   generationStalled, ///< Bounded generation attempts found no new candidate.
+  insufficientExpectedBenefit, ///< Further exploration cannot repay its cost.
+  tuningOverheadBudget,        ///< Estimated incremental cost ceiling reached.
   noValidConfiguration,
 };
 
@@ -159,6 +181,10 @@ struct InstrumentationOverheadWarning {
 [[nodiscard]] constexpr auto
 completionReasonName(TunerCompletionReason reason) noexcept -> char const * {
   switch (reason) {
+  case TunerCompletionReason::insufficientExpectedBenefit:
+    return "insufficient_expected_benefit";
+  case TunerCompletionReason::tuningOverheadBudget:
+    return "tuning_overhead_budget";
   case TunerCompletionReason::none:
     return "none";
   case TunerCompletionReason::offlineReplay:
@@ -183,8 +209,23 @@ completionReasonName(TunerCompletionReason reason) noexcept -> char const * {
   return "none";
 }
 
+/** @brief Purpose of a budgeted application launch. */
+enum class LaunchPurpose { production, experiment, healthCheck, warmup };
+/** @brief Current process cost estimates; not restored from persistent history.
+ */
+struct BudgetInfo {
+  std::uint64_t remainingLaunches{};
+  std::uint64_t measuredLaunches{};
+  std::uint64_t productionLaunches{};
+  double spentSeconds{};
+  double ceilingSeconds{};
+  double expectedSavingsSeconds{};
+  std::optional<TunerCompletionReason> stoppingReason;
+};
+
 /** @brief Read-only snapshot of tuner policy, coverage, and diagnostics. */
 struct TunerInfo {
+  std::optional<BudgetInfo> budget;
   SpaceInfo space;
   /** Permission to search for new configurations. */
   ExplorationPolicy exploration{ExplorationPolicy::online};
@@ -271,6 +312,7 @@ struct TunerInfo {
 
 /** @brief Per-call result returned by Tuner::enqueueObserved(). */
 struct LaunchObservation {
+  LaunchPurpose purpose{LaunchPurpose::experiment};
   /** Exact Cartesian candidate launched by this call. */
   std::size_t candidateIndex{};
   /** Normalized parameter vector mapped to candidateIndex. */

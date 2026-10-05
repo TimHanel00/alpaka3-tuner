@@ -1,3 +1,12 @@
+add_executable(alpakaTune_budget_benchmark ${PROJECT_SOURCE_DIR}/docs/examples/benefit_budget/main.cpp)
+target_link_libraries(alpakaTune_budget_benchmark PRIVATE alpakaTune::alpakaTune)
+alpaka_finalize(alpakaTune_budget_benchmark)
+
+add_executable(alpakaTune_budget_tests benefit_budget.cpp)
+target_link_libraries(alpakaTune_budget_tests PRIVATE alpakaTune::alpakaTune Catch2::Catch2WithMain)
+alpaka_finalize(alpakaTune_budget_tests)
+add_test(NAME alpakaTune_budget_tests COMMAND alpakaTune_budget_tests)
+
 add_executable(alpakaTune_policy_tests policies.cpp)
 target_link_libraries(alpakaTune_policy_tests PRIVATE alpakaTune::alpakaTune Catch2::Catch2WithMain)
 alpaka_finalize(alpakaTune_policy_tests)
@@ -151,7 +160,12 @@ foreach(_tutorial_variant IN ITEMS runtime compile_time)
     endif()
     alpaka_finalize(${_tutorial_target})
     add_test(NAME ${_tutorial_target} COMMAND ${_tutorial_target})
-    set_tests_properties(${_tutorial_target} PROPERTIES PASS_REGULAR_EXPRESSION "candidates=3.*completed=1.*loaded=0")
+    set_tests_properties(
+        ${_tutorial_target}
+        PROPERTIES
+            PASS_REGULAR_EXPRESSION
+                "Kernel runtimes .*min=.*max=.*median=.*avg=.*Minimum-runtime configuration: batchSize=(32|64|128).*Tuning: complete; history: no saved measurements restored"
+    )
     if(alpakaTune_ENABLE_PERSISTENCE)
         set(_tutorial_workdir "${CMAKE_CURRENT_BINARY_DIR}/tutorial-${_tutorial_variant}")
         file(MAKE_DIRECTORY "${_tutorial_workdir}")
@@ -167,19 +181,31 @@ foreach(_tutorial_variant IN ITEMS runtime compile_time)
         endforeach()
         set_tests_properties(
             ${_tutorial_target}_collect
-            PROPERTIES FIXTURES_SETUP ${_tutorial_target}_history PASS_REGULAR_EXPRESSION "completed=1.*loaded=0"
+            PROPERTIES
+                FIXTURES_SETUP ${_tutorial_target}_history
+                PASS_REGULAR_EXPRESSION
+                    "Kernel runtimes .*min=.*max=.*median=.*avg=.*Minimum-runtime configuration: batchSize=(32|64|128).*Tuning: complete; history: no saved measurements restored"
         )
         set_tests_properties(
             ${_tutorial_target}_replay
-            PROPERTIES FIXTURES_REQUIRED ${_tutorial_target}_history PASS_REGULAR_EXPRESSION "completed=1.*loaded=1"
+            PROPERTIES
+                FIXTURES_REQUIRED ${_tutorial_target}_history
+                PASS_REGULAR_EXPRESSION
+                    "No launch runtimes recorded [(]unmeasured replay[)].*Tuning: complete; history: restored saved measurements"
         )
         set_tests_properties(
             ${_tutorial_target}_reuse
-            PROPERTIES FIXTURES_REQUIRED ${_tutorial_target}_history PASS_REGULAR_EXPRESSION "completed=1.*loaded=1"
+            PROPERTIES
+                FIXTURES_REQUIRED ${_tutorial_target}_history
+                PASS_REGULAR_EXPRESSION
+                    "Kernel runtimes .*min=.*max=.*median=.*avg=.*Minimum-runtime configuration: batchSize=(32|64|128).*Tuning: complete; history: restored saved measurements"
         )
         set_tests_properties(
             ${_tutorial_target}_adaptive
-            PROPERTIES FIXTURES_REQUIRED ${_tutorial_target}_history PASS_REGULAR_EXPRESSION "completed=0.*loaded=1"
+            PROPERTIES
+                FIXTURES_REQUIRED ${_tutorial_target}_history
+                PASS_REGULAR_EXPRESSION
+                    "Kernel runtimes .*min=.*max=.*median=.*avg=.*Minimum-runtime configuration: batchSize=(32|64|128).*Tuning: still exploring; history: restored saved measurements"
         )
     endif()
 endforeach()
@@ -188,3 +214,8 @@ add_executable(alpakaTune_managed_space_tests managed_space.cpp)
 target_link_libraries(alpakaTune_managed_space_tests PRIVATE alpakaTune::alpakaTune Catch2::Catch2WithMain)
 alpaka_finalize(alpakaTune_managed_space_tests)
 add_test(NAME alpakaTune_managed_space_tests COMMAND alpakaTune_managed_space_tests)
+
+add_executable(alpakaTune_execution_runtime_summary_tests execution_runtime_summary.cpp)
+target_link_libraries(alpakaTune_execution_runtime_summary_tests PRIVATE alpakaTune::alpakaTune Catch2::Catch2WithMain)
+alpaka_finalize(alpakaTune_execution_runtime_summary_tests)
+add_test(NAME alpakaTune_execution_runtime_summary_tests COMMAND alpakaTune_execution_runtime_summary_tests)
