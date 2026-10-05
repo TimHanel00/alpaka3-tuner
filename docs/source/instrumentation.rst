@@ -66,7 +66,14 @@ field is empty for unmeasured launches and custom objectives. ``info`` is a
 read-only snapshot: candidate count, tracked execution count, rejection counts,
 and selection/completion diagnostics. ``lastConfig()`` identifies the launch
 that actually ran; ``history()`` contains successful executions in order.
-Adaptive horizon completion does not imply a terminal winner.
+``info().explorationComplete`` matches ``completed()``;
+``info().selectionLocked`` reports a fixed winner available for replay.
+Adaptive exploration completion does not imply a locked winner. Offline adaptive
+selection also measures launches and therefore has the same timing overhead.
+``executionCount`` continues increasing during adaptive reuse, while exploration
+retirement and horizon counters stop advancing. For automatic spaces,
+``info().space`` separates the registered catalog from distinct measured
+configurations and optional full domain cardinality.
 
 When is online tuning worthwhile?
 ---------------------------------

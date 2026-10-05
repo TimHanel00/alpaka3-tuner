@@ -1,74 +1,112 @@
-Choose how long to tune
-=======================
+Choose exploration and selection independently
+==============================================
 
-Use ``online_fixed`` for a finite learning phase, ``online_adaptive`` for a
-changing workload, and ``offline`` to reuse a saved result. These names are
-YAML spellings; C++ uses ``TuningMode::onlineFixed``, ``onlineAdaptive``, and
-``offline``.
+``exploration`` controls whether new configurations may be searched.
+``selection`` controls whether the selected configuration keeps adapting to
+measured performance. Offline adaptive selection can measure known configurations
+without starting another search.
 
 .. list-table::
    :header-rows: 1
-   :widths: 20 40 40
 
-   * - Mode
+   * - Exploration
+     - Selection
      - Behaviour
-     - ``completed()`` means
-   * - ``online_fixed``
-     - Measure candidates until a terminal guard, then replay the best.
-     - The finite learning phase ended. Check that a valid winner exists.
-   * - ``online_adaptive``
-     - Keep proposing and measuring with rolling histories.
-     - The optional horizon was reached; adaptation continues. Without a
-       horizon it stays false.
+   * - ``online``
+     - ``fixed``
+     - Search until completion, then lock the best valid measured configuration.
+   * - ``online``
+     - ``adaptive``
+     - Search while permitted, then continue adapting among known configurations.
    * - ``offline``
-     - Load compatible measured history and replay its best candidate.
-     - A terminal replay state is ready after initialization.
+     - ``fixed``
+     - Load compatible measured history and replay its best valid configuration.
+   * - ``offline``
+     - ``adaptive``
+     - Load compatible measured history, remeasure it, and switch as scores change.
 
-The tutorial uses fixed mode. It sets ``maximumExecutions`` as a guard;
-alternatively set ``maximumRetiredConfigurations``. Fixed mode requires at
-least one. It may finish earlier when all legal candidates have retired.
-``runsPerCandidate`` is its per-candidate measurement cap, and must fit in
-``historyWindowSize``. Confidence checks may retire candidates earlier.
+.. code-block:: cpp
+
+   config.exploration = alpakaTune::ExplorationPolicy::offline;
+   config.selection = alpakaTune::SelectionPolicy::adaptive;
+   config.adaptiveProbeInterval = 10u;
+
+Online fixed selection requires ``maximumExecutions`` or
+``maximumRetiredConfigurations``. Online adaptive selection accepts either limit
+but can also explore indefinitely. Limits end exploration without stopping
+adaptive selection. A configured ``horizon`` only controls admission and cooling;
+reaching it does not end exploration.
+
+For a bounded search followed by ongoing adaptation, use a complete policy file
+such as:
+
+.. code-block:: yaml
+
+   schema_version: 4
+   tuning:
+     exploration: online
+     selection: adaptive
+     strategy: exhaustive
+     runs_per_candidate: 3
+     maximum_executions: 1000
+     adaptive_probe_interval: 10
+     history_window_size: 10
+
+Up to 1,000 exploration launches can search and measure configurations.
+Later launches reuse the measured set, without new strategy recommendations.
+Automatic spaces may finish exploration sooner when generation stops and the
+registered pool is measured. Their generation budgets are configured separately
+under ``space``; see :doc:`automatic_spaces`. To begin directly with reuse of
+saved measurements, choose offline/adaptive as in :doc:`history_workflows`.
+
+``completed()`` and ``isTuningComplete()`` mean exploration has ended.
+``completionReason()`` explains why. ``info().explorationComplete`` reports the
+same status; ``info().selectionLocked`` identifies a valid fixed replay winner.
+Adaptive selection keeps running after exploration completes.
+``bestCandidateIndex()`` and winner accessors then report the current best;
+their value can change with adaptive selection.
+
+Reuse known configurations
+--------------------------
+
+After exploration ends, adaptive selection measures the current best on ordinary
+launches and probes a known alternative on every tenth successful reuse launch.
+``adaptiveProbeInterval`` changes this interval. Alternatives rotate by candidate
+index, excluding the current best, rejected candidates, and configurations without
+measurements. A single eligible configuration is measured continuously.
+
+Each measurement refreshes the existing rolling history. The best robust estimate
+selects subsequent ordinary launches. Probes bypass search strategies, horizon
+admission gates, candidate generation, and queued warm-ups. Queue scheduling still
+applies during online exploration. Invalidating a known configuration excludes it
+from both selection and probes. No eligible measured configuration is an error.
+
+Offline exploration requires compatible measured history. History read/write
+permissions are independent: set ``write: false`` to adapt without changing the
+input file. Workload changes can arrive through ordinary kernel inputs or custom
+metrics within the tuner's existing kernel and launch context.
 
 Keep your application loop
 --------------------------
-
-A simulation should still run its required time steps:
 
 .. code-block:: cpp
 
    for (std::size_t step = 0u; step < numberOfSteps; ++step)
        tuner.enqueue(queue, frameSpec, bundle);
 
-Use ``while (!tuner.completed())`` only when a dedicated **fixed-mode training
-run** should end with tuning. A horizon-less adaptive tuner never completes,
-so that loop would run indefinitely. A horizon is an admission/cooling schedule,
-not a launch budget and not a transition to winner-only replay.
-
-For continuous adaptation, start from a fresh ``TunerConfig{}``, whose mode is
-``onlineAdaptive`` with neither fixed-mode guards nor a horizon. If you change
-a fixed policy to adaptive, reset ``maximumExecutions`` and
-``maximumRetiredConfigurations`` first. The strategy then controls revisits
-directly. Add a horizon
-only when you want the admission schedule described in
-:doc:`execution_reference`.
+An application owns its launch count. Use ``while (!tuner.completed())`` only for
+a dedicated finite exploration run. Online adaptive exploration without a limit
+may never complete.
 
 Replay without measurement
 --------------------------
 
-Set ``config.replayFastPath = true`` for offline or fixed-mode production
-replay. It removes timing events, tracked execution-budget updates, strategy
-work, and sample/persistence updates from terminal launches. These calls may
-use a timing-disabled queue and can return before the kernel completes.
-Keep dependencies ordered on that queue or wait explicitly before using results.
-Successful launches still appear in ``history()``.
+``config.replayFastPath = true`` requires fixed selection. Once the winner is
+locked, launches bypass timing events, execution-budget updates, strategy work,
+and sample/persistence updates. A timing-disabled queue is then allowed; calls
+may return before the kernel completes. Keep queue dependencies ordered or wait
+before using results. Successful launches remain visible in ``history()``.
 
-Online timing calls need a timed non-blocking queue until a terminal winner
-exists. Leave the tutorial's queue timed throughout if you want one queue for
-both phases. ``replayFastPath`` is invalid in adaptive mode. Without that option,
-a timing-metric tuner still requires a timed queue for replay.
-
-Saved history seeds a new online learning phase; it does not resume an old
-execution budget or switch an online tuner immediately into offline replay.
-See :doc:`history_workflows` for runnable two-process examples and
-:doc:`execution_reference` for the exact admission and restart contract.
+Adaptive timing measurements require a timed queue even with offline exploration.
+Custom objectives retain the ``provideMetric()`` contract. See
+:doc:`history_workflows` and :doc:`execution_reference` for reuse and restart details.

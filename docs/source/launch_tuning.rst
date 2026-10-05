@@ -21,6 +21,9 @@ or configuration do not change an existing tuner.
 ``generate::linSpace(first, last, step)`` or
 ``generate::logSpace(first, last, factor)`` for generated runtime candidates.
 Candidate values can come from application configuration or device discovery.
+These generators build explicit lists before tuning. To declare a bounded
+domain whose combinations are generated progressively from feedback, use
+``autoCandidates`` as described in :doc:`automatic_spaces`.
 ``markTunable`` and ``Tunable`` are compatibility forms; new code can use the
 marker directly as above.
 
@@ -82,10 +85,28 @@ useful there. GPU thread counts must fit the device/kernel limits; use a small
 valid set suited to the algorithm. Logical ``frameExtent`` is not a direct
 GPU thread-count setting.
 
+Generate launch choices automatically
+-------------------------------------
+
+To let the tuner generate both launch dimensions, use:
+
+.. code-block:: cpp
+
+   auto launchChoices = alpakaTune::makeAutomaticLaunchTuning(frame);
+   auto tunables = alpakaTune::TunableBundle{candidates, launchChoices};
+
+This preserves the prototype's coverage on every axis and includes its original
+geometry. The generated catalog grows during online exploration; loaded measured
+configurations can be reused with either offline selection policy. Device and
+kernel resource checks apply before a generated candidate is registered.
+The same helper accepts a ``ThreadSpec``. See :doc:`automatic_spaces` for
+overrides, dependent domains, generation budgets, and the explicit
+``fullTraversal`` option for kernels that handle variable coverage.
+
 Restrict combinations
 ---------------------
 
-Candidate dimensions form a Cartesian product. Use ``constrain`` and
+Explicit candidate dimensions form a Cartesian product. Use ``constrain`` and
 ``restrict`` to reject incompatible combinations before they run:
 
 .. code-block:: cpp

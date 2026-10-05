@@ -43,7 +43,8 @@ that tuner. It updates ``lastConfig().metricValue`` and the corresponding
 execution-history entry. It cannot provide a value for an older launch, and a
 second call for the same launch fails.
 
-During online tuning, call ``provideMetric()`` before the next enqueue. If the
+During exploration or adaptive reuse, call ``provideMetric()`` before the next
+enqueue. This includes offline exploration with adaptive selection. If the
 next enqueue begins while the preceding launch still has no metric, alpakaTune
 permanently rejects that preceding candidate, removes it from active scheduler
 and strategy state, and continues with another candidate. The launch remains
@@ -52,9 +53,11 @@ path separately through ``missingMetricCandidateCount`` and
 ``missingMetricRejectedCount``.
 
 An explicit ``lastConfig().valid = false`` takes precedence over a missing
-metric, so one launch is not classified twice. Offline and terminal winner
-replays do not require a metric; ``provideMetric()`` may still attach one to
-their execution record, but it is not added to tuning statistics.
+metric, so one launch is not classified twice. Fixed winner replay after
+exploration completes does not require a metric; ``provideMetric()`` may still
+attach one to its execution record, but it is not added to tuning statistics.
+Adaptive reuse adds submitted metrics to the same rolling histories and can
+change the selected configuration without strategy calls or candidate generation.
 
 ``enqueueObserved()`` necessarily returns before an application metric is
 provided. Its ``metricValue`` is therefore empty in custom mode. Inspect

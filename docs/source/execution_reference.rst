@@ -1,11 +1,14 @@
-Execution-mode reference
-========================
+Exploration and selection reference
+===================================
 
-The execution mode owns candidate admission, measurement lifetime, and the
-transition to production launches. The strategy only proposes a normalized
-parameter vector. Every proposal follows the same ordered pipeline: mandatory
+The exploration and selection policies own candidate admission, measurement
+lifetime, and the transition to known-configuration reuse. During online
+exploration, a strategy proposes a normalized parameter vector for a manual
+space or an exact registered ID for an automatic space. Every proposal follows
+the same ordered pipeline: mandatory
 constraints, optional adaptive horizon rejection, optional queue scheduling,
-and one launch. For mode selection and everyday loops, start with :doc:`execution_modes`.
+and one launch. For policy selection and everyday loops, start with
+:doc:`execution_modes`.
 This reference explains the detailed admission and restart contract.
 
 This separation applies uniformly to
@@ -20,36 +23,25 @@ simulation time steps, convergence of its own result, a wall-time limit, or any
 other application-level condition. Tuner limits and horizons do not impose an
 application lifetime.
 
-``Tuner::completed()`` is optional policy information an application may
-consult. In ``online_fixed`` and ``offline`` it identifies a terminal tuner
-state. In ``online_adaptive`` with a configured ``horizon`` it becomes true at
-that horizon only to indicate that the admission sigmoid and cooling schedule
-reached their final state. It does not stop adaptation, measurement, revisits,
-or residual-adapter updates. Without a horizon it remains false indefinitely.
-
-The examples configure a horizon and demonstrate an application-owned combined
-condition: at least 50,000 executions and ``completed()``. Their shipped YAML
-uses an adaptive horizon of 40,000, leaving 10,000 launches at
-the final schedule state.
-Those numbers are independent. Applications that require exactly N launches
-should simply execute exactly N launches and need not inspect ``completed()``.
-``isTuningComplete()`` reports the same policy completion. It becomes true at
-the adaptive horizon but does not stop the adaptive scheduler. A terminal
-reason exists only for offline and fixed-mode terminal states;
-``completionReason()`` therefore remains unavailable after an adaptive
-horizon.
+``Tuner::completed()`` and ``isTuningComplete()`` report exploration completion.
+Offline initialization completes exploration immediately. Online limits and
+search exhaustion end exploration; ``completionReason()`` then explains why.
+Fixed selection locks its winner, while adaptive selection continues measuring
+known configurations. ``info().selectionLocked`` distinguishes these outcomes.
+Reaching the admission/cooling horizon alone does not report completion.
 
 One history across runs
 -----------------------
 
 Every candidate owns exactly one rolling timing history. Loading a compatible
 history restores those retained timings in place; there is no separate
-strategy-only copy. Strategies immediately see the restored estimates, and a
-compatible learned residual adapter is restored into the new strategy
-instance.
+strategy-only copy. During online exploration, strategies see the restored
+estimates, and a compatible learned residual adapter is restored into the new
+strategy instance. Offline reuse uses the same estimates without constructing
+a strategy.
 
-Starting either online mode creates a new run lifecycle around that same
-history:
+Starting online exploration with either selection policy creates a new run
+lifecycle around that same history:
 
 * each candidate's run-local sample count returns to zero;
 * retained timing samples, robust statistics, and rolling-window order remain;
@@ -65,35 +57,39 @@ rolling window and replace its oldest timings when
 .. list-table::
    :header-rows: 1
 
-   * - Mode
+   * - Exploration / selection
      - First run without readable history
      - Second run with readable history
-   * - ``online_fixed``
+   * - ``online/fixed``
      - Builds timings and adapter state, then reaches a terminal guard.
      - Retains timings and adapter, resets run counts and tunes again to a new
        terminal guard.
-   * - ``online_adaptive``
-     - Builds timings while advancing a fresh horizon schedule.
-     - Retains timings and adapter, resets run counts, starts at the configured
-       history offset, and receives a complete new horizon.
-   * - ``offline``
+   * - ``online/adaptive``
+     - Builds timings and optionally advances a horizon schedule; after
+       exploration completes, adapts among measured configurations.
+     - Retains timings and adapter, resets run counts and exploration budgets.
+       If configured, a fresh horizon starts at the active-history offset.
+   * - ``offline/fixed``
      - Fails because no measured configuration is available.
-     - Loads the robust best configuration and replays it without measurement
-       or strategy construction.
+     - Replays the robust best without measurement or strategy construction.
+   * - ``offline/adaptive``
+     - Fails because no measured configuration is available.
+     - Remeasures known configurations and switches without constructing a strategy.
 
-``online_fixed``
+``online/fixed``
 ----------------
 
-``online_fixed`` is the finite tuning mode. With a ``queue`` section, admitted
+``online/fixed`` is the finite tuning mode. With a ``queue`` section, admitted
 candidates remain resident and are interleaved. Every activation runs up to
 ``max_consecutive_runs`` launches, of which the first ``warmup_runs`` are not
 recorded. Without a queue, each accepted strategy recommendation launches and
 records directly; the strategy must recommend a candidate again when its
-fixed-mode record needs more samples. In either form, a candidate retires at
+fixed-selection record needs more samples. In either form, a candidate retires at
 its confidence criterion, Mann-Whitney early-stop criterion, or
 ``runs_per_candidate`` cap.
 
-The tuner finishes after all legal candidates retire, or when either
+For a manual space, exploration finishes after all legal candidates retire, or
+when either
 ``maximum_executions`` or ``maximum_retired_configurations`` is reached. At
 least one of these two limits is required. Once tuning finishes, later
 ``enqueue`` calls launch the best measured configuration without collecting
@@ -106,8 +102,8 @@ production fast path. They may use a timing-disabled queue and bypass timing
 events, execution counters, strategy and scheduler work, history mutation, and
 persistence staging. The option does not change the measured learning phase.
 
-``maximum_executions`` and ``maximum_retired_configurations`` are exclusive to
-this mode. ``runs_per_candidate`` is the maximum number of new retained
+``maximum_executions`` and ``maximum_retired_configurations`` bound online
+exploration under either selection policy. ``runs_per_candidate`` is the maximum number of new retained
 measurements contributed by each candidate in the current run;
 ``minimum_runs_per_candidate`` and ``ci_check_interval`` use that same
 run-local count. Statistical estimates and confidence intervals still use the
@@ -119,19 +115,24 @@ eligible for a new measurement lifecycle, the execution guards start from
 zero, and the strategy can use the retained timings and adapter while proposing
 the new schedule. Only a terminal condition reached in the current run starts
 winner replay.
+For an automatic space, finishing the registered pool can trigger more
+generation. Exploration ends when generation stops and the pool is resolved,
+or a guard fires; see :doc:`automatic_spaces` for its completion reasons.
 
-``online_adaptive``
+``online/adaptive``
 -------------------
 
-``online_adaptive`` is a continuous mode. Both the horizon and queue are
-optional. With a queue, one admission gives a candidate one residency and
+``online/adaptive`` adapts during exploration and can continue adapting after
+exploration ends. Exploration limits, the horizon, and the queue are optional.
+With a queue, one admission gives a candidate one residency and
 therefore one activation burst. The following is a fragment to add to a
-complete schema-3 configuration:
+complete schema-4 configuration:
 
 .. code-block:: yaml
 
    tuning:
-     mode: online_adaptive
+     exploration: online
+     selection: adaptive
      runs_per_candidate: 3
      horizon: 40000
    queue:
@@ -165,9 +166,10 @@ the sigmoid revisit gate or relative-score Boltzmann gate; exploration and
 exploitation are entirely strategy-driven. This is often the clearest choice
 for ``learned_hybrid`` because the learned strategy already ranks candidates
 and adapts from runtime observations. Measurement, rolling-history updates,
-and residual-adapter updates continue for the application's full lifetime,
-while ``completed()`` and ``isTuningComplete()`` remain false. Applications
-must not use either query as an exit condition in this horizon-less form.
+and residual-adapter updates continue while exploration remains active.
+Without a completion limit or search exhaustion, ``completed()`` and
+``isTuningComplete()`` remain false. Use an application-owned loop bound when
+you want adaptation to continue, including after a finite exploration phase.
 
 With ``horizon`` configured, unseen legal candidates are admitted directly. An
 already measured candidate must pass two independent gates after constraints
@@ -191,7 +193,8 @@ have accepted it and before an enabled queue handles active duplicates:
    \frac{\sigma(k(x-\tfrac12))-\sigma(-k/2)}
         {\sigma(k/2)-\sigma(-k/2)}
 
-Here, ``n`` is the launch count in the current tuner process run, ``H`` is
+Here, ``n`` is the online adaptive exploration launch count in the current
+tuner process run, ``H`` is
 ``horizon``, ``h`` is
 ``horizon_offset_with_active_history`` (0.8 by default), and ``k`` is
 ``revisit_admission_steepness`` (16 by default). Active history means that a
@@ -204,10 +207,11 @@ exactly at zero. With active history, the same unmodified sigmoid and
 Boltzmann-temperature functions start at ``h``. The interval from ``h`` to one
 is stretched over all ``H`` new launches. Loading history never advances the
 new run's execution count or prematurely finishes its horizon.
-``TunerInfo::executionCount``, ``adaptiveHorizonExecutionCount``, and
-``adaptiveHorizonProgress`` all describe the current process run. Persisted
-timings remain in each candidate's rolling history, but online run counters
-restart at zero.
+``TunerInfo::executionCount`` describes tracked launches in the current run,
+including later adaptive reuse. ``adaptiveHorizonExecutionCount`` and
+``adaptiveHorizonProgress`` describe the exploration schedule and stop advancing
+once exploration ends. Persisted timings remain in each candidate's rolling
+history, but online run counters restart at zero.
 
 The second gate prefers candidates close to the current best robust runtime:
 
@@ -224,13 +228,10 @@ The second gate prefers candidates close to the current best robust runtime:
 0.05. The current best therefore always passes the score gate, while slower
 configurations become less likely as the temperature cools.
 
-When present, ``horizon`` is the admission and temperature schedule inside the
-tuner. After that many launches in the current tuner process run,
-``completed()``, ``isTuningComplete()``, ``TunerInfo::tuningComplete``, and the
-corresponding ``LaunchObservation`` field become true, but the horizon itself
-does not enter the internal terminal replay state. ``maximum_executions`` and
-``maximum_retired_configurations`` are rejected because they belong exclusively
-to ``online_fixed``.
+When present, ``horizon`` schedules admission and temperature during online
+adaptive exploration. It does not end exploration or make ``completed()`` true.
+An optional ``maximum_executions`` or ``maximum_retired_configurations`` ends
+exploration independently; adaptive selection then uses measured known candidates.
 
 At and after the horizon, normalized revisit admission remains exactly one.
 Relative-score admission continues at ``score_temperature_end`` rather than
@@ -258,35 +259,41 @@ required. If no configuration has ever been accepted or restored, there is no
 safe fallback and the triggering call throws an explicit initialization error
 without marking the adaptive tuner complete.
 
-In ``online_fixed`` only, the same retry limit without a runnable candidate is
+In ``online/fixed`` only, the same retry limit without a runnable candidate is
 a terminal state with
-``TunerCompletionReason::maximumConsecutiveStrategyRetries``. Later fixed-mode
+``TunerCompletionReason::maximumConsecutiveStrategyRetries``. Later fixed-selection
 calls replay its best measured configuration without instrumentation.
 
-``offline``
------------
+Offline exploration and adaptive reuse
+--------------------------------------
 
-``offline`` requires a compatible persistent history containing at least one
-measured configuration. The history does not need a terminal completion reason
-and may have been produced by any strategy or online mode. The tuner selects
-the best robust estimate from that history and launches only that
-configuration. It does not instantiate a strategy, perform warm-ups, measure
-the launch, update the adapter, or update persistence. Because offline mode
-does not begin a new measurement lifecycle, it simply consumes the persisted
-timing window. An offline first run without readable measured history is an
-error.
+Offline exploration requires compatible history containing at least one valid
+measured configuration. History may originate from any strategy or selection
+policy and need not record a completed search. No strategy is constructed and
+no candidate generation takes place.
 
-Offline mode accepts the same ``replay_fast_path`` option. The compatible
-history is still read to identify the winner, but the subsequent kernel launch
-does not construct or enqueue timing events and does not mutate the loaded
-history. Without the option, the established timing-enabled-queue API remains
-the default.
+Fixed selection replays the robust best without adding measurements.
+Adaptive selection reopens the existing rolling histories for direct measurement.
+Ordinary launches use the current robust best; every ``adaptive_probe_interval``
+successful reuse launches, an alternative is probed. Alternatives rotate by
+candidate index and must have usable measurements. Horizon gates and queue
+warm-ups do not apply. Both incumbent and probe measurements update the same
+bounded history and are persisted only when writes are enabled.
+
+The same reuse path handles online adaptive exploration after its budget ends
+or automatic generation stops and the measured catalog is resolved. Search
+queue entries are discarded, run-local probe state starts fresh,
+and registered configurations without measurements cannot enter reuse. A missing
+custom metric rejects its candidate under the normal submission contract. If no
+valid known candidate remains, the next enqueue fails without restarting search.
 
 Strategy and execution boundary
 -------------------------------
 
-Every strategy recommendation is mapped once to the exact nearest discrete
-candidate. Mandatory constraints run first, followed by optional adaptive
+Every normalized strategy recommendation for a manual space is mapped once
+to the nearest discrete candidate. For automatic spaces the strategy returns
+an exact registered candidate ID, with no coordinate remapping. Mandatory
+constraints run first, followed by optional adaptive
 horizon rejection and optional queue handling. The tuner then reports one
 disposition back to the strategy: scheduled, accepted active duplicate,
 restriction rejection, revisit rejection, or score rejection. A candidate
@@ -302,7 +309,9 @@ rejections advance to another candidate within the same phase. Its default
 cycle contains ten predicted-fast activations followed by one
 uncertainty/diversity activation.
 
-Strategies can recommend previously measured points. The tuner applies the
-selected mode's revisit policy to those recommendations. Use ``exhaustive``
+During online exploration, strategies can recommend previously measured points. The tuner applies the
+selection policy's revisit rules to those recommendations. Use ``exhaustive``
 when you need to visit every candidate; the other strategies do not guarantee
-full coverage.
+full coverage. Even exhaustive coverage of an automatic catalog does not prove
+full domain coverage when generation stopped at a budget, plateau, or stall.
+No strategy recommendations occur during known-configuration reuse.

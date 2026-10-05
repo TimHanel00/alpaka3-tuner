@@ -2,8 +2,9 @@
 
 The benchmark runs every example containing an alpakaTune context with the
 four model-free strategies by default. Each example/strategy pair uses an
-isolated `online_fixed` tuner configuration and history. The examples control
-their application loops, with a 50000-launch default for tuning collection.
+isolated tuner configuration with `exploration: online`, `selection: fixed`,
+and its own history. The examples control their application loops, with a
+50000-launch default for tuning collection.
 
 Build the examples, install the Python dependencies, and start a run:
 
@@ -72,7 +73,7 @@ example applications default to at least 50000 launches.
 For a bounded comparison, add `--tune-until-terminal`. The heatEquation2D and
 nBody examples then continue their simulation steps through the 50000-launch
 application minimum and until every tuner completes. The runner selects
-`online_fixed`, so a tuner that completes before the application minimum
+`exploration: online` and `selection: fixed`, so a tuner that completes before the application minimum
 replays its best configuration for the remaining launches. For example, a
 40000-execution limit leaves at least 10000 replay launches:
 
@@ -109,7 +110,8 @@ python3 benchmarks/run.py \
   --no-plot
 ```
 
-This mode runs only the exhaustive strategy, selects ``online_fixed``, removes
+This mode runs only the exhaustive strategy, selects `exploration: online` and
+`selection: fixed`, removes
 the retired-configuration limit, uses a tuner safety guard of one million
 launches by default, disables Mann-Whitney early retirement, and records exactly three
 measured launches after one warm-up for each legal
@@ -125,11 +127,20 @@ context completes; their default command-line behavior is unchanged. The
 option is also available directly on those two executables for collector
 workflows.
 
-A pair is marked completed only if every persisted context reports
-`all_configurations` and the retired plus restriction-rejected candidates equal
-the complete Cartesian space. This verification is stored as
+A pair passes full-coverage validation only if every persisted context reports
+`all_configurations`, domain exhaustion is proven, and the distinct measured
+plus rejected candidates account for the entire registered space. For an
+automatic space, finishing its generated pool at `candidate_budget`, `plateau`,
+or `generation_stalled` does not prove full domain coverage. `run.json` reports
+`registered_pool_coverage`, `declared_combination_count`, and the exhaustion
+status separately. Full-coverage verification is stored as
 `full_coverage_verified` in `run.json`, making the same runner suitable for a
 local shell or a scheduler job.
+
+The runner generates schema-4 YAML using the two policy fields. Exploration
+completion with adaptive selection would still allow measurements and winner
+changes; the runner requires fixed selection when deciding that all contexts
+have entered terminal replay.
 
 The runner has no timeout. Failures are recorded and the remaining
 pairs continue. Resume an interrupted result directory without repeating
