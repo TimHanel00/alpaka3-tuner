@@ -18,7 +18,8 @@ struct Work {
 };
 auto fixedConfig() {
   auto config = alpakaTune::TunerConfig{};
-  config.mode = alpakaTune::TuningMode::onlineFixed;
+  config.exploration = alpakaTune::ExplorationPolicy::online;
+  config.selection = alpakaTune::SelectionPolicy::fixed;
   config.strategy = alpakaTune::StrategyKind::exhaustive;
   config.queue.reset();
   config.maximumExecutions = 20u;
