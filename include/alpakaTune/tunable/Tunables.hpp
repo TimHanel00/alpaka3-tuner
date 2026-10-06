@@ -22,6 +22,22 @@
 
 namespace alpakaTune {
 
+namespace mdPolicy {
+/** Tune vector components independently (the default). */
+struct Independent {};
+/** Tune only complete vectors from the supplied candidate list. */
+struct Listed {};
+inline constexpr Independent independent{};
+inline constexpr Listed listed{};
+} // namespace mdPolicy
+
+namespace concepts {
+template <typename T>
+concept MdPolicy =
+    std::same_as<std::remove_cvref_t<T>, mdPolicy::Independent> ||
+    std::same_as<std::remove_cvref_t<T>, mdPolicy::Listed>;
+} // namespace concepts
+
 /** A structural string used as a C++20 non-type template parameter. */
 template <std::size_t Size> struct FixedString {
   char value[Size];
@@ -51,6 +67,14 @@ template <FixedString Name> struct TunableName {
   template <typename Values>
   [[nodiscard]] constexpr auto operator()(Values values) const
       -> Tunable<Name, std::remove_cvref_t<Values>>;
+
+  template <typename Values>
+  [[nodiscard]] constexpr auto operator()(Values values,
+                                          mdPolicy::Independent) const;
+
+  template <typename Values>
+  [[nodiscard]] constexpr auto operator()(Values values,
+                                          mdPolicy::Listed) const;
 };
 
 #define ALPAKA_TUNE_TUNABLE(text)                                              \
@@ -183,6 +207,19 @@ struct MakeCValsRange {
 
 template <typename T> struct IsRVals : std::false_type {};
 template <typename T> struct IsRVals<RVals<T>> : std::true_type {};
+
+/** Adapt an explicit vector list into one categorical tuning dimension. */
+template <typename Values> struct ListedMdCandidates : Values {
+  static constexpr bool listedMdCandidates = true;
+  explicit constexpr ListedMdCandidates(Values values)
+      : Values(std::move(values)) {}
+};
+template <typename Values>
+struct IsRVals<ListedMdCandidates<Values>> : IsRVals<Values> {};
+
+template <typename Values>
+inline constexpr bool isListedMdCandidates =
+    requires { Values::listedMdCandidates; };
 template <typename Domain>
         struct IsRVals<AutoCandidates<Domain>> : std::bool_constant <
                                                  IsRVals<Domain>::value ||
@@ -202,6 +239,8 @@ inline constexpr bool isCVals = IsCVals<std::remove_cvref_t<T>>::value;
 template <typename T> struct IsCTypes : std::false_type {};
 template <typename... Values>
 struct IsCTypes<CTypes<Values...>> : std::true_type {};
+template <typename Values>
+struct IsCTypes<ListedMdCandidates<Values>> : IsCTypes<Values> {};
 template <typename Domain>
 struct IsCTypes<AutoCandidates<Domain>> : IsCTypes<Domain> {};
 template <typename T>
@@ -303,11 +342,24 @@ template <typename T>
 struct CandidateDimensionCount<AutoCandidates<RVals<T>>>
     : RuntimeCandidateDimensionCount<T> {};
 template <typename Values>
+struct CandidateDimensionCount<ListedMdCandidates<Values>>
+    : std::integral_constant<std::size_t, 1u> {};
+template <typename Values>
 inline constexpr bool isAutomaticCandidates =
     requires { Values::automaticCandidates; };
 template <typename Values>
 inline constexpr std::size_t candidateDimensionCount =
     CandidateDimensionCount<std::remove_cvref_t<Values>>::value;
+
+template <typename Values> struct IsMdCandidateList : std::false_type {};
+template <typename T>
+struct IsMdCandidateList<RVals<T>> : std::bool_constant<alpaka::isVector_v<T>> {
+};
+template <typename First, typename... Remaining>
+struct IsMdCandidateList<CTypes<First, Remaining...>>
+    : std::bool_constant<isCompileVector<First> &&
+                         (compatibleCompileVector<First, Remaining>() && ...)> {
+};
 
 template <typename Values, std::size_t Dimension, std::size_t... Candidate>
 consteval auto compileComponents(std::index_sequence<Candidate...>) {
@@ -442,10 +494,36 @@ template <typename Values>
   return {*this, std::move(values)};
 }
 
+template <FixedString Name>
+template <typename Values>
+[[nodiscard]] constexpr auto
+TunableName<Name>::operator()(Values values, mdPolicy::Independent) const {
+  static_assert(detail::IsMdCandidateList<Values>::value,
+                "An mdPolicy requires an explicit RVals vector list or CTypes "
+                "vectors with matching dimensions.");
+  return (*this)(std::move(values));
+}
+
+template <FixedString Name>
+template <typename Values>
+[[nodiscard]] constexpr auto
+TunableName<Name>::operator()(Values values, mdPolicy::Listed) const {
+  static_assert(detail::IsMdCandidateList<Values>::value,
+                "An mdPolicy requires an explicit RVals vector list or CTypes "
+                "vectors with matching dimensions.");
+  return (*this)(detail::ListedMdCandidates<Values>{std::move(values)});
+}
+
 struct Named {
   template <typename Name, typename Values>
   [[nodiscard]] constexpr auto operator()(Name name, Values values) const {
     return name(std::move(values));
+  }
+
+  template <typename Name, typename Values, concepts::MdPolicy Policy>
+  [[nodiscard]] constexpr auto operator()(Name name, Values values,
+                                          Policy policy) const {
+    return name(std::move(values), policy);
   }
 };
 
