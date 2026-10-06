@@ -59,6 +59,7 @@ predicates. This tunes the frame extent and leaves frame count fixed. Add
 ``tuneNumFrames`` for an independent second dimension, or a relation when
 coverage must be preserved.
 
-Multidimensional compile-time vectors are component-wise Cartesian spaces,
-just like runtime vectors. A list containing ``{8,2}`` and ``{16,4}`` compiles
-four reconstructed combinations, unless restricted; see :doc:`launch_tuning`.
+Multidimensional vectors tune components independently by default.
+Pass ``mdPolicy::listed`` when constructing the tunable to compile only the
+listed vectors, or ``mdPolicy::independent`` to make the default explicit.
+See the multidimensional examples in :doc:`launch_tuning`.

@@ -27,6 +27,53 @@ domain whose combinations are generated progressively from feedback, use
 ``markTunable`` and ``Tunable`` are compatibility forms; new code can use the
 marker directly as above.
 
+Multidimensional tunables
+-------------------------
+
+Vector components are independent by default. Make that choice explicit with
+``mdPolicy::independent``, or use ``mdPolicy::listed`` to keep each listed
+vector intact:
+
+.. code-block:: cpp
+
+   using Vec2 = alpaka::Vec<std::size_t, 2u>;
+   inline constexpr auto tile = ALPAKA_TUNE_TUNABLE("tile");
+   auto choices = alpakaTune::RVals{Vec2{8u, 2u}, Vec2{16u, 4u}};
+   auto independent = tile(choices, alpakaTune::mdPolicy::independent);
+   auto listed = tile(choices, alpakaTune::mdPolicy::listed);
+   auto tunables = alpakaTune::TunableBundle{listed};
+
+``independent`` produces four shapes: ``{8,2}``, ``{8,4}``, ``{16,2}``,
+and ``{16,4}``. ``listed`` produces only ``{8,2}`` and ``{16,4}``, with
+no predicate needed. Other tunables still combine with these choices.
+
+The same policies work for compile-time vectors:
+
+.. code-block:: cpp
+
+   using Small = alpaka::CVec<std::size_t, 8u, 2u>;
+   using Large = std::integer_sequence<std::size_t, 16u, 4u>;
+   auto tunables = alpakaTune::TunableBundle{
+       tile(alpakaTune::CTypes<Small, Large>{}, alpakaTune::mdPolicy::listed)};
+
+Only the two listed variants are compiled. ``mdPolicy::independent`` compiles
+all four component combinations. See :doc:`compile_time_tuning` for kernel
+arguments. Policies apply to explicit ``RVals`` or ``CTypes`` vector lists;
+every vector must have the same number of components.
+
+Launch helpers accept the policy as their third argument. For a two-dimensional
+``frame``, use:
+
+.. code-block:: cpp
+
+   auto tunables = alpakaTune::TunableBundle{
+       alpakaTune::tuneFrameExtent(
+           frame, alpakaTune::CTypes<Small, Large>{}, alpakaTune::mdPolicy::listed)};
+
+``tuneNumFrames``, ``tuneNumBlocks``, and ``tuneNumThreads`` accept the same
+policy. ``listed`` limits choices within one vector; use a relation when
+different tunables must satisfy a shared condition such as coverage.
+
 Tune a FrameSpec
 ----------------
 
@@ -125,9 +172,3 @@ Relations are evaluated lazily during admission. ``info().candidateCount``
 counts the original Cartesian space, including combinations later rejected.
 Inspect ``restrictionRejectedCount`` for rejections; use
 :doc:`post_evaluation_validation` when validity depends on the result.
-
-For a vector tunable, each component is an independent dimension. For example,
-``RVals<Vec2>{Vec2{8, 2}, Vec2{16, 4}}`` also allows ``{8,4}`` and ``{16,2}``.
-If only the two listed pairs are legal, add a unary restriction on the rebuilt
-vector. This rule also applies to compile-time vectors in
-:doc:`compile_time_tuning`.

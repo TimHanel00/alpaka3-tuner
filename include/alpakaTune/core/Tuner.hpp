@@ -1675,6 +1675,8 @@ private:
     auto kind = [] {
       if constexpr (detail::isReservedLaunchName<Entry::name>)
         return LearnedDimensionKind::launch;
+      else if constexpr (detail::isListedMdCandidates<Values>)
+        return LearnedDimensionKind::categorical;
       else if constexpr (detail::isRVals<Values>)
         return LearnedDimensionKind::runtime;
       else if constexpr (detail::isCVals<Values>)
@@ -1703,11 +1705,12 @@ private:
         auto indices = std::array<std::size_t, dimensionCount>{};
         indices[offset + component] = candidate;
         auto numeric = std::optional<float>{};
-        static_cast<void>(withCandidateValue<Entry::name>(
-            indices, [&numeric, component](auto const &value) {
-              numeric = learnedNumericValue(value, component);
-              return true;
-            }));
+        if constexpr (!detail::isListedMdCandidates<Values>)
+          static_cast<void>(withCandidateValue<Entry::name>(
+              indices, [&numeric, component](auto const &value) {
+                numeric = learnedNumericValue(value, component);
+                return true;
+              }));
         if (!numeric) {
           dimension.concreteValues.clear();
           break;
@@ -1787,7 +1790,8 @@ private:
   template <typename Entry> void appendEntryDimensions(Entry const &entry) {
     using Values = typename Entry::values_type;
     if constexpr (detail::isRVals<Values>) {
-      if constexpr (alpaka::isVector_v<typename Values::value_type>) {
+      if constexpr (alpaka::isVector_v<typename Values::value_type> &&
+                    !detail::isListedMdCandidates<Values>) {
         appendRuntimeVectorDimensions(
             entry, std::make_index_sequence<
                        detail::candidateDimensionCount<Values>>{});
@@ -1883,7 +1887,8 @@ private:
     auto const &entry = std::get<entryIndex>(m_tunables.entries());
     using Values = typename Entry::values_type;
     if constexpr (detail::isRVals<Values>) {
-      if constexpr (alpaka::isVector_v<typename Values::value_type>) {
+      if constexpr (alpaka::isVector_v<typename Values::value_type> &&
+                    !detail::isListedMdCandidates<Values>) {
         using Vector = typename Values::value_type;
         auto const value = Vector{[&](auto dimension) {
           return runtimeUniqueComponent(entry, dimension,
@@ -2988,7 +2993,8 @@ private:
     auto const &entry = std::get<entryIndex>(m_tunables.entries());
     using Values = typename Entry::values_type;
     if constexpr (detail::isRVals<Values>) {
-      if constexpr (alpaka::isVector_v<typename Values::value_type>) {
+      if constexpr (alpaka::isVector_v<typename Values::value_type> &&
+                    !detail::isListedMdCandidates<Values>) {
         using Vector = typename Values::value_type;
         return Vector{[&](auto dimension) {
           return runtimeUniqueComponent(entry, dimension,
@@ -3000,7 +3006,7 @@ private:
     } else {
       using Selected =
           typename detail::FindSelectedCompile<Name, CompileValues...>::type;
-      return Selected{};
+      return detail::launchValue<Selected>();
     }
   }
 
@@ -3376,6 +3382,8 @@ private:
     } else {
       appendCValFingerprint<Values>(identity);
     }
+    if constexpr (detail::isListedMdCandidates<Values>)
+      identity << ":md-policy=listed";
     if constexpr (detail::isAutomaticCandidates<Values>)
       identity << ":auto:" << entry.values.logarithmic() << ':'
                << entry.values.categorical() << ':' << entry.values.alignment()

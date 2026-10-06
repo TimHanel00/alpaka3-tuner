@@ -142,10 +142,24 @@ tuneFrameExtent(alpaka::onHost::concepts::FrameSpec auto const &, auto values) {
   return frameExtent(std::move(values));
 }
 
+/** Select how an explicit multidimensional frame-extent list is combined. */
+[[nodiscard]] auto
+tuneFrameExtent(alpaka::onHost::concepts::FrameSpec auto const &, auto values,
+                concepts::MdPolicy auto policy) {
+  return frameExtent(std::move(values), policy);
+}
+
 /** One independent FrameSpec frame-count tuning entry. */
 [[nodiscard]] auto
 tuneNumFrames(alpaka::onHost::concepts::FrameSpec auto const &, auto values) {
   return numFrames(std::move(values));
+}
+
+/** Select how an explicit multidimensional frame-count list is combined. */
+[[nodiscard]] auto
+tuneNumFrames(alpaka::onHost::concepts::FrameSpec auto const &, auto values,
+              concepts::MdPolicy auto policy) {
+  return numFrames(std::move(values), policy);
 }
 
 /** One independent ThreadSpec block-count tuning entry. */
@@ -154,10 +168,24 @@ tuneNumBlocks(alpaka::onHost::concepts::ThreadSpec auto const &, auto values) {
   return numBlocks(std::move(values));
 }
 
+/** Select how an explicit multidimensional block-count list is combined. */
+[[nodiscard]] auto
+tuneNumBlocks(alpaka::onHost::concepts::ThreadSpec auto const &, auto values,
+              concepts::MdPolicy auto policy) {
+  return numBlocks(std::move(values), policy);
+}
+
 /** One independent ThreadSpec thread-count tuning entry. */
 [[nodiscard]] auto
 tuneNumThreads(alpaka::onHost::concepts::ThreadSpec auto const &, auto values) {
   return numThreads(std::move(values));
+}
+
+/** Select how an explicit multidimensional thread-count list is combined. */
+[[nodiscard]] auto
+tuneNumThreads(alpaka::onHost::concepts::ThreadSpec auto const &, auto values,
+               concepts::MdPolicy auto policy) {
+  return numThreads(std::move(values), policy);
 }
 
 /** Keep the logical coverage of correlated FrameSpec candidates unchanged. */

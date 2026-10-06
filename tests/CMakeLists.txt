@@ -215,6 +215,11 @@ target_link_libraries(alpakaTune_managed_space_tests PRIVATE alpakaTune::alpakaT
 alpaka_finalize(alpakaTune_managed_space_tests)
 add_test(NAME alpakaTune_managed_space_tests COMMAND alpakaTune_managed_space_tests)
 
+add_executable(alpakaTune_md_tunable_tests md_tunables.cpp)
+target_link_libraries(alpakaTune_md_tunable_tests PRIVATE alpakaTune::alpakaTune Catch2::Catch2WithMain)
+alpaka_finalize(alpakaTune_md_tunable_tests)
+add_test(NAME alpakaTune_md_tunable_tests COMMAND alpakaTune_md_tunable_tests)
+
 add_executable(alpakaTune_execution_runtime_summary_tests execution_runtime_summary.cpp)
 target_link_libraries(alpakaTune_execution_runtime_summary_tests PRIVATE alpakaTune::alpakaTune Catch2::Catch2WithMain)
 alpaka_finalize(alpakaTune_execution_runtime_summary_tests)
