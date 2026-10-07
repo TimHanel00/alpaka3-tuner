@@ -9,6 +9,7 @@ include(CMakePackageConfigHelpers)
 
 option(alpakaTune_BUILD_TESTING "Build alpakaTune tests" OFF)
 option(alpakaTune_BUILD_EXAMPLES "Build alpakaTune examples" OFF)
+option(alpakaTune_BUILD_BENCHMARKS "Enable alpakaTune benchmarks" OFF)
 option(alpakaTune_HEADER_CHECKS "Build public-header self-containment checks" OFF)
 option(alpakaTune_ENABLE_PERSISTENCE "Enable JSON persistent histories" ON)
 set(alpakaTune_BUNDLED_MODEL
@@ -151,4 +152,8 @@ endif()
 
 if(alpakaTune_BUILD_EXAMPLES)
     add_subdirectory(example)
+endif()
+
+if(alpakaTune_BUILD_BENCHMARKS)
+    add_subdirectory(benchmarks)
 endif()
