@@ -51,6 +51,55 @@ The figures are also available as PNG and PDF. Their numeric data are in
 precision, and compiler conditions; small grids remain dominated by launch
 and boundary overhead.
 
+## Hierarchical GPU roofline
+
+The same saved Nsight Compute reports contain the L1, L2, and DRAM counters.
+The hierarchical plot uses the installed
+`SpeedOfLight_HierarchicalDoubleRooflineChart` definitions for `sm_80`:
+L1 global/local writeback-active cycles multiplied by 128 bytes, L2-to-crossbar
+active cycles multiplied by 32 bytes, and total DRAM byte rate. These are
+counter-derived traffic proxies for the selected paths. L1 excludes shared
+memory; L2 counts return traffic toward the SMs, whereas DRAM includes reads
+and writes. Their byte totals therefore describe different traffic scopes.
+
+Each level has its own arithmetic intensity and default-to-winner arrow.
+Solid and dashed roofs use the default and winner's observed clock rates.
+The left panel holds useful work fixed at nine FP64 FLOPs per cell. The right
+panel follows Nsight Compute's executed-operation convention:
+DADD + DMUL + twice DFMA. Hardware compute utilization should be read from
+that executed-work panel. A useful-work point below the compute roof can also
+reflect extra arithmetic executed by the implementation.
+
+![Hierarchical default-to-winner roofline on NVIDIA A30](figures/a30/hierarchical-roofline.svg)
+
+| Counter path | Default GB/s | Winner GB/s | Default % of path roof | Winner % of path roof |
+|---|---:|---:|---:|---:|
+| L1 global/local writeback | 784 | 1583 | 9.7% | 21.4% |
+| L2 return toward SMs | 373 | 557 | 11.2% | 18.3% |
+| DRAM reads and writes | 532 | 788 | 57.0% | 84.5% |
+
+DRAM is the closest of these measured bandwidth paths to its roof. L1 and L2
+have substantially more bandwidth headroom. This supports DRAM bandwidth as
+a major constraint for the winner at this size, but does not prove it is the
+only bottleneck or explain every source of the speedup.
+
+The winner's L1 traffic proxy increases from 1.585 to 2.161 GB per launch,
+consistent with replacing shared-memory staging with global loads and register
+reuse. L2 return traffic stays near 0.75–0.76 GB, and DRAM traffic near 1.075 GB.
+The useful rate rises from 299 to 442 GFLOP/s, while the executed rate falls
+from 1494 to 885 GFLOP/s: reducing repeated coefficient arithmetic is part of
+the change. Both kernels use 32 registers per thread, and achieved occupancy
+is similar (93.7% versus 91.3%). These measurements do not isolate a causal
+contribution from instruction issue, shared-memory operations, or stalls.
+
+The [numeric data](figures/a30/hierarchical-roofline.csv) include all three
+launches per implementation, traffic rates, path ceilings, both operation
+counts, and occupancy. PNG and PDF copies accompany the SVG. See the
+[NVIDIA roofline guide](https://docs.nvidia.com/nsight-compute/ProfilingGuide/index.html#roofline-charts)
+for the hierarchical interpretation. The CPU roofline below remains modeled;
+CPU cache and DRAM counters were not collected, so a measured CPU hierarchical
+roofline cannot be inferred from these timings.
+
 ## Measured AMD EPYC 9654 comparison
 
 The CPU winners were rebuilt and independently measured on 2026-10-08 using

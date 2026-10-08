@@ -29,5 +29,18 @@
   "roofline_cache_control": "none",
   "roofline_clock_control": "none",
   "roofline_work": "9 useful FP64 stencil FLOPs per cell",
-  "roofline_intensity": "useful FLOP/s divided by measured DRAM byte/s"
+  "roofline_intensity": "useful FLOP/s divided by measured DRAM byte/s",
+  "hierarchical_roofline": {
+    "source": "same saved profiler launches as DRAM-only plot",
+    "section": "SpeedOfLight_HierarchicalDoubleRooflineChart",
+    "l1_traffic": "derived__l1tex__lsu_writeback_bytes_mem_lg.sum.per_second",
+    "l2_traffic": "derived__lts__lts2xbar_bytes.sum.per_second",
+    "dram_traffic": "dram__bytes.sum.per_second",
+    "roof_formula": "sum.peak_sustained multiplied by corresponding unit cycles_elapsed.avg.per_second",
+    "work_panels": [
+      "9 useful FP64 FLOPs per cell",
+      "executed DADD + DMUL + 2 * DFMA"
+    ],
+    "shared_memory_traffic_included": false
+  }
 }
