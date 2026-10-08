@@ -4,6 +4,10 @@ The [C++ GEMM optimization benchmark](matmul/README.md) compares a default
 Alpaka kernel, its tuned specialization, and vendor GEMM through alpakaVendor.
 Enable C++ benchmarks with `alpakaTune_BUILD_BENCHMARKS=ON`.
 
+The [heat-equation stencil benchmark](heatEquation/README.md) compares the
+original alpaka3 FP64 stencil with compiled tile and register specializations,
+then rebenchmarks inserted winners without tuning overhead.
+
 ## Tuning strategy benchmark
 
 The benchmark runs every example containing an alpakaTune context with the

@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-08",
+  "device": "NVIDIA A30",
+  "architecture": "sm_80",
+  "precision": "fp64",
+  "backend": "Cuda",
+  "executor": "alpaka::exec::GpuCuda",
+  "upstream_alpaka3_revision": "b7d339d07056a9a2a6c4051cc3927157bc5f0d51",
+  "base_tuner_revision": "70d2fe79f282f5821dceb9f647a3c57d86fd8097",
+  "source_identity": "70d2fe79-dirty-9d2dfc85",
+  "source_sha256": {
+    "main.cpp": "9d2dfc85d51dae8a5a9211d1c2c2952d9d8338e4785a71f82a2ff81fd37b3465",
+    "StencilVariants.hpp": "8319e42d4ff635a1edb216b1b17a20c3facd63d5c116ab6dd039cca1b1ec9898",
+    "CMakeLists.txt": "fb5f0f0682ab1b20343e97277a66b2d1fc7c68c91aec3373d4bc84dcfffeb471",
+    "SelectedWinners.hpp": "e55372a0b1726d778b363cbb6392046000dea82b367e6c828b256471acd44ca6"
+  },
+  "build_type": "Release",
+  "cuda": "12.9.1",
+  "driver": "610.57.04",
+  "gcc": "14.3.0",
+  "fast_math": false,
+  "ftz": false,
+  "repetitions": 31,
+  "steps": 64,
+  "roofline_profiler": "Nsight Compute 2025.2.1",
+  "roofline_launches": 3,
+  "roofline_skip": 8,
+  "roofline_replay": "application",
+  "roofline_cache_control": "none",
+  "roofline_clock_control": "none",
+  "roofline_work": "9 useful FP64 stencil FLOPs per cell",
+  "roofline_intensity": "useful FLOP/s divided by measured DRAM byte/s"
+}
