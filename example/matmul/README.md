@@ -152,8 +152,8 @@ For 4096³, profiled throughput is 4.70/5.84/6.43 TFLOP/s for default/tuned/cuBL
 All three hierarchy points lie beyond their bandwidth/compute intersections;
 this does not identify the cause of the remaining performance gap.
 
-Regenerate all three SVGs from `example/matmul/results`:
+Regenerate the SVGs for both benchmarks from the repository root:
 
 ```sh
-gnuplot plots.gnuplot
+gnuplot benchmarks/plots.gnuplot
 ```

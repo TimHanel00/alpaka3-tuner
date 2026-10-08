@@ -1,8 +1,9 @@
 # Copyright 2026 Tim Hanel
 # SPDX-License-Identifier: MPL-2.0
 
+FetchContent_GetProperties(alpaka3 SOURCE_DIR alpakaTune_HEAT_DEFAULT_UPSTREAM_SOURCE)
 set(alpakaTune_HEAT_UPSTREAM_SOURCE
-    "${alpaka3_SOURCE_DIR}"
+    "${alpakaTune_HEAT_DEFAULT_UPSTREAM_SOURCE}"
     CACHE PATH
     "alpaka3 source providing the original heat-equation baseline"
 )
