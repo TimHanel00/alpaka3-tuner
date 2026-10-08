@@ -39,7 +39,7 @@
       <feComposite in='SourceGraphic' in2='grey' operator='atop'/>
     </filter>
 </defs>
-<g fill="none" color="white" stroke="black" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
+<g fill="none" color="white" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
@@ -191,10 +191,7 @@
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
     <path stroke='black'  d='M160.00,100.01 L160.00,800.00 L1231.99,800.00 M1231.99,100.01 M160.00,100.01  '/>  <g transform="translate(160.00,963.90)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="12.00"  text-anchor="start">
-        <text><tspan font-family="DejaVu Sans" >Seven shapes, one launch per implementation; kernel replay, cache flushing and base clocks. Separate from runtime measurements.</tspan></text>
-    </g>
-    <g transform="translate(160.00,923.90)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="12.00"  text-anchor="start">
-        <text xml:space="preserve"><tspan font-family="DejaVu Sans"  xml:space="preserve">DRAM point labels: 1=512³  2=1024³  3=2048³  4=4096³  5=256×2048×1024  6=2048×256×1024  7=1023×1009×997</tspan></text>
+        <text><tspan font-family="DejaVu Sans" >Three stencil launches per implementation; application replay, cache/clock control disabled. Boundary kernel excluded.</tspan></text>
     </g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
@@ -203,227 +200,103 @@
 <g fill="none" color="white" stroke="black" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <path stroke='rgb(119, 119, 119)'  d='M344.04,800.00 L344.08,799.94 L354.91,778.73 L365.74,757.51 L376.56,736.30 L387.39,715.09 L398.22,693.88 L409.05,672.67
-        L419.88,651.46 L430.70,630.24 L441.53,609.03 L452.36,587.82 L463.19,566.61 L474.02,545.40 L484.85,524.18 L495.67,502.97
-        L506.50,481.76 L517.33,460.55 L528.16,439.34 L538.99,418.13 L549.81,396.91 L560.64,375.70 L571.47,354.49 L582.30,333.28
-        L593.13,312.07 L603.96,290.85 L614.78,269.64 L625.61,248.43 L636.44,227.22 L647.27,206.01 L658.10,184.80 L668.92,163.58
-        L679.75,161.68 L690.58,161.68 L701.41,161.68 L712.24,161.68 L723.07,161.68 L733.89,161.68 L744.72,161.68 L755.55,161.68
-        L766.38,161.68 L777.21,161.68 L788.03,161.68 L798.86,161.68 L809.69,161.68 L820.52,161.68 L831.35,161.68 L842.18,161.68
-        L853.00,161.68 L863.83,161.68 L874.66,161.68 L885.49,161.68 L896.32,161.68 L907.14,161.68 L917.97,161.68 L928.80,161.68
-        L939.63,161.68 L950.46,161.68 L961.29,161.68 L972.11,161.68 L982.94,161.68 L993.77,161.68 L1004.60,161.68 L1015.43,161.68
-        L1026.25,161.68 L1037.08,161.68 L1047.91,161.68 L1058.74,161.68 L1069.57,161.68 L1080.40,161.68 L1091.22,161.68 L1102.05,161.68
-        L1112.88,161.68 L1123.71,161.68 L1134.54,161.68 L1145.36,161.68 L1156.19,161.68 L1167.02,161.68 L1177.85,161.68 L1188.68,161.68
-        L1199.51,161.68 L1210.33,161.68 L1221.16,161.68 L1231.99,161.68  '/></g>
+    <path stroke='rgb(119, 119, 119)'  d='M344.03,800.00 L344.08,799.92 L354.91,778.71 L365.74,757.50 L376.56,736.28 L387.39,715.07 L398.22,693.86 L409.05,672.65
+        L419.88,651.44 L430.70,630.23 L441.53,609.01 L452.36,587.80 L463.19,566.59 L474.02,545.38 L484.85,524.17 L495.67,502.95
+        L506.50,481.74 L517.33,460.53 L528.16,439.32 L538.99,418.11 L549.81,396.90 L560.64,375.68 L571.47,354.47 L582.30,333.26
+        L593.13,312.05 L603.96,290.84 L614.78,269.62 L625.61,248.41 L636.44,244.70 L647.27,244.70 L658.10,244.70 L668.92,244.70
+        L679.75,244.70 L690.58,244.70 L701.41,244.70 L712.24,244.70 L723.07,244.70 L733.89,244.70 L744.72,244.70 L755.55,244.70
+        L766.38,244.70 L777.21,244.70 L788.03,244.70 L798.86,244.70 L809.69,244.70 L820.52,244.70 L831.35,244.70 L842.18,244.70
+        L853.00,244.70 L863.83,244.70 L874.66,244.70 L885.49,244.70 L896.32,244.70 L907.14,244.70 L917.97,244.70 L928.80,244.70
+        L939.63,244.70 L950.46,244.70 L961.29,244.70 L972.11,244.70 L982.94,244.70 L993.77,244.70 L1004.60,244.70 L1015.43,244.70
+        L1026.25,244.70 L1037.08,244.70 L1047.91,244.70 L1058.74,244.70 L1069.57,244.70 L1080.40,244.70 L1091.22,244.70 L1102.05,244.70
+        L1112.88,244.70 L1123.71,244.70 L1134.54,244.70 L1145.36,244.70 L1156.19,244.70 L1167.02,244.70 L1177.85,244.70 L1188.68,244.70
+        L1199.51,244.70 L1210.33,244.70 L1221.16,244.70 L1231.99,244.70  '/></g>
     </g>
     <g id="gnuplot_plot_2" ><title>L2 ceiling</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <path stroke='rgb(119, 119, 119)' stroke-dasharray=' 5,8'  d='M261.06,800.00 L268.28,785.87 L279.11,764.65 L289.94,743.44 L300.77,722.23 L311.59,701.02 L322.42,679.81 L333.25,658.59
-        L344.08,637.38 L354.91,616.17 L365.74,594.96 L376.56,573.75 L387.39,552.54 L398.22,531.32 L409.05,510.11 L419.88,488.90
-        L430.70,467.69 L441.53,446.48 L452.36,425.26 L463.19,404.05 L474.02,382.84 L484.85,361.63 L495.67,340.42 L506.50,319.21
-        L517.33,297.99 L528.16,276.78 L538.99,255.57 L549.81,234.36 L560.64,213.15 L571.47,191.93 L582.30,170.72 L593.13,161.68
-        L603.96,161.68 L614.78,161.68 L625.61,161.68 L636.44,161.68 L647.27,161.68 L658.10,161.68 L668.92,161.68 L679.75,161.68
-        L690.58,161.68 L701.41,161.68 L712.24,161.68 L723.07,161.68 L733.89,161.68 L744.72,161.68 L755.55,161.68 L766.38,161.68
-        L777.21,161.68 L788.03,161.68 L798.86,161.68 L809.69,161.68 L820.52,161.68 L831.35,161.68 L842.18,161.68 L853.00,161.68
-        L863.83,161.68 L874.66,161.68 L885.49,161.68 L896.32,161.68 L907.14,161.68 L917.97,161.68 L928.80,161.68 L939.63,161.68
-        L950.46,161.68 L961.29,161.68 L972.11,161.68 L982.94,161.68 L993.77,161.68 L1004.60,161.68 L1015.43,161.68 L1026.25,161.68
-        L1037.08,161.68 L1047.91,161.68 L1058.74,161.68 L1069.57,161.68 L1080.40,161.68 L1091.22,161.68 L1102.05,161.68 L1112.88,161.68
-        L1123.71,161.68 L1134.54,161.68 L1145.36,161.68 L1156.19,161.68 L1167.02,161.68 L1177.85,161.68 L1188.68,161.68 L1199.51,161.68
-        L1210.33,161.68 L1221.16,161.68 L1231.99,161.68  '/></g>
+    <path stroke='rgb(119, 119, 119)' stroke-dasharray=' 5,8'  d='M248.96,800.00 L257.45,783.36 L268.28,762.15 L279.11,740.94 L289.94,719.72 L300.77,698.51 L311.59,677.30 L322.42,656.09
+        L333.25,634.88 L344.08,613.66 L354.91,592.45 L365.74,571.24 L376.56,550.03 L387.39,528.82 L398.22,507.61 L409.05,486.39
+        L419.88,465.18 L430.70,443.97 L441.53,422.76 L452.36,401.55 L463.19,380.33 L474.02,359.12 L484.85,337.91 L495.67,316.70
+        L506.50,295.49 L517.33,274.28 L528.16,253.06 L538.99,244.70 L549.81,244.70 L560.64,244.70 L571.47,244.70 L582.30,244.70
+        L593.13,244.70 L603.96,244.70 L614.78,244.70 L625.61,244.70 L636.44,244.70 L647.27,244.70 L658.10,244.70 L668.92,244.70
+        L679.75,244.70 L690.58,244.70 L701.41,244.70 L712.24,244.70 L723.07,244.70 L733.89,244.70 L744.72,244.70 L755.55,244.70
+        L766.38,244.70 L777.21,244.70 L788.03,244.70 L798.86,244.70 L809.69,244.70 L820.52,244.70 L831.35,244.70 L842.18,244.70
+        L853.00,244.70 L863.83,244.70 L874.66,244.70 L885.49,244.70 L896.32,244.70 L907.14,244.70 L917.97,244.70 L928.80,244.70
+        L939.63,244.70 L950.46,244.70 L961.29,244.70 L972.11,244.70 L982.94,244.70 L993.77,244.70 L1004.60,244.70 L1015.43,244.70
+        L1026.25,244.70 L1037.08,244.70 L1047.91,244.70 L1058.74,244.70 L1069.57,244.70 L1080.40,244.70 L1091.22,244.70 L1102.05,244.70
+        L1112.88,244.70 L1123.71,244.70 L1134.54,244.70 L1145.36,244.70 L1156.19,244.70 L1167.02,244.70 L1177.85,244.70 L1188.68,244.70
+        L1199.51,244.70 L1210.33,244.70 L1221.16,244.70 L1231.99,244.70  '/></g>
     </g>
     <g id="gnuplot_plot_3" ><title>L1 ceiling</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <path stroke='rgb(119, 119, 119)' stroke-dasharray=' 2,4'  d='M191.47,800.00 L192.48,798.03 L203.31,776.82 L214.14,755.61 L224.97,734.39 L235.80,713.18 L246.63,691.97 L257.45,670.76
-        L268.28,649.55 L279.11,628.34 L289.94,607.12 L300.77,585.91 L311.59,564.70 L322.42,543.49 L333.25,522.28 L344.08,501.06
-        L354.91,479.85 L365.74,458.64 L376.56,437.43 L387.39,416.22 L398.22,395.01 L409.05,373.79 L419.88,352.58 L430.70,331.37
-        L441.53,310.16 L452.36,288.95 L463.19,267.73 L474.02,246.52 L484.85,225.31 L495.67,204.10 L506.50,182.89 L517.33,161.68
-        L528.16,161.68 L538.99,161.68 L549.81,161.68 L560.64,161.68 L571.47,161.68 L582.30,161.68 L593.13,161.68 L603.96,161.68
-        L614.78,161.68 L625.61,161.68 L636.44,161.68 L647.27,161.68 L658.10,161.68 L668.92,161.68 L679.75,161.68 L690.58,161.68
-        L701.41,161.68 L712.24,161.68 L723.07,161.68 L733.89,161.68 L744.72,161.68 L755.55,161.68 L766.38,161.68 L777.21,161.68
-        L788.03,161.68 L798.86,161.68 L809.69,161.68 L820.52,161.68 L831.35,161.68 L842.18,161.68 L853.00,161.68 L863.83,161.68
-        L874.66,161.68 L885.49,161.68 L896.32,161.68 L907.14,161.68 L917.97,161.68 L928.80,161.68 L939.63,161.68 L950.46,161.68
-        L961.29,161.68 L972.11,161.68 L982.94,161.68 L993.77,161.68 L1004.60,161.68 L1015.43,161.68 L1026.25,161.68 L1037.08,161.68
-        L1047.91,161.68 L1058.74,161.68 L1069.57,161.68 L1080.40,161.68 L1091.22,161.68 L1102.05,161.68 L1112.88,161.68 L1123.71,161.68
-        L1134.54,161.68 L1145.36,161.68 L1156.19,161.68 L1167.02,161.68 L1177.85,161.68 L1188.68,161.68 L1199.51,161.68 L1210.33,161.68
-        L1221.16,161.68 L1231.99,161.68  '/></g>
+    <path stroke='rgb(119, 119, 119)' stroke-dasharray=' 2,4'  d='M180.08,800.00 L181.66,796.91 L192.48,775.70 L203.31,754.49 L214.14,733.27 L224.97,712.06 L235.80,690.85 L246.63,669.64
+        L257.45,648.43 L268.28,627.21 L279.11,606.00 L289.94,584.79 L300.77,563.58 L311.59,542.37 L322.42,521.16 L333.25,499.94
+        L344.08,478.73 L354.91,457.52 L365.74,436.31 L376.56,415.10 L387.39,393.88 L398.22,372.67 L409.05,351.46 L419.88,330.25
+        L430.70,309.04 L441.53,287.83 L452.36,266.61 L463.19,245.40 L474.02,244.70 L484.85,244.70 L495.67,244.70 L506.50,244.70
+        L517.33,244.70 L528.16,244.70 L538.99,244.70 L549.81,244.70 L560.64,244.70 L571.47,244.70 L582.30,244.70 L593.13,244.70
+        L603.96,244.70 L614.78,244.70 L625.61,244.70 L636.44,244.70 L647.27,244.70 L658.10,244.70 L668.92,244.70 L679.75,244.70
+        L690.58,244.70 L701.41,244.70 L712.24,244.70 L723.07,244.70 L733.89,244.70 L744.72,244.70 L755.55,244.70 L766.38,244.70
+        L777.21,244.70 L788.03,244.70 L798.86,244.70 L809.69,244.70 L820.52,244.70 L831.35,244.70 L842.18,244.70 L853.00,244.70
+        L863.83,244.70 L874.66,244.70 L885.49,244.70 L896.32,244.70 L907.14,244.70 L917.97,244.70 L928.80,244.70 L939.63,244.70
+        L950.46,244.70 L961.29,244.70 L972.11,244.70 L982.94,244.70 L993.77,244.70 L1004.60,244.70 L1015.43,244.70 L1026.25,244.70
+        L1037.08,244.70 L1047.91,244.70 L1058.74,244.70 L1069.57,244.70 L1080.40,244.70 L1091.22,244.70 L1102.05,244.70 L1112.88,244.70
+        L1123.71,244.70 L1134.54,244.70 L1145.36,244.70 L1156.19,244.70 L1167.02,244.70 L1177.85,244.70 L1188.68,244.70 L1199.51,244.70
+        L1210.33,244.70 L1221.16,244.70 L1231.99,244.70  '/></g>
     </g>
     <g id="gnuplot_plot_4" ><title>Default / DRAM</title>
 <g fill="none" color="white" stroke="rgb(119, 119, 119)" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <use xlink:href='#gpPt6' transform='translate(893.30,348.89) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt6' transform='translate(940.56,248.51) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt6' transform='translate(859.32,223.19) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt6' transform='translate(785.96,214.75) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt6' transform='translate(881.01,287.09) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt6' transform='translate(878.58,293.94) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt6' transform='translate(940.98,242.29) scale(9.00)' color='rgb(217, 119,   6)'/>
+    <use xlink:href='#gpPt6' transform='translate(597.39,390.19) scale(9.00)' color='rgb(217, 119,   6)'/>
+    <use xlink:href='#gpPt6' transform='translate(597.45,388.50) scale(9.00)' color='rgb(217, 119,   6)'/>
+    <use xlink:href='#gpPt6' transform='translate(597.44,389.01) scale(9.00)' color='rgb(217, 119,   6)'/>
 </g>
     </g>
     <g id="gnuplot_plot_5" ><title>Default / L2</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <use xlink:href='#gpPt4' transform='translate(736.61,348.89) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt4' transform='translate(742.20,248.51) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt4' transform='translate(734.81,223.19) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt4' transform='translate(732.78,214.75) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt4' transform='translate(734.22,287.09) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt4' transform='translate(734.86,293.94) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt4' transform='translate(737.18,242.29) scale(9.00)' color='rgb(217, 119,   6)'/>
+    <use xlink:href='#gpPt4' transform='translate(625.04,390.19) scale(9.00)' color='rgb(217, 119,   6)'/>
+    <use xlink:href='#gpPt4' transform='translate(625.02,388.50) scale(9.00)' color='rgb(217, 119,   6)'/>
+    <use xlink:href='#gpPt4' transform='translate(625.02,389.01) scale(9.00)' color='rgb(217, 119,   6)'/>
 </g>
     </g>
     <g id="gnuplot_plot_6" ><title>Default / L1</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <use xlink:href='#gpPt7' transform='translate(718.97,348.89) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt7' transform='translate(731.46,248.51) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt7' transform='translate(732.12,223.19) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt7' transform='translate(732.18,214.75) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt7' transform='translate(725.22,287.09) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt7' transform='translate(731.61,293.94) scale(9.00)' color='rgb(217, 119,   6)'/>
-    <use xlink:href='#gpPt7' transform='translate(730.69,242.29) scale(9.00)' color='rgb(217, 119,   6)'/>
+    <use xlink:href='#gpPt7' transform='translate(567.24,390.19) scale(9.00)' color='rgb(217, 119,   6)'/>
+    <use xlink:href='#gpPt7' transform='translate(567.38,388.50) scale(9.00)' color='rgb(217, 119,   6)'/>
+    <use xlink:href='#gpPt7' transform='translate(567.33,389.01) scale(9.00)' color='rgb(217, 119,   6)'/>
 </g>
     </g>
     <g id="gnuplot_plot_7" ><title>Tuned / DRAM</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <use xlink:href='#gpPt6' transform='translate(892.39,283.93) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt6' transform='translate(938.23,217.96) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt6' transform='translate(810.40,194.88) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt6' transform='translate(827.85,181.89) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt6' transform='translate(878.86,231.64) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt6' transform='translate(878.21,231.49) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt6' transform='translate(941.68,239.47) scale(9.00)' color='rgb( 46, 139,  87)'/>
+    <use xlink:href='#gpPt6' transform='translate(526.32,468.59) scale(9.00)' color='rgb( 46, 139,  87)'/>
+    <use xlink:href='#gpPt6' transform='translate(526.37,469.07) scale(9.00)' color='rgb( 46, 139,  87)'/>
+    <use xlink:href='#gpPt6' transform='translate(526.37,468.33) scale(9.00)' color='rgb( 46, 139,  87)'/>
 </g>
     </g>
     <g id="gnuplot_plot_8" ><title>Tuned / L2</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <use xlink:href='#gpPt4' transform='translate(702.54,283.93) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt4' transform='translate(705.66,217.96) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt4' transform='translate(701.79,194.88) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt4' transform='translate(754.77,181.89) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt4' transform='translate(706.36,231.64) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt4' transform='translate(702.39,231.49) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt4' transform='translate(711.34,239.47) scale(9.00)' color='rgb( 46, 139,  87)'/>
+    <use xlink:href='#gpPt4' transform='translate(553.19,468.59) scale(9.00)' color='rgb( 46, 139,  87)'/>
+    <use xlink:href='#gpPt4' transform='translate(553.20,469.07) scale(9.00)' color='rgb( 46, 139,  87)'/>
+    <use xlink:href='#gpPt4' transform='translate(553.18,468.33) scale(9.00)' color='rgb( 46, 139,  87)'/>
 </g>
     </g>
     <g id="gnuplot_plot_9" ><title>Tuned / L1</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <use xlink:href='#gpPt7' transform='translate(700.80,283.93) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt7' transform='translate(700.91,217.96) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt7' transform='translate(700.99,194.88) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt7' transform='translate(754.78,181.89) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt7' transform='translate(700.90,231.64) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt7' transform='translate(1216.52,231.49) scale(9.00)' color='rgb( 46, 139,  87)'/>
-    <use xlink:href='#gpPt7' transform='translate(701.28,239.47) scale(9.00)' color='rgb( 46, 139,  87)'/>
+    <use xlink:href='#gpPt7' transform='translate(472.20,468.59) scale(9.00)' color='rgb( 46, 139,  87)'/>
+    <use xlink:href='#gpPt7' transform='translate(472.19,469.07) scale(9.00)' color='rgb( 46, 139,  87)'/>
+    <use xlink:href='#gpPt7' transform='translate(472.19,468.33) scale(9.00)' color='rgb( 46, 139,  87)'/>
 </g>
     </g>
-    <g id="gnuplot_plot_10" ><title>cuBLAS / DRAM</title>
+    <g id="gnuplot_plot_10"  fill="none"><title>gnuplot_plot_10</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <use xlink:href='#gpPt6' transform='translate(893.75,241.04) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt6' transform='translate(938.03,178.43) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt6' transform='translate(879.99,180.52) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt6' transform='translate(810.00,167.11) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt6' transform='translate(880.11,189.90) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt6' transform='translate(881.78,185.17) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt6' transform='translate(936.80,173.60) scale(9.00)' color='rgb( 52, 101, 164)'/>
 </g>
     </g>
-    <g id="gnuplot_plot_11" ><title>cuBLAS / L2</title>
+    <g id="gnuplot_plot_11"  fill="none"><title>gnuplot_plot_11</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <use xlink:href='#gpPt4' transform='translate(701.81,241.04) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt4' transform='translate(712.41,178.43) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt4' transform='translate(740.83,180.52) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt4' transform='translate(742.77,167.11) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt4' transform='translate(748.64,189.90) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt4' transform='translate(746.80,185.17) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt4' transform='translate(738.11,173.60) scale(9.00)' color='rgb( 52, 101, 164)'/>
-</g>
-    </g>
-    <g id="gnuplot_plot_12" ><title>cuBLAS / L1</title>
-<g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <use xlink:href='#gpPt7' transform='translate(695.96,241.04) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt7' transform='translate(706.66,178.43) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt7' transform='translate(731.99,180.52) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt7' transform='translate(731.70,167.11) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt7' transform='translate(736.42,189.90) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt7' transform='translate(733.87,185.17) scale(9.00)' color='rgb( 52, 101, 164)'/>
-    <use xlink:href='#gpPt7' transform='translate(730.06,173.60) scale(9.00)' color='rgb( 52, 101, 164)'/>
-</g>
-    </g>
-    <g id="gnuplot_plot_13"  fill="none"><title>gnuplot_plot_13</title>
-<g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <g transform="translate(901.14,340.79)" stroke="none" fill="rgb(217,119,6)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >1</tspan></text>
-    </g>
-    <g transform="translate(948.40,240.41)" stroke="none" fill="rgb(217,119,6)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >2</tspan></text>
-    </g>
-    <g transform="translate(867.16,215.09)" stroke="none" fill="rgb(217,119,6)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >3</tspan></text>
-    </g>
-    <g transform="translate(793.80,206.65)" stroke="none" fill="rgb(217,119,6)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >4</tspan></text>
-    </g>
-    <g transform="translate(888.85,278.99)" stroke="none" fill="rgb(217,119,6)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >5</tspan></text>
-    </g>
-    <g transform="translate(886.42,285.84)" stroke="none" fill="rgb(217,119,6)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >6</tspan></text>
-    </g>
-    <g transform="translate(948.82,234.19)" stroke="none" fill="rgb(217,119,6)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >7</tspan></text>
-    </g>
-</g>
-    </g>
-    <g id="gnuplot_plot_14"  fill="none"><title>gnuplot_plot_14</title>
-<g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <g transform="translate(900.23,275.83)" stroke="none" fill="rgb(46,139,87)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >1</tspan></text>
-    </g>
-    <g transform="translate(946.07,209.86)" stroke="none" fill="rgb(46,139,87)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >2</tspan></text>
-    </g>
-    <g transform="translate(818.24,186.78)" stroke="none" fill="rgb(46,139,87)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >3</tspan></text>
-    </g>
-    <g transform="translate(835.69,173.79)" stroke="none" fill="rgb(46,139,87)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >4</tspan></text>
-    </g>
-    <g transform="translate(886.70,223.54)" stroke="none" fill="rgb(46,139,87)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >5</tspan></text>
-    </g>
-    <g transform="translate(886.05,223.39)" stroke="none" fill="rgb(46,139,87)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >6</tspan></text>
-    </g>
-    <g transform="translate(949.52,231.37)" stroke="none" fill="rgb(46,139,87)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >7</tspan></text>
-    </g>
-</g>
-    </g>
-    <g id="gnuplot_plot_15"  fill="none"><title>gnuplot_plot_15</title>
-<g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <g transform="translate(901.59,232.94)" stroke="none" fill="rgb(52,101,164)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >1</tspan></text>
-    </g>
-    <g transform="translate(945.87,170.33)" stroke="none" fill="rgb(52,101,164)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >2</tspan></text>
-    </g>
-    <g transform="translate(887.83,172.42)" stroke="none" fill="rgb(52,101,164)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >3</tspan></text>
-    </g>
-    <g transform="translate(817.84,159.01)" stroke="none" fill="rgb(52,101,164)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >4</tspan></text>
-    </g>
-    <g transform="translate(887.95,181.80)" stroke="none" fill="rgb(52,101,164)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >5</tspan></text>
-    </g>
-    <g transform="translate(889.62,177.07)" stroke="none" fill="rgb(52,101,164)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >6</tspan></text>
-    </g>
-    <g transform="translate(944.64,165.50)" stroke="none" fill="rgb(52,101,164)" font-family="DejaVu Sans" font-size="12.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >7</tspan></text>
-    </g>
 </g>
     </g>
     <g stroke='none' shape-rendering='crispEdges'>
-        <polygon fill = 'white' points = '1263.99,362.01 1471.79,362.01 1471.79,110.01 1263.99,110.01 '/>
+        <polygon fill = 'white' points = '1263.99,299.01 1471.79,299.01 1471.79,110.01 1263.99,110.01 '/>
     </g>
     <g id="gnuplot_plot_1" ><title>DRAM ceiling</title>
 <g fill="none" color="white" stroke="white" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
@@ -516,49 +389,15 @@
     <use xlink:href='#gpPt7' transform='translate(1436.42,288.51) scale(9.00)' color='rgb( 46, 139,  87)'/>
 </g>
     </g>
-    <g id="gnuplot_plot_10" ><title>cuBLAS / DRAM</title>
-<g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <g transform="translate(1401.05,314.06)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="14.00"  text-anchor="end">
-        <text><tspan font-family="DejaVu Sans" >cuBLAS / DRAM</tspan></text>
-    </g>
-</g>
-<g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <use xlink:href='#gpPt6' transform='translate(1436.42,309.51) scale(9.00)' color='rgb( 52, 101, 164)'/>
-</g>
-    </g>
-    <g id="gnuplot_plot_11" ><title>cuBLAS / L2</title>
-<g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <g transform="translate(1401.05,335.06)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="14.00"  text-anchor="end">
-        <text><tspan font-family="DejaVu Sans" >cuBLAS / L2</tspan></text>
-    </g>
-</g>
-<g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <use xlink:href='#gpPt4' transform='translate(1436.42,330.51) scale(9.00)' color='rgb( 52, 101, 164)'/>
-</g>
-    </g>
-    <g id="gnuplot_plot_12" ><title>cuBLAS / L1</title>
-<g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <g transform="translate(1401.05,356.06)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="14.00"  text-anchor="end">
-        <text><tspan font-family="DejaVu Sans" >cuBLAS / L1</tspan></text>
-    </g>
-</g>
-<g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-    <use xlink:href='#gpPt7' transform='translate(1436.42,351.51) scale(9.00)' color='rgb( 52, 101, 164)'/>
-</g>
-    </g>
-    <g id="gnuplot_plot_13"  fill="none"><title>gnuplot_plot_13</title>
+    <g id="gnuplot_plot_10"  fill="none"><title>gnuplot_plot_10</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
     </g>
-    <g id="gnuplot_plot_14"  fill="none"><title>gnuplot_plot_14</title>
+    <g id="gnuplot_plot_11"  fill="none"><title>gnuplot_plot_11</title>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
     </g>
-    <g id="gnuplot_plot_15"  fill="none"><title>gnuplot_plot_15</title>
-<g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
-</g>
-    </g>
-<g fill="none" color="white" stroke="rgb( 52, 101, 164)" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
+<g fill="none" color="white" stroke="rgb( 46, 139,  87)" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="2.00" stroke-linecap="butt" stroke-linejoin="miter">
 </g>
@@ -578,7 +417,7 @@
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">
     <g transform="translate(695.99,62.16)" stroke="none" fill="black" font-family="DejaVu Sans" font-size="22.00"  text-anchor="middle">
-        <text><tspan font-family="DejaVu Sans" >Matmul — NVIDIA A30, FP32 hierarchical rooflines</tspan></text>
+        <text><tspan font-family="DejaVu Sans" >Heat equation — NVIDIA A30, FP64 hierarchical rooflines, 8192²</tspan></text>
     </g>
 </g>
 <g fill="none" color="black" stroke="currentColor" stroke-width="1.00" stroke-linecap="butt" stroke-linejoin="miter">

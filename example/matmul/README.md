@@ -4,7 +4,7 @@ Compute row-major FP32 `C[M,N] = A[M,K] * B[K,N]` using the measured
 precompiled winner for the input shape and device:
 
 ```cpp
-#include "Matmul.hpp"
+#include <example/matmul/Matmul.hpp>
 
 bool const usedWinner = alpakaTune::example::matmul::enqueueMatmul(
     queue, executor, a, b, c);
@@ -155,5 +155,5 @@ this does not identify the cause of the remaining performance gap.
 Regenerate the SVGs for both benchmarks from the repository root:
 
 ```sh
-gnuplot benchmarks/plots.gnuplot
+gnuplot example/plots.gnuplot
 ```

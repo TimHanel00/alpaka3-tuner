@@ -3,8 +3,8 @@
 #pragma once
 
 // The baseline comes directly from the configured alpaka3 source tree.
-#include <StencilKernel.hpp>
 #include <alpaka/alpaka.hpp>
+#include <heatEquation2D/src/StencilKernel.hpp>
 
 #include <array>
 #include <cstdint>

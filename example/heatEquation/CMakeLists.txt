@@ -30,12 +30,9 @@ foreach(mode IN ITEMS search replay)
         set(target alpakaTune_heatEquation_replay)
         set(replay 1)
     endif()
-    add_executable(${target} main.cpp)
+    add_executable(${target} heatEquation.cpp)
     target_link_libraries(${target} PRIVATE alpakaTune::alpakaTune)
-    target_include_directories(
-        ${target}
-        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} "${alpakaTune_HEAT_UPSTREAM_SOURCE}/example/heatEquation2D/src"
-    )
+    target_include_directories(${target} PRIVATE ${PROJECT_SOURCE_DIR} "${alpakaTune_HEAT_UPSTREAM_SOURCE}/example")
     target_compile_definitions(${target} PRIVATE ALPAKA_TUNE_HEAT_REPLAY=${replay})
     target_compile_definitions(${target} PRIVATE ALPAKA_TUNE_HEAT_CPU_CATALOG=$<BOOL:${alpakaTune_HEAT_CPU_CATALOG}>)
     target_compile_definitions(${target} PRIVATE ALPAKA_TUNE_HEAT_WINNERS_HEADER="${alpakaTune_HEAT_WINNERS_HEADER}")
@@ -44,9 +41,20 @@ foreach(mode IN ITEMS search replay)
 endforeach()
 
 if(alpakaTune_BUILD_TESTING)
-    add_test(
-        NAME alpakaTune_heatEquation_correctness
-        COMMAND alpakaTune_heatEquation --self-test --backend host:cpu --executor cpuSerial
-    )
-    set_tests_properties(alpakaTune_heatEquation_correctness PROPERTIES TIMEOUT 120)
+    if(alpaka_EXEC_CpuSerial)
+        set(alpakaTune_HEAT_TEST_BACKEND host:cpu)
+        set(alpakaTune_HEAT_TEST_EXECUTOR cpuSerial)
+    elseif(alpaka_DEP_ONEAPI AND alpaka_ONEAPI_Cpu AND alpaka_EXEC_OneApi)
+        set(alpakaTune_HEAT_TEST_BACKEND oneApi:cpu)
+        set(alpakaTune_HEAT_TEST_EXECUTOR oneApi)
+    endif()
+    if(DEFINED alpakaTune_HEAT_TEST_BACKEND)
+        add_test(
+            NAME alpakaTune_heatEquation_correctness
+            COMMAND
+                alpakaTune_heatEquation --self-test --backend ${alpakaTune_HEAT_TEST_BACKEND} --executor
+                ${alpakaTune_HEAT_TEST_EXECUTOR}
+        )
+        set_tests_properties(alpakaTune_heatEquation_correctness PROPERTIES TIMEOUT 120)
+    endif()
 endif()

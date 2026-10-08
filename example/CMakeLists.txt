@@ -20,6 +20,7 @@ endfunction()
 
 add_subdirectory(boundaryIter)
 add_subdirectory(grayScale)
+add_subdirectory(heatEquation)
 add_subdirectory(heatEquation2D)
 add_subdirectory(matrixMultiplication)
 add_subdirectory(matmul)

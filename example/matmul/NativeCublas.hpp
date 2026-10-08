@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "MatmulKernel.hpp"
+#include <example/matmul/MatmulKernel.hpp>
 
 #include <memory>
 #include <stdexcept>

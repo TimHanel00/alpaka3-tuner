@@ -11,19 +11,19 @@ From the repository root:
 
 ```sh
 cmake -S . -B build/heat -G Ninja -DCMAKE_BUILD_TYPE=Release \
-  -DalpakaTune_BUILD_BENCHMARKS=ON -DalpakaTune_GEMM_VENDOR=OFF \
+  -DalpakaTune_BUILD_EXAMPLES=ON \
   -Dalpaka_DEP_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=80 \
   -Dalpaka_FAST_MATH=OFF -Dalpaka_FTZ=OFF
 cmake --build build/heat --target alpakaTune_heatEquation -j 2
-build/heat/benchmarks/heatEquation/alpakaTune_heatEquation \
+build/heat/example/heatEquation/alpakaTune_heatEquation \
   --backend cuda:nvidiaGpu --executor gpuCuda \
-  --csv benchmarks/results/heat-search.csv \
-  --export-winners benchmarks/results/HeatWinners.hpp
-cp benchmarks/results/HeatWinners.hpp benchmarks/heatEquation/SelectedWinners.hpp
+  --csv build/heat/results/heat-search.csv \
+  --export-winners build/heat/results/HeatWinners.hpp
+cp build/heat/results/HeatWinners.hpp example/heatEquation/SelectedWinners.hpp
 cmake --build build/heat --target alpakaTune_heatEquation_replay -j 2
-build/heat/benchmarks/heatEquation/alpakaTune_heatEquation_replay \
+build/heat/example/heatEquation/alpakaTune_heatEquation_replay \
   --backend cuda:nvidiaGpu --executor gpuCuda \
-  --csv benchmarks/results/heat-replay.csv
+  --csv build/heat/results/heat-replay.csv
 ```
 
 Repeat `--size N` to select square interior grids; defaults span 128²–16384².
@@ -39,7 +39,7 @@ the five fastest and the original are retested with at least 31 fresh samples.
 
 For OpenMP, enable `alpaka_DEP_OMP`, `alpaka_EXEC_CpuOmpBlocks`, and
 `alpakaTune_HEAT_CPU_CATALOG`; disable CUDA and set
-`alpakaTune_HEAT_WINNERS_HEADER` to `SelectedWinnersCpu.hpp`.
+`alpakaTune_HEAT_WINNERS_HEADER` to the absolute path of `SelectedWinnersCpu.hpp`.
 Run with `--backend host:cpu --executor ompBlocks`. Its catalog contains
 49 layouts with core-count grid caps; logical tile workers execute serially
 within each block while blocks run in parallel.
@@ -77,7 +77,7 @@ at 8192² after eight timesteps, using application replay with cache and clock
 control disabled. Boundary kernels are excluded. These profiler measurements
 are separate from the complete-timestep runtime plots.
 
-Both this plot and the [matmul roofline](../../example/matmul/README.md)
+Both this plot and the [matmul roofline](../matmul/README.md)
 follow NVIDIA's executed-operation convention: DADD + DMUL + twice DFMA for
 FP64. Arithmetic intensity divides executed throughput by measured bandwidth
 at each level. DRAM counts reads and writes; L2 counts return traffic toward
@@ -117,5 +117,5 @@ and metadata next to the summary.
 Regenerate both benchmarks' SVGs from the repository root:
 
 ```sh
-gnuplot benchmarks/plots.gnuplot
+gnuplot example/plots.gnuplot
 ```

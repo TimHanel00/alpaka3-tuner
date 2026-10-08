@@ -1,4 +1,4 @@
-# Run from the repository root: gnuplot benchmarks/plots.gnuplot
+# Run from the repository root: gnuplot example/plots.gnuplot
 set encoding utf8
 colors='#d97706 #2e8b57 #3465a4'
 markers='9 5 7'
@@ -11,8 +11,8 @@ do for [case=1:4] {
  set terminal svg size 1600,1000 enhanced font 'DejaVu Sans,16'
  heat=(case>2)
  gpu=(case==1 || case==3)
- data=case==1 ? 'example/matmul/results/runtimes.csv' : case==2 ? 'example/matmul/results/cpu-runtimes.csv' : case==3 ? 'benchmarks/heatEquation/figures/a30/runtime.csv' : 'benchmarks/heatEquation/figures/genoa/runtime.csv'
- outputFile=case==1 ? 'example/matmul/results/runtime-comparison.svg' : case==2 ? 'example/matmul/results/cpu-runtime-comparison.svg' : case==3 ? 'benchmarks/heatEquation/figures/a30/runtime.svg' : 'benchmarks/heatEquation/figures/genoa/runtime.svg'
+ data=case==1 ? 'example/matmul/results/runtimes.csv' : case==2 ? 'example/matmul/results/cpu-runtimes.csv' : case==3 ? 'example/heatEquation/figures/a30/runtime.csv' : 'example/heatEquation/figures/genoa/runtime.csv'
+ outputFile=case==1 ? 'example/matmul/results/runtime-comparison.svg' : case==2 ? 'example/matmul/results/cpu-runtime-comparison.svg' : case==3 ? 'example/heatEquation/figures/a30/runtime.svg' : 'example/heatEquation/figures/genoa/runtime.svg'
  title=case==1 ? 'Matmul — NVIDIA A30, FP32' : case==2 ? 'Matmul — 2 × AMD EPYC 7713, FP32, 128 physical cores' : case==3 ? 'Heat equation — NVIDIA A30, FP64' : 'Heat equation — 2 × AMD EPYC 9654, FP64, 192 physical cores'
  dcol=heat ? 20 : gpu ? 2 : 3
  tcol=heat ? 21 : gpu ? 5 : 6
@@ -63,44 +63,47 @@ do for [case=1:4] {
  unset output
 }
 
-# Same three hierarchy panels and executed-operation convention for both kernels.
+# Overlay the hierarchy ceilings and executed-operation points for both kernels.
 do for [case=1:2] {
  reset
  set encoding utf8
  set terminal svg size 1600,1000 enhanced font 'DejaVu Sans,16'
  heat=(case==2)
- data=heat ? 'benchmarks/heatEquation/figures/a30/hierarchical-roofline.csv' : 'example/matmul/results/roofline-points.csv'
- outputFile=heat ? 'benchmarks/heatEquation/figures/a30/hierarchical-roofline.svg' : 'example/matmul/results/hierarchical-roofline.svg'
- set output outputFile
+ data=heat ? 'example/heatEquation/figures/a30/hierarchical-roofline.csv' : 'example/matmul/results/roofline-points.csv'
+ set output (heat ? 'example/heatEquation/figures/a30/hierarchical-roofline.svg' : 'example/matmul/results/hierarchical-roofline.svg')
  set datafile separator ','
  set border 3
  set tics out nomirror
  set grid xtics ytics lc rgb '#dddddd'
- set key bottom right opaque font ',13'
  set logscale xy
- set xrange [0.1:10000]
+ set xrange [0.01:10000]
  set yrange [100:10000]
- set xlabel 'Arithmetic intensity (executed FLOP/byte)' font ',13'
- set ylabel 'Executed throughput (GFLOP/s)' font ',14'
- title=heat ? 'Heat equation — NVIDIA A30, FP64 hierarchical rooflines, 8192²' : 'Matmul — NVIDIA A30, FP32 hierarchical rooflines'
- set multiplot layout 1,3 title title font ',22' margins 0.09,0.98,0.20,0.88 spacing 0.075,0.04
+ set lmargin at screen 0.10
+ set rmargin at screen 0.77
+ set bmargin at screen 0.20
+ set tmargin at screen 0.90
+ set key at screen 0.79,0.89 left top opaque font ',14'
+ set xlabel 'Arithmetic intensity (executed FLOP/byte)'
+ set ylabel 'Executed throughput (GFLOP/s)'
+ set title (heat ? 'Heat equation — NVIDIA A30, FP64 hierarchical rooflines, 8192²' : 'Matmul — NVIDIA A30, FP32 hierarchical rooflines') font ',22'
  footer=heat ? 'Three stencil launches per implementation; application replay, cache/clock control disabled. Boundary kernel excluded.' : 'Seven shapes, one launch per implementation; kernel replay, cache flushing and base clocks. Separate from runtime measurements.'
- set label 1 footer at screen 0.09,0.04 font ',12'
- if (!heat) { set label 2 '1=512³  2=1024³  3=2048³  4=4096³  5=256×2048×1024  6=2048×256×1024  7=1023×1009×997' at screen 0.09,0.08 font ',12' }
+ set label 1 footer at screen 0.10,0.04 font ',12'
+ if (!heat) { set label 2 'DRAM point labels: 1=512³  2=1024³  3=2048³  4=4096³  5=256×2048×1024  6=2048×256×1024  7=1023×1009×997' at screen 0.10,0.08 font ',12' }
  stats data every ::1 using (column(heat ? 14 : 6)) nooutput
  compute=STATS_median
  levels='DRAM L2 L1'
+ levelMarkers='7 5 8'
  implementations=heat ? 'default winner' : 'default tuned cublas'
- labels=heat ? 'Default Tuned' : 'Default Tuned Strict-FP32-cuBLAS'
+ labels=heat ? 'Default Tuned' : 'Default Tuned cuBLAS'
  paths=heat ? 2 : 3
- do for [panel=1:3] {
-  level=word(levels,panel)
-  matchLevel=heat ? (panel==1 ? 'DRAM' : panel==2 ? 'L2 return' : 'L1 global/local') : level
+ array bandwidth[3]
+ do for [level=1:3] {
+  matchLevel=heat ? (level==1 ? 'DRAM' : level==2 ? 'L2 return' : 'L1 global/local') : word(levels,level)
   stats data every ::1 using (strcol(heat ? 4 : 3) eq matchLevel ? column(heat ? 8 : 7) : 1/0) nooutput
-  bandwidth=STATS_median
-  set title (panel==3 ? 'L1 (global/local)' : level)
-  plot (x*bandwidth<compute ? x*bandwidth : compute) with lines lw 2 lc rgb '#777777' title 'Counter-derived ceiling', for [impl=1:paths] data every ::1 using (strcol(heat ? 4 : 3) eq matchLevel && strcol(heat ? 1 : 2) eq word(implementations,impl) ? column(heat ? 13 : 4) : 1/0):(column(heat ? 11 : 5)) with points pt int(word(markers,impl)) ps 1.4 lc rgb word(colors,impl) title word(labels,impl), for [impl=1:paths] data every ::1 using (!heat && strcol(3) eq matchLevel && strcol(2) eq word(implementations,impl) ? $4 : 1/0):5:(sprintf('%d',shapeIndex(strcol(1))+1)) with labels offset char 0.6,0.5 font ',11' tc rgb word(colors,impl) notitle
+  bandwidth[level]=STATS_median
  }
- unset multiplot
+ plot for [level=1:3] (x*bandwidth[level]<compute ? x*bandwidth[level] : compute) with lines lw 2 dt level lc rgb '#777777' title (word(levels,level).' ceiling'), \
+      for [impl=1:paths] for [level=1:3] data every ::1 using (strcol(heat ? 4 : 3) eq (heat ? (level==1 ? 'DRAM' : level==2 ? 'L2 return' : 'L1 global/local') : word(levels,level)) && strcol(heat ? 1 : 2) eq word(implementations,impl) ? column(heat ? 13 : 4) : 1/0):(column(heat ? 11 : 5)) with points pt int(word(levelMarkers,level)) ps 1.5 lc rgb word(colors,impl) title (word(labels,impl).' / '.word(levels,level)), \
+      for [impl=1:paths] data every ::1 using (!heat && strcol(3) eq 'DRAM' && strcol(2) eq word(implementations,impl) ? $4 : 1/0):5:(sprintf('%d',shapeIndex(strcol(1))+1)) with labels offset char 0.7,0.5 font ',12' tc rgb word(colors,impl) notitle
  unset output
 }

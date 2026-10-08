@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
 #include ALPAKA_TUNE_HEAT_WINNERS_HEADER
-#include "StencilVariants.hpp"
-#include <BoundaryKernel.hpp>
 #include <alpakaTune/BackendSelection.hpp>
 #include <alpakaTune/alpakaTune.hpp>
+#include <example/heatEquation/StencilVariants.hpp>
+#include <heatEquation2D/src/BoundaryKernel.hpp>
 
 #include <algorithm>
 #include <array>

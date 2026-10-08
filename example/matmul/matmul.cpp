@@ -1,8 +1,8 @@
 // Copyright 2026 Tim Hanel
 // SPDX-License-Identifier: MPL-2.0
 
-#include "Matmul.hpp"
-#include "NativeCublas.hpp"
+#include <example/matmul/Matmul.hpp>
+#include <example/matmul/NativeCublas.hpp>
 
 #include <alpakaTune/BackendSelection.hpp>
 
