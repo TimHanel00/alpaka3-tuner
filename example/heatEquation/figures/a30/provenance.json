@@ -1,0 +1,45 @@
+{
+   "architecture" : "sm_80",
+   "backend" : "Cuda",
+   "base_tuner_revision" : "70d2fe79f282f5821dceb9f647a3c57d86fd8097",
+   "build_type" : "Release",
+   "cuda" : "12.9.1",
+   "date" : "2026-10-08",
+   "device" : "NVIDIA A30",
+   "driver" : "610.57.04",
+   "executor" : "alpaka::exec::GpuCuda",
+   "fast_math" : false,
+   "ftz" : false,
+   "gcc" : "14.3.0",
+   "hierarchical_roofline" : {
+      "dram_traffic" : "dram__bytes.sum.per_second",
+      "l1_traffic" : "derived__l1tex__lsu_writeback_bytes_mem_lg.sum.per_second",
+      "l2_traffic" : "derived__lts__lts2xbar_bytes.sum.per_second",
+      "roof_formula" : "sum.peak_sustained multiplied by corresponding unit cycles_elapsed.avg.per_second",
+      "section" : "SpeedOfLight_HierarchicalDoubleRooflineChart",
+      "shared_memory_traffic_included" : false,
+      "source" : "three saved stencil launches per implementation",
+      "work_panels" : [
+         "executed DADD + DMUL + 2 * DFMA"
+      ]
+   },
+   "precision" : "fp64",
+   "repetitions" : 31,
+   "roofline_cache_control" : "none",
+   "roofline_clock_control" : "none",
+   "roofline_intensity" : "executed FLOP/s divided by measured bandwidth at each level",
+   "roofline_launches" : 3,
+   "roofline_profiler" : "Nsight Compute 2025.2.1",
+   "roofline_replay" : "application",
+   "roofline_skip" : 8,
+   "roofline_work" : "executed DADD + DMUL + 2 * DFMA",
+   "source_identity" : "70d2fe79-dirty-9d2dfc85",
+   "source_sha256" : {
+      "CMakeLists.txt" : "fb5f0f0682ab1b20343e97277a66b2d1fc7c68c91aec3373d4bc84dcfffeb471",
+      "SelectedWinners.hpp" : "e55372a0b1726d778b363cbb6392046000dea82b367e6c828b256471acd44ca6",
+      "StencilVariants.hpp" : "8319e42d4ff635a1edb216b1b17a20c3facd63d5c116ab6dd039cca1b1ec9898",
+      "main.cpp" : "9d2dfc85d51dae8a5a9211d1c2c2952d9d8338e4785a71f82a2ff81fd37b3465"
+   },
+   "steps" : 64,
+   "upstream_alpaka3_revision" : "b7d339d07056a9a2a6c4051cc3927157bc5f0d51"
+}

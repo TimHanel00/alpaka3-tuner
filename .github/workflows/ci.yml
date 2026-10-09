@@ -249,7 +249,9 @@ jobs:
         run: |
           cd build
           pwd
-          ninja
+          # A compile-time example catalog can use several GiB on its own.
+          # Serialize compilation to fit hosted runners, including sanitizers.
+          cmake --build . --parallel 1
 
       # Run tests (assuming your project has tests)
       - name: Run Tests
