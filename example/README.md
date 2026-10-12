@@ -1,5 +1,12 @@
 # Running the tuning examples
 
+For a completed FP32 GEMM optimization case, see [compiled matmul winners](matmul/README.md).
+It provides a direct library call, the original baseline, selected configurations,
+and measured GPU and CPU comparisons, including strict FP32 cuBLAS.
+
+The [heat-equation tuning showcase](heatEquation/README.md) exports compiled
+stencil winners and includes CPU/GPU runtime and hierarchical roofline comparisons.
+
 alpakaTune is a library inside these applications; it does not own their main
 loop. Every application decides independently how often its kernel is needed.
 The examples use the following teaching pattern:
