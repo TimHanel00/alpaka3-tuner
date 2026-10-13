@@ -104,6 +104,47 @@ a fixed winner or adapt among the saved configurations without another search.
 feedback. To compile batch alternatives ahead of time, see
 :doc:`compile_time_tuning`.
 
+Run the README example
+----------------------
+
+The README example visits every available device for each enabled executor.
+For each combination it increments one device buffer in place, using a launch
+specification derived from the buffer extent, device, and executor. Across
+launches, the tuner explores different frame counts and frame extents and uses
+measured runtimes to guide later configuration choices. alpaka3 maps each
+selected ``FrameSpec`` to thread blocks and threads according to the device
+and executor.
+From the repository root:
+
+.. code-block:: sh
+
+   cmake -S docs/examples/readme -B build-readme -DCMAKE_BUILD_TYPE=Release
+   cmake --build build-readme --target readme_example
+   ./build-readme/readme_example
+
+For each device/executor combination, the program increments a buffer of 1024
+elements over 100 tuned launches. The enabled backends depend on the alpaka
+CMake options in your build; see the `alpaka backend configuration
+<https://alpaka3.readthedocs.io/en/latest/advanced/cmake.html>`_.
+A short-kernel warning is expected for this small workload.
+``makeTuner(tunables, device)`` loads the process-default YAML configuration;
+set ``ALPAKA_TUNE_CONFIG`` before starting the program to use a different policy.
+See :doc:`configuration`.
+
+Verify the README snippet
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The dedicated ``alpakaTune_readme_example`` test extracts the C++ code directly
+from the README, builds it, and runs it with the default YAML policy. CMake also
+checks that the standalone source matches the snippet exactly. After enabling
+repository tests, build and run just this example:
+
+.. code-block:: sh
+
+   cmake -S . -B build -DalpakaTune_BUILD_TESTING=ON
+   cmake --build build --target alpakaTune_readme_example
+   ctest --test-dir build -R '^alpakaTune_readme_example$' --output-on-failure
+
 Build the repository examples and tests
 ---------------------------------------
 

@@ -150,6 +150,23 @@ add_test(NAME alpakaTune_adaptive_pi_tests COMMAND alpakaTune_adaptive_pi_tests)
 # under sanitizers; the runtime objective is checked independently of this limit.
 set_tests_properties(alpakaTune_adaptive_pi_tests PROPERTIES LABELS integration TIMEOUT 600)
 
+# Extract, compile, and run the exact README snippet with the default YAML policy.
+include(${PROJECT_SOURCE_DIR}/cmake/ReadmeExample.cmake)
+set(_readme_source "${CMAKE_CURRENT_BINARY_DIR}/readme-example/readme.cpp")
+alpakatune_write_readme_example("${_readme_source}")
+add_executable(alpakaTune_readme_example "${_readme_source}")
+target_link_libraries(alpakaTune_readme_example PRIVATE alpakaTune::alpakaTune)
+alpaka_finalize(alpakaTune_readme_example)
+add_test(
+    NAME alpakaTune_readme_example
+    COMMAND ${CMAKE_COMMAND} -E env --unset=ALPAKA_TUNE_CONFIG $<TARGET_FILE:alpakaTune_readme_example>
+)
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/readme-example")
+set_tests_properties(
+    alpakaTune_readme_example
+    PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/readme-example" TIMEOUT 120 LABELS documentation
+)
+
 # Compile the exact source shown by the Sphinx tutorial in both candidate modes.
 foreach(_tutorial_variant IN ITEMS runtime compile_time)
     set(_tutorial_target alpakaTune_tutorial_${_tutorial_variant})
