@@ -4,6 +4,27 @@ Common integration problems
 Start by checking both policies, the queue, and workload identity. ``tuner.info()`` and
 ``tuner.lastConfig()`` usually distinguish scheduling from kernel failures.
 
+nvcc rejects a nested compile-time candidate binding
+----------------------------------------------------
+
+A defect in nvcc, observed across CUDA 12.5–13.0 in CI, rejects a compile-time
+candidate binding nested directly inside a deduced ``TunableBundle``, such as
+``alpakaTune::TunableBundle{choice(alpakaTune::CVals<0, 1>{})}``. Diagnostics can
+report the wrong number of template arguments or an undefined compiler-generated
+identifier such as ``__T11``.
+
+Assign the bound tunable to a variable before constructing the bundle:
+
+.. code-block:: cpp
+
+   auto const choice = ALPAKA_TUNE_TUNABLE("choice");
+   auto const tunable = choice(alpakaTune::CVals<0, 1>{});
+   auto tuner = alpakaTune::makeTuner(
+       config, alpakaTune::TunableBundle{tunable}, device);
+
+This preserves compile-time candidates and the same tuning behavior.
+See :doc:`compile_time_tuning` for a complete example.
+
 A training loop never ends
 --------------------------
 

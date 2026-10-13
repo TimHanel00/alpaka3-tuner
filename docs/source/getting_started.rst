@@ -103,3 +103,18 @@ a fixed winner or adapt among the saved configurations without another search.
 :doc:`automatic_spaces` generates candidates from declared domains and measured
 feedback. To compile batch alternatives ahead of time, see
 :doc:`compile_time_tuning`.
+
+Build the repository examples and tests
+---------------------------------------
+
+From the repository root, enable the optional examples and tests:
+
+.. code-block:: sh
+
+   cmake -S . -B build -DalpakaTune_BUILD_EXAMPLES=ON -DalpakaTune_BUILD_TESTING=ON
+   cmake --build build
+   ctest --test-dir build --output-on-failure
+
+CMake uses its default generator; Ninja is optional. Add
+``-DalpakaTune_HEADER_CHECKS=ON`` to also check that public headers compile
+independently.
