@@ -22,6 +22,47 @@ Set the environment variable before the first use:
 
    ALPAKA_TUNE_CONFIG=tuning.yaml ./my_app
 
+Tuning context
+~~~~~~~~~~~~~~
+
+All arguments after the tunables form the tuner's immutable *context*; a
+different context needs a new tuner. A device argument binds the tuner, and
+``enqueue`` rejects queues of other devices. Every other argument restricts the
+persistent identity by the alpaka facets it reports (API, device kind,
+executor), so a queue, a backend and a bare API tag restrict it alike; strings
+and other values restrict it by their name.
+
+.. important::
+
+   The first ``enqueue`` binds a tuner to the kernel type, the kernel argument
+   types and the launch specification *type* (frame or thread layout,
+   dimension, index type, compile-time extents, executor). It never binds to
+   values. Neither the kernel arguments nor the ``FrameSpec``/``ThreadSpec``
+   values restrict the tuning context, because the problem size can be carried
+   by either of them.
+
+   If these values change between enqueues, all launches feed one context and
+   one persistent history. The selected configuration is the one that
+   performed best across those changes, so what "best" means depends on the
+   application's sequence of problem sizes. A measured configuration that is
+   illegal for new launch values is rejected for the rest of the context.
+
+   To tune for an exact problem size, use a separate tuner instance per size,
+   for example by naming the size in the context:
+
+   .. code-block:: cpp
+
+      auto tuner = alpakaTune::makeTuner(config, tunables, device, "n=4096");
+
+.. warning::
+
+   Without a device argument, for example ``makeTuner(config, tunables)``, the
+   tuner is not bound to a device. It accepts queues of every device of the
+   first queue's type and validates each launch against the device of its
+   queue, but all devices share one tuning context and history, so the
+   measurements of one device steer the others. Pass the device, or
+   at least an API, device kind or string, to keep measurements apart.
+
 A small, complete YAML file
 ---------------------------
 

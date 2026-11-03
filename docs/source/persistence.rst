@@ -125,8 +125,10 @@ as ``median_metric_value``. Values are matched against each named tunable
 dimension, avoiding enumeration of the complete candidate space.
 
 The fingerprint includes kernel bundle type, physical device name, additional
-identity entries, launch prototype, executor, restrictions, and tunable
-definitions. Strategy, exploration and selection policies, seed, budgets, history access policy,
+identity entries, launch specification type (frame or thread layout, vector
+types and executor), restrictions, and tunable definitions. Launch values and
+kernel argument values are not part of it; name a problem size as an identity
+entry to keep its history apart. Strategy, exploration and selection policies, seed, budgets, history access policy,
 sampling count, and learned-model path are excluded.
 
 Automatic histories additionally store the registered candidate catalog and

@@ -91,16 +91,13 @@ int example(auto const devSpec, auto const computeExec) {
       frameSpec.getNumFrames())>::UniVec;
   using FrameExtent = typename std::remove_cvref_t<ALPAKA_TYPEOF(
       frameSpec.getFrameExtents())>::UniVec;
-  auto const numFramesTuning = alpakaTune::tuneNumFrames(
-      frameSpec, alpakaTune::generate::linSpace(
-                     NumFrames::fill(1u), NumFrames{frameSpec.getNumFrames()},
-                     NumFrames::fill(1u)));
-  auto const frameExtentTuning = alpakaTune::tuneFrameExtent(
-      frameSpec, alpakaTune::generate::linSpace(FrameExtent::fill(1u),
-                                                FrameExtent::fill(4u),
-                                                FrameExtent::fill(1u)));
-  auto const tunables =
-      alpakaTune::TunableBundle{numFramesTuning, frameExtentTuning};
+  auto const tunables = alpakaTune::TunableBundle{
+      alpakaTune::tuneNumFrames(alpakaTune::generate::linSpace(
+          NumFrames::fill(1u), NumFrames{frameSpec.getNumFrames()},
+          NumFrames::fill(1u))),
+      alpakaTune::tuneFrameExtent(alpakaTune::generate::linSpace(
+          FrameExtent::fill(1u), FrameExtent::fill(4u),
+          FrameExtent::fill(1u)))};
 
   auto exampleKernel = BoundaryExampleKernel{};
 
@@ -115,16 +112,13 @@ int example(auto const devSpec, auto const computeExec) {
     }
 
     auto const bd = makeCoreBoundaryDirection<Dimensions>();
-    auto tuner = alpakaTune::makeTuner(
-        tunables, device, frameSpec.getExecutor(), "boundaryIter/default");
+    auto tuner =
+        alpakaTune::makeTuner(tunables, device, "boundaryIter/default");
     assert(tuner.info().candidateCount >= 2000u);
-    auto const kernelBundle = KernelBundle{exampleKernel, view, viewTarget, bd};
-    std::size_t completedExecutions = 0u;
-    while (alpakaTune::example::applicationRunsRemain(completedExecutions,
-                                                      tuner)) {
-      tuner.enqueue(tuningQueue, frameSpec, kernelBundle);
-      ++completedExecutions;
-    }
+    for (std::size_t runs = 0u;
+         alpakaTune::example::applicationRunsRemain(runs, tuner); ++runs)
+      tuner.enqueue(tuningQueue, frameSpec, exampleKernel, view, viewTarget,
+                    bd);
   }
 
   {
@@ -151,16 +145,12 @@ int example(auto const devSpec, auto const computeExec) {
     }
 
     auto const bd = makeCoreBoundaryDirection<Dimensions>(halo);
-    auto tuner = alpakaTune::makeTuner(
-        tunables, device, frameSpec.getExecutor(), "boundaryIter/halo");
+    auto tuner = alpakaTune::makeTuner(tunables, device, "boundaryIter/halo");
     assert(tuner.info().candidateCount >= 2000u);
-    auto const kernelBundle = KernelBundle{exampleKernel, view, viewTarget, bd};
-    std::size_t completedExecutions = 0u;
-    while (alpakaTune::example::applicationRunsRemain(completedExecutions,
-                                                      tuner)) {
-      tuner.enqueue(tuningQueue, frameSpec, kernelBundle);
-      ++completedExecutions;
-    }
+    for (std::size_t runs = 0u;
+         alpakaTune::example::applicationRunsRemain(runs, tuner); ++runs)
+      tuner.enqueue(tuningQueue, frameSpec, exampleKernel, view, viewTarget,
+                    bd);
   }
 
   {
@@ -179,16 +169,12 @@ int example(auto const devSpec, auto const computeExec) {
 
     auto const bd = makeCoreBoundaryDirection<Dimensions>(lowerHalo, upperHalo);
     auto tuner =
-        alpakaTune::makeTuner(tunables, device, frameSpec.getExecutor(),
-                              "boundaryIter/asymmetric-halo");
+        alpakaTune::makeTuner(tunables, device, "boundaryIter/asymmetric-halo");
     assert(tuner.info().candidateCount >= 2000u);
-    auto const kernelBundle = KernelBundle{exampleKernel, view, viewTarget, bd};
-    std::size_t completedExecutions = 0u;
-    while (alpakaTune::example::applicationRunsRemain(completedExecutions,
-                                                      tuner)) {
-      tuner.enqueue(tuningQueue, frameSpec, kernelBundle);
-      ++completedExecutions;
-    }
+    for (std::size_t runs = 0u;
+         alpakaTune::example::applicationRunsRemain(runs, tuner); ++runs)
+      tuner.enqueue(tuningQueue, frameSpec, exampleKernel, view, viewTarget,
+                    bd);
   }
 
   return EXIT_SUCCESS;

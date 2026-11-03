@@ -12,14 +12,19 @@ loop. Every application decides independently how often its kernel is needed.
 The examples use the following teaching pattern:
 
 ```cpp
-constexpr std::size_t minimumExecutions = 50'000u;
-std::size_t completedExecutions = 0u;
+auto tuner = alpakaTune::makeTuner(
+    alpakaTune::TunableBundle{alpakaTune::tuneNumFrames(
+        alpakaTune::generate::linSpace(Vec{1u}, Vec{64u}, Vec{1u}))},
+    device, "my-kernel"); // restrict the tuning context to this device
 
-while (completedExecutions < minimumExecutions || !tuner.completed()) {
-    tuner.enqueue(queue, launchSpec, kernelBundle);
-    ++completedExecutions;
-}
+constexpr std::size_t minimumExecutions = 50'000u;
+for (std::size_t runs = 0u; runs < minimumExecutions || !tuner.completed(); ++runs)
+    tuner.enqueue(queue, frameSpec, Kernel{}, args...);
 ```
+
+Every example follows this shape: the tunables are written inline in
+`makeTuner`, the remaining arguments restrict the tuning context, and the kernel
+and its arguments are passed to `enqueue` exactly as to an alpaka queue.
 
 This loop runs at least 50,000 launches and continues until the tuning-policy
 goal is reached. In your application, use the loop required by your workload:

@@ -30,8 +30,7 @@ Override one parameter when you know more about the kernel::
 
    auto launchTuning = alpakaTune::makeAutomaticLaunchTuning(
        frameSpec,
-       alpakaTune::tuneFrameExtent(frameSpec,
-           alpakaTune::autoCandidates(alpakaTune::RVals{
+       alpakaTune::tuneFrameExtent(alpakaTune::autoCandidates(alpakaTune::RVals{
                alpaka::Vec{64u}, alpaka::Vec{128u}})));
 
 The other launch domain remains automatic. An override must belong to the

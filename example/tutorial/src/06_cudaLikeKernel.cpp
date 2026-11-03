@@ -142,22 +142,18 @@ void testVectorAddKernel(alpaka::onHost::concepts::Device auto device,
             << threadSpec.getNumThreads() << "\n";
   auto const maximumBlocks = alpaka::isSeqExecutor(computeExec) ? 2048u : 32u;
   auto const maximumThreads = alpaka::isSeqExecutor(computeExec) ? 1u : 64u;
-  auto const tunables = alpakaTune::TunableBundle{
-      alpakaTune::numBlocks(alpakaTune::generate::linSpace(
-          Vec1D{1u}, Vec1D{maximumBlocks}, Vec1D{1u})),
-      alpakaTune::numThreads(alpakaTune::generate::linSpace(
-          Vec1D{1u}, Vec1D{maximumThreads}, Vec1D{1u}))};
-  auto tuner = alpakaTune::makeTuner(tunables, device, threadSpec.getExecutor(),
-                                     "tutorial/06/1d");
+  auto tuner = alpakaTune::makeTuner(
+      alpakaTune::TunableBundle{
+          alpakaTune::numBlocks(alpakaTune::generate::linSpace(
+              Vec1D{1u}, Vec1D{maximumBlocks}, Vec1D{1u})),
+          alpakaTune::numThreads(alpakaTune::generate::linSpace(
+              Vec1D{1u}, Vec1D{maximumThreads}, Vec1D{1u}))},
+      device, "tutorial/06/1d");
   verify(tuner.info().candidateCount >= 2000u);
-  auto const kernelBundle = alpaka::KernelBundle{VectorAddKernel1D{}, in1_d,
-                                                 in2_d, out_d, Vec1D{size}};
-  std::size_t completedExecutions = 0u;
-  while (
-      alpakaTune::example::applicationRunsRemain(completedExecutions, tuner)) {
-    tuner.enqueue(tuningQueue, threadSpec, kernelBundle);
-    ++completedExecutions;
-  }
+  for (std::size_t runs = 0u;
+       alpakaTune::example::applicationRunsRemain(runs, tuner); ++runs)
+    tuner.enqueue(tuningQueue, threadSpec, VectorAddKernel1D{}, in1_d, in2_d,
+                  out_d, Vec1D{size});
 
   // copy the results from the device to the host
   alpaka::onHost::memcpy(queue, out_h, out_d);
@@ -248,22 +244,18 @@ void testVectorAddKernel3D(alpaka::onHost::concepts::Device auto device,
             << threadSpec.getNumThreads() << "\n";
   auto const maximumBlocks = alpaka::isSeqExecutor(computeExec) ? 13u : 4u;
   auto const maximumThreads = alpaka::isSeqExecutor(computeExec) ? 1u : 4u;
-  auto const tunables = alpakaTune::TunableBundle{
-      alpakaTune::numBlocks(alpakaTune::generate::linSpace(
-          Vec3D::fill(1u), Vec3D::fill(maximumBlocks), Vec3D::fill(1u))),
-      alpakaTune::numThreads(alpakaTune::generate::linSpace(
-          Vec3D::fill(1u), Vec3D::fill(maximumThreads), Vec3D::fill(1u)))};
-  auto tuner = alpakaTune::makeTuner(tunables, device, threadSpec.getExecutor(),
-                                     "tutorial/06/3d");
+  auto tuner = alpakaTune::makeTuner(
+      alpakaTune::TunableBundle{
+          alpakaTune::numBlocks(alpakaTune::generate::linSpace(
+              Vec3D::fill(1u), Vec3D::fill(maximumBlocks), Vec3D::fill(1u))),
+          alpakaTune::numThreads(alpakaTune::generate::linSpace(
+              Vec3D::fill(1u), Vec3D::fill(maximumThreads), Vec3D::fill(1u)))},
+      device, "tutorial/06/3d");
   verify(tuner.info().candidateCount >= 2000u);
-  auto const kernelBundle =
-      alpaka::KernelBundle{VectorAddKernel3D{}, in1_d, in2_d, out_d, ndsize};
-  std::size_t completedExecutions = 0u;
-  while (
-      alpakaTune::example::applicationRunsRemain(completedExecutions, tuner)) {
-    tuner.enqueue(tuningQueue, threadSpec, kernelBundle);
-    ++completedExecutions;
-  }
+  for (std::size_t runs = 0u;
+       alpakaTune::example::applicationRunsRemain(runs, tuner); ++runs)
+    tuner.enqueue(tuningQueue, threadSpec, VectorAddKernel3D{}, in1_d, in2_d,
+                  out_d, ndsize);
 
   // copy the results from the device to the host
   alpaka::onHost::memcpy(queue, out_h, out_d);

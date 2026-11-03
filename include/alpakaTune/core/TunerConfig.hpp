@@ -16,7 +16,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <initializer_list>
+#include <iomanip>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -104,6 +106,66 @@ struct BudgetConfig {
   std::optional<double> measurementCostHintSeconds;
 };
 
+/** @brief Objective minimized by a tuner's built-in measurement.
+ *
+ * runtime uses the tuner's own event timing. Every other metric measures the
+ * launch through alpakaMetrics and requires the alpakaTune::metrics component.
+ */
+enum class Metric {
+  runtime,      ///< Event-timed kernel runtime.
+  elapsedTime,  ///< alpakaMetrics queue-interval elapsed seconds.
+  instructions, ///< Queue-worker instruction count.
+  l2Misses,     ///< Queue-worker L2 cache misses.
+  weighted,     ///< Normalized weighted sum of elapsed time and one counter.
+};
+
+/** @brief Settings of Metric::weighted: score = timeWeight * seconds /
+ * timeScale + counterWeight * count / counterScale. */
+struct WeightedMetricConfig {
+  /** Counter combined with elapsed time: instructions or l2Misses. */
+  Metric counter{Metric::instructions};
+  double timeWeight{0.5};
+  double counterWeight{0.5};
+  /** Required normalization of elapsed seconds. */
+  std::optional<double> timeScale;
+  /** Required normalization of the counter. */
+  std::optional<double> counterScale;
+};
+
+/** @brief Stable spelling of a metric, used in YAML and persistent identity. */
+[[nodiscard]] constexpr auto metricName(Metric metric) noexcept
+    -> std::string_view {
+  switch (metric) {
+  case Metric::runtime:
+    return "runtime";
+  case Metric::elapsedTime:
+    return "elapsed_time";
+  case Metric::instructions:
+    return "instructions";
+  case Metric::l2Misses:
+    return "l2_misses";
+  case Metric::weighted:
+    return "weighted";
+  }
+  return "unknown";
+}
+
+/** @brief Parse a metric spelling; dashes are accepted for underscores. */
+[[nodiscard]] inline auto metricFromName(std::string_view name) -> Metric {
+  auto normalized = std::string{name};
+  std::ranges::replace(normalized, '-', '_');
+  for (auto metric : {Metric::runtime, Metric::elapsedTime,
+                      Metric::instructions, Metric::l2Misses, Metric::weighted})
+    if (metricName(metric) == normalized)
+      return metric;
+  throw std::invalid_argument{"Unknown tuning metric: " + std::string{name}};
+}
+
+/** @brief Whether a metric's score is measured in seconds. */
+[[nodiscard]] constexpr auto measuresSeconds(Metric metric) noexcept -> bool {
+  return metric == Metric::runtime || metric == Metric::elapsedTime;
+}
+
 /** @brief Complete, copyable policy used to construct one or more tuners.
  *
  * A tuner snapshots this aggregate at construction. Configuration controls
@@ -163,6 +225,12 @@ struct TunerConfig {
   double horizonOffsetWithActiveHistory{0.8};
   /** Parameter-proposal algorithm; admission remains tuner-owned. */
   StrategyKind strategy{StrategyKind::exhaustive};
+  /** Objective minimized by built-in measurement. Metrics other than runtime
+   * measure through alpakaMetrics and need the alpakaTune::metrics component.
+   */
+  Metric metric{Metric::runtime};
+  /** Settings used when metric is Metric::weighted. */
+  WeightedMetricConfig weightedMetric;
   /** Base seed; disengage for a nondeterministic process-local seed. */
   std::optional<std::uint64_t> randomSeed{0u};
   /** Compact sampled history policy. */
@@ -302,6 +370,8 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
                  "adaptive_probe_interval",
                  "replay_fast_path",
                  "strategy",
+                 "metric",
+                 "weighted_metric",
                  "random_seed",
                  "warmup_runs",
                  "runs_per_candidate",
@@ -393,6 +463,27 @@ inline auto loadTunerConfig(std::filesystem::path const &path) -> TunerConfig {
   auto const strategy =
       tuning["strategy"] ? tuning["strategy"].as<std::string>() : "exhaustive";
   defaults.strategy = strategyFromName(strategy);
+  if (tuning["metric"])
+    defaults.metric = metricFromName(tuning["metric"].as<std::string>());
+  if (auto const weighted = tuning["weighted_metric"]) {
+    if (!weighted.IsMap())
+      throw std::runtime_error{"YAML weighted_metric must contain a map."};
+    rejectUnknown(weighted,
+                  {"counter", "time_weight", "counter_weight",
+                   "time_scale_seconds", "counter_scale"},
+                  "weighted_metric");
+    auto &settings = defaults.weightedMetric;
+    if (weighted["counter"])
+      settings.counter = metricFromName(weighted["counter"].as<std::string>());
+    if (weighted["time_weight"])
+      settings.timeWeight = weighted["time_weight"].as<double>();
+    if (weighted["counter_weight"])
+      settings.counterWeight = weighted["counter_weight"].as<double>();
+    if (weighted["time_scale_seconds"])
+      settings.timeScale = weighted["time_scale_seconds"].as<double>();
+    if (weighted["counter_scale"])
+      settings.counterScale = weighted["counter_scale"].as<double>();
+  }
   if (auto const seed = tuning["random_seed"]; seed.IsDefined()) {
     if (seed.IsNull())
       throw std::runtime_error{
@@ -566,6 +657,34 @@ inline auto defaultConfigurationPath() -> std::filesystem::path {
 
 inline void TunerConfig::validate() const {
   space.validate();
+  if (metric == Metric::weighted) {
+    auto const &settings = weightedMetric;
+    if (settings.counter != Metric::instructions &&
+        settings.counter != Metric::l2Misses)
+      throw std::invalid_argument{
+          "TunerConfig::weightedMetric.counter must be instructions or "
+          "l2Misses."};
+    if (!std::isfinite(settings.timeWeight) || settings.timeWeight < 0.0 ||
+        !std::isfinite(settings.counterWeight) ||
+        settings.counterWeight < 0.0 ||
+        (settings.timeWeight == 0.0 && settings.counterWeight == 0.0))
+      throw std::invalid_argument{
+          "Weighted metric weights must be finite, non-negative, and not both "
+          "zero."};
+    for (auto scale : {settings.timeScale, settings.counterScale})
+      if (!scale || !std::isfinite(*scale) || *scale <= 0.0)
+        throw std::invalid_argument{
+            "Weighted metric scales must be set, positive and finite."};
+  }
+#ifndef ALPAKA_TUNE_METRICS
+  if (metric != Metric::runtime)
+    throw std::invalid_argument{
+        "TunerConfig::metric " + std::string{metricName(metric)} +
+        " requires linking alpakaTune::metrics (-DalpakaTune_DEP_METRICS=ON)."};
+#endif
+  if (budget && !measuresSeconds(metric))
+    throw std::invalid_argument{
+        "Benefit budgeting requires a metric measured in seconds."};
   if (budget) {
     if (budget->expectedLaunches == 0u || budget->checkInterval == 0u ||
         !std::isfinite(budget->maximumOverheadFraction) ||
@@ -691,6 +810,22 @@ inline void TunerConfig::validate() const {
 
 inline auto TunerConfig::fromYaml(std::filesystem::path path) -> TunerConfig {
   return detail::loadTunerConfig(detail::canonicalConfigPath(std::move(path)));
+}
+
+/** @brief Persistent identity of a configured metric, including the weights
+ * and scales that change its score. */
+[[nodiscard]] inline auto metricIdentity(TunerConfig const &config)
+    -> std::string {
+  auto text = std::ostringstream{};
+  text << std::setprecision(17) << "metric_v1;" << metricName(config.metric);
+  if (config.metric == Metric::weighted) {
+    auto const &settings = config.weightedMetric;
+    text << ";counter=" << metricName(settings.counter)
+         << ";weights=" << settings.timeWeight << ',' << settings.counterWeight
+         << ";scales=" << settings.timeScale.value_or(0.0) << ','
+         << settings.counterScale.value_or(0.0);
+  }
+  return text.str();
 }
 
 /** @brief Return a mutable copy of the process-default YAML configuration.

@@ -323,9 +323,8 @@ TEST_CASE("automatic geometry preserves per-axis coverage and admits overrides",
       alpaka::onHost::FrameSpec{Vec{64u}, Vec{32u}, alpaka::exec::cpuSerial};
   auto tunables =
       alpakaTune::TunableBundle{alpakaTune::makeAutomaticLaunchTuning(
-          spec, alpakaTune::tuneFrameExtent(
-                    spec, alpakaTune::autoCandidates(
-                              alpakaTune::RVals{Vec{32u}, Vec{64u}})))};
+          spec, alpakaTune::tuneFrameExtent(alpakaTune::autoCandidates(
+                    alpakaTune::RVals{Vec{32u}, Vec{64u}})))};
   auto tuner = alpakaTune::makeTuner(configFor(), tunables, device,
                                      alpakaTune::customMetric("cost"));
   for (unsigned run{}; run < 100u && !tuner.completed(); ++run) {

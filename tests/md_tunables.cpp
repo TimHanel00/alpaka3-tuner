@@ -157,11 +157,11 @@ TEST_CASE("listed MD launch choices compose with coverage restrictions") {
                                      alpakaTune::timing::disabled);
   auto frame = alpaka::onHost::FrameSpec{Vec2{4u, 4u}, Vec2{8u, 2u},
                                          alpaka::exec::cpuSerial};
-  auto extents = alpakaTune::tuneFrameExtent(
-      frame, alpakaTune::CTypes<Small, Large>{}, alpakaTune::mdPolicy::listed);
-  auto counts = alpakaTune::tuneNumFrames(
-      frame, alpakaTune::RVals{Vec2{4u, 4u}, Vec2{2u, 2u}},
-      alpakaTune::mdPolicy::listed);
+  auto extents = alpakaTune::tuneFrameExtent(alpakaTune::CTypes<Small, Large>{},
+                                             alpakaTune::mdPolicy::listed);
+  auto counts =
+      alpakaTune::tuneNumFrames(alpakaTune::RVals{Vec2{4u, 4u}, Vec2{2u, 2u}},
+                                alpakaTune::mdPolicy::listed);
   auto tunables = alpakaTune::makeFrameSpecTuning(
       extents, counts, alpakaTune::preserveCoverage(frame));
   auto tuner = alpakaTune::makeTuner(configuration(), tunables, device,
@@ -179,11 +179,11 @@ TEST_CASE("listed MD launch choices compose with coverage restrictions") {
   auto thread = alpaka::onHost::ThreadSpec{Vec2::fill(1u), Vec2::fill(1u),
                                            alpaka::exec::cpuSerial};
   auto threads = alpakaTune::tuneNumThreads(
-      thread, alpakaTune::CTypes<alpaka::CVec<std::size_t, 1u, 1u>>{},
+      alpakaTune::CTypes<alpaka::CVec<std::size_t, 1u, 1u>>{},
       alpakaTune::mdPolicy::listed);
-  auto blocks = alpakaTune::tuneNumBlocks(
-      thread, alpakaTune::RVals{Vec2{1u, 2u}, Vec2{2u, 1u}},
-      alpakaTune::mdPolicy::listed);
+  auto blocks =
+      alpakaTune::tuneNumBlocks(alpakaTune::RVals{Vec2{1u, 2u}, Vec2{2u, 1u}},
+                                alpakaTune::mdPolicy::listed);
   auto threadTuner = alpakaTune::makeTuner(
       configuration(), alpakaTune::TunableBundle{threads, blocks}, device,
       alpakaTune::customMetric("cost"));

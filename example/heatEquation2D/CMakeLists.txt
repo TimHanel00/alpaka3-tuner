@@ -9,5 +9,4 @@ endif()
 
 if(alpakaTune_DEP_METRICS)
     target_link_libraries(alpakaTune_heatEquation2D PRIVATE alpakaTune::metrics)
-    target_compile_definitions(alpakaTune_heatEquation2D PRIVATE ALPAKA_TUNE_EXAMPLE_METRICS=1)
 endif()

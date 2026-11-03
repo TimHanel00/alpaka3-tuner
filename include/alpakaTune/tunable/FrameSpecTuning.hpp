@@ -137,54 +137,43 @@ inline constexpr auto numBlocks = ALPAKA_TUNE_TUNABLE("numBlocks");
 inline constexpr auto numThreads = ALPAKA_TUNE_TUNABLE("numThreads");
 
 /** One independent FrameSpec frame-extent tuning entry. */
-[[nodiscard]] auto
-tuneFrameExtent(alpaka::onHost::concepts::FrameSpec auto const &, auto values) {
+[[nodiscard]] auto tuneFrameExtent(auto values) {
   return frameExtent(std::move(values));
 }
 
 /** Select how an explicit multidimensional frame-extent list is combined. */
-[[nodiscard]] auto
-tuneFrameExtent(alpaka::onHost::concepts::FrameSpec auto const &, auto values,
-                concepts::MdPolicy auto policy) {
+[[nodiscard]] auto tuneFrameExtent(auto values,
+                                   concepts::MdPolicy auto policy) {
   return frameExtent(std::move(values), policy);
 }
 
 /** One independent FrameSpec frame-count tuning entry. */
-[[nodiscard]] auto
-tuneNumFrames(alpaka::onHost::concepts::FrameSpec auto const &, auto values) {
+[[nodiscard]] auto tuneNumFrames(auto values) {
   return numFrames(std::move(values));
 }
 
 /** Select how an explicit multidimensional frame-count list is combined. */
-[[nodiscard]] auto
-tuneNumFrames(alpaka::onHost::concepts::FrameSpec auto const &, auto values,
-              concepts::MdPolicy auto policy) {
+[[nodiscard]] auto tuneNumFrames(auto values, concepts::MdPolicy auto policy) {
   return numFrames(std::move(values), policy);
 }
 
 /** One independent ThreadSpec block-count tuning entry. */
-[[nodiscard]] auto
-tuneNumBlocks(alpaka::onHost::concepts::ThreadSpec auto const &, auto values) {
+[[nodiscard]] auto tuneNumBlocks(auto values) {
   return numBlocks(std::move(values));
 }
 
 /** Select how an explicit multidimensional block-count list is combined. */
-[[nodiscard]] auto
-tuneNumBlocks(alpaka::onHost::concepts::ThreadSpec auto const &, auto values,
-              concepts::MdPolicy auto policy) {
+[[nodiscard]] auto tuneNumBlocks(auto values, concepts::MdPolicy auto policy) {
   return numBlocks(std::move(values), policy);
 }
 
 /** One independent ThreadSpec thread-count tuning entry. */
-[[nodiscard]] auto
-tuneNumThreads(alpaka::onHost::concepts::ThreadSpec auto const &, auto values) {
+[[nodiscard]] auto tuneNumThreads(auto values) {
   return numThreads(std::move(values));
 }
 
 /** Select how an explicit multidimensional thread-count list is combined. */
-[[nodiscard]] auto
-tuneNumThreads(alpaka::onHost::concepts::ThreadSpec auto const &, auto values,
-               concepts::MdPolicy auto policy) {
+[[nodiscard]] auto tuneNumThreads(auto values, concepts::MdPolicy auto policy) {
   return numThreads(std::move(values), policy);
 }
 
@@ -353,10 +342,9 @@ defaultNumFramesCandidates(alpaka::concepts::Vector auto const &upperLimitValue,
 /** One generated frameExtent entry with its multidimensional shape relation. */
 [[nodiscard]] auto makeDefaultFrameExtentTuning(
     alpaka::onHost::concepts::FrameSpec auto const &frameSpec) {
-  return alpakaTune::constrain(
-      alpakaTune::TunableBundle{
-          tuneFrameExtent(frameSpec, defaultFrameExtentCandidates(frameSpec))},
-      defaultFrameExtentShape(frameSpec));
+  return alpakaTune::constrain(alpakaTune::TunableBundle{tuneFrameExtent(
+                                   defaultFrameExtentCandidates(frameSpec))},
+                               defaultFrameExtentShape(frameSpec));
 }
 
 /** Keep the logical coverage of correlated ThreadSpec candidates unchanged. */
@@ -436,8 +424,7 @@ makeFrameSpecTuning(alpaka::onHost::concepts::FrameSpec auto const &frameSpec) {
   return alpakaTune::constrain(
       alpakaTune::TunableBundle{
           makeDefaultFrameExtentTuning(frameSpec),
-          tuneNumFrames(frameSpec,
-                        defaultNumFramesCandidates(frameSpec.getNumFrames()))},
+          tuneNumFrames(defaultNumFramesCandidates(frameSpec.getNumFrames()))},
       doesNotExceedCoverage(frameSpec));
 }
 
@@ -466,10 +453,9 @@ makeFrameSpecTuning(alpaka::onHost::concepts::FrameSpec auto const &frameSpec) {
   auto [blockValues, threadValues] = threadCandidates(
       threadSpec.getNumBlocks(), threadSpec.getNumThreads(),
       !alpaka::isSeqExecutor(ALPAKA_TYPEOF(threadSpec)::getExecutor()));
-  return makeThreadSpecTuning(
-      tuneNumBlocks(threadSpec, std::move(blockValues)),
-      tuneNumThreads(threadSpec, std::move(threadValues)),
-      preserveCoverage(threadSpec));
+  return makeThreadSpecTuning(tuneNumBlocks(std::move(blockValues)),
+                              tuneNumThreads(std::move(threadValues)),
+                              preserveCoverage(threadSpec));
 }
 
 /** Explicitly permit changed logical coverage for a kernel that traverses its
@@ -551,9 +537,9 @@ makeAutomaticLaunchTuning(alpaka::onHost::concepts::FrameSpec auto const &spec,
       spec.getNumFrames(), spec.getFrameExtents(), false);
   return makeFrameSpecTuning(
       detail::launchOverride<detail::frameExtentName>(
-          tuneFrameExtent(spec, std::move(extentValues)), overrides...),
+          tuneFrameExtent(std::move(extentValues)), overrides...),
       detail::launchOverride<detail::numFramesName>(
-          tuneNumFrames(spec, std::move(countValues)), overrides...),
+          tuneNumFrames(std::move(countValues)), overrides...),
       preserveCoverage(spec));
 }
 
@@ -572,9 +558,9 @@ makeAutomaticLaunchTuning(alpaka::onHost::concepts::ThreadSpec auto const &spec,
       alpaka::isSeqExecutor(ALPAKA_TYPEOF(spec)::getExecutor()));
   return makeThreadSpecTuning(
       detail::launchOverride<detail::numBlocksName>(
-          tuneNumBlocks(spec, std::move(blockValues)), overrides...),
+          tuneNumBlocks(std::move(blockValues)), overrides...),
       detail::launchOverride<detail::numThreadsName>(
-          tuneNumThreads(spec, std::move(threadValues)), overrides...),
+          tuneNumThreads(std::move(threadValues)), overrides...),
       preserveCoverage(spec));
 }
 
@@ -584,9 +570,9 @@ makeAutomaticLaunchTuning(alpaka::onHost::concepts::ThreadSpec auto const &spec,
 makeAutomaticLaunchTuning(alpaka::onHost::concepts::FrameSpec auto const &spec,
                           FullTraversal) {
   return TunableBundle{
-      tuneFrameExtent(spec, autoCandidates(defaultFrameExtentCandidates(spec))),
-      tuneNumFrames(spec, autoCandidates(
-                              defaultNumFramesCandidates(spec.getNumFrames()))),
+      tuneFrameExtent(autoCandidates(defaultFrameExtentCandidates(spec))),
+      tuneNumFrames(
+          autoCandidates(defaultNumFramesCandidates(spec.getNumFrames()))),
   };
 }
 
@@ -599,10 +585,9 @@ makeAutomaticLaunchTuning(alpaka::onHost::concepts::ThreadSpec auto const &spec,
       alpaka::onHost::FrameSpec{spec.getNumBlocks(), spec.getNumThreads(),
                                 ALPAKA_TYPEOF(spec)::getExecutor()};
   return TunableBundle{
-      tuneNumThreads(spec,
-                     autoCandidates(defaultFrameExtentCandidates(logical))),
-      tuneNumBlocks(spec, autoCandidates(defaultNumFramesCandidates(
-                              spec.getNumBlocks())))};
+      tuneNumThreads(autoCandidates(defaultFrameExtentCandidates(logical))),
+      tuneNumBlocks(
+          autoCandidates(defaultNumFramesCandidates(spec.getNumBlocks())))};
 }
 
 } // namespace alpakaTune

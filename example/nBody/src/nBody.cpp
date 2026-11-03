@@ -184,17 +184,17 @@ int example(auto const deviceSpec, auto const computeExec, bool const writePngs,
   // The frame spec describes the logical parallelism exposed to the kernel, not
   // the exact mapping on the threads and the blocks of the backend.
   auto const frameSpec = FrameSpec{numChunks, chunkSize, computeExec};
-  auto const tunables = alpakaTune::TunableBundle{
-      alpakaTune::numFrames(alpakaTune::generate::linSpace(
-          Vec{1_idx}, Vec{frameSpec.getNumFrames()}, Vec{1_idx})),
-      alpakaTune::frameExtent(
-          alpakaTune::generate::linSpace(Vec{1_idx}, Vec{512_idx}, Vec{1_idx})),
-      velocityTileExtent(
-          alpakaTune::CTypes<CVec<IdxType, 32_idx>, CVec<IdxType, 64_idx>,
-                             CVec<IdxType, 128_idx>,
-                             CVec<IdxType, 256_idx>>{})};
-  auto tuner = alpakaTune::makeTuner(tunables, devAcc, computeExec,
-                                     "nBody/updateVelocities");
+  auto tuner = alpakaTune::makeTuner(
+      alpakaTune::TunableBundle{
+          alpakaTune::numFrames(alpakaTune::generate::linSpace(
+              Vec{1_idx}, Vec{frameSpec.getNumFrames()}, Vec{1_idx})),
+          alpakaTune::frameExtent(alpakaTune::generate::linSpace(
+              Vec{1_idx}, Vec{512_idx}, Vec{1_idx})),
+          velocityTileExtent(
+              alpakaTune::CTypes<CVec<IdxType, 32_idx>, CVec<IdxType, 64_idx>,
+                                 CVec<IdxType, 128_idx>,
+                                 CVec<IdxType, 256_idx>>{})},
+      devAcc, "nBody/updateVelocities");
   assert(tuner.info().candidateCount >= 2000u);
 
   // Make an instance of the kernel object to use later
@@ -222,9 +222,8 @@ int example(auto const deviceSpec, auto const computeExec, bool const writePngs,
     // Queue one step of the simulation
     // The kernel bundle contains the kernel first, then all its arguments
     // *except* the accelerator, which is implicitly passed by alpaka.
-    tuner.enqueue(tuningQueue, frameSpec,
-                  KernelBundle{updateVelocitiesKernel, particleData,
-                               velocityTileExtent, dt});
+    tuner.enqueue(tuningQueue, frameSpec, updateVelocitiesKernel, particleData,
+                  velocityTileExtent, dt);
 
     // execute velocity updates using simd concurrency
     onHost::concurrent<BaseType>(

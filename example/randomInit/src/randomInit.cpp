@@ -210,22 +210,18 @@ bool testRandomInitKernels(alpaka::onHost::concepts::Device auto host,
       alpaka::onHost::getFrameSpec(device, computeExec, alpaka::Vec{blockSize});
   using LaunchVec = typename std::remove_cvref_t<ALPAKA_TYPEOF(
       frameSpec.getNumFrames())>::UniVec;
-  auto const numFramesTuning = alpakaTune::tuneNumFrames(
-      frameSpec, alpakaTune::generate::linSpace(
-                     LaunchVec::fill(1u), LaunchVec{frameSpec.getNumFrames()},
-                     LaunchVec::fill(1u)));
-  auto const frameExtentTuning = alpakaTune::tuneFrameExtent(
-      frameSpec,
-      alpakaTune::generate::linSpace(LaunchVec::fill(1u), LaunchVec::fill(512u),
-                                     LaunchVec::fill(1u)));
-  auto const tunables =
-      alpakaTune::TunableBundle{numFramesTuning, frameExtentTuning};
-  auto philoxTuning = alpakaTune::makeTuner(
-      tunables, device, frameSpec.getExecutor(), "randomInit/philox");
-  auto uniformTuning = alpakaTune::makeTuner(
-      tunables, device, frameSpec.getExecutor(), "randomInit/uniform");
-  auto vectorTuning = alpakaTune::makeTuner(
-      tunables, device, frameSpec.getExecutor(), "randomInit/vector");
+  auto const tunables = alpakaTune::TunableBundle{
+      alpakaTune::tuneNumFrames(alpakaTune::generate::linSpace(
+          LaunchVec::fill(1u), LaunchVec{frameSpec.getNumFrames()},
+          LaunchVec::fill(1u))),
+      alpakaTune::tuneFrameExtent(alpakaTune::generate::linSpace(
+          LaunchVec::fill(1u), LaunchVec::fill(512u), LaunchVec::fill(1u)))};
+  auto philoxTuning =
+      alpakaTune::makeTuner(tunables, device, "randomInit/philox");
+  auto uniformTuning =
+      alpakaTune::makeTuner(tunables, device, "randomInit/uniform");
+  auto vectorTuning =
+      alpakaTune::makeTuner(tunables, device, "randomInit/vector");
   assert(philoxTuning.info().candidateCount >= 2000u);
   assert(uniformTuning.info().candidateCount >= 2000u);
   assert(vectorTuning.info().candidateCount >= 2000u);
