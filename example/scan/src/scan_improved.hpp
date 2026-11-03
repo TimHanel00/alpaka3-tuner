@@ -352,21 +352,18 @@ void scan(auto &exec, auto &devAcc, auto &queue,
       onHost::FrameSpec{numChunks, CVec<IdxType, 256u>{}, exec};
   using LaunchVec = typename std::remove_cvref_t<ALPAKA_TYPEOF(
       frameSpec.getNumFrames())>::UniVec;
-  auto const numFramesTuning = alpakaTune::tuneNumFrames(
-      frameSpec, alpakaTune::generate::linSpace(
-                     LaunchVec::fill(1u), LaunchVec{frameSpec.getNumFrames()},
-                     LaunchVec::fill(1u)));
-  auto const frameExtentTuning = alpakaTune::tuneFrameExtent(
-      frameSpec,
-      alpakaTune::CTypes<CVec<IdxType, 16u>, CVec<IdxType, 32u>,
-                         CVec<IdxType, 64u>, CVec<IdxType, 128u>,
-                         CVec<IdxType, 256u>, CVec<IdxType, 512u>>{});
-  auto const tunables =
-      alpakaTune::TunableBundle{numFramesTuning, frameExtentTuning};
-  auto scanTuning = alpakaTune::makeTuner(
-      tunables, devAcc, frameSpec.getExecutor(), "scanImproved/blocks");
-  auto incrementTuning = alpakaTune::makeTuner(
-      tunables, devAcc, frameSpec.getExecutor(), "scanImproved/increments");
+  auto const tunables = alpakaTune::TunableBundle{
+      alpakaTune::tuneNumFrames(alpakaTune::generate::linSpace(
+          LaunchVec::fill(1u), LaunchVec{frameSpec.getNumFrames()},
+          LaunchVec::fill(1u))),
+      alpakaTune::tuneFrameExtent(
+          alpakaTune::CTypes<CVec<IdxType, 16u>, CVec<IdxType, 32u>,
+                             CVec<IdxType, 64u>, CVec<IdxType, 128u>,
+                             CVec<IdxType, 256u>, CVec<IdxType, 512u>>{})};
+  auto scanTuning =
+      alpakaTune::makeTuner(tunables, devAcc, "scanImproved/blocks");
+  auto incrementTuning =
+      alpakaTune::makeTuner(tunables, devAcc, "scanImproved/increments");
 
   if (frameSpec.getNumFrames() > 1_idx) {
     // problem does not fit in 1 frame, recurse
@@ -406,14 +403,10 @@ void scan(auto &exec, auto &devAcc, auto &queue,
     blockSums.keepAlive(queue);
   } else {
     // problem fits within 1 frame
-    auto const scanBundle =
-        KernelBundle{scanBlocks, numChunks, chunkExtent, inputVec, outputVec};
-    std::size_t scanExecutions = 0u;
-    while (alpakaTune::example::applicationRunsRemain(scanExecutions,
-                                                      scanTuning)) {
-      scanTuning.enqueue(queue, frameSpec, scanBundle);
-      ++scanExecutions;
-    }
+    for (std::size_t runs = 0u;
+         alpakaTune::example::applicationRunsRemain(runs, scanTuning); ++runs)
+      scanTuning.enqueue(queue, frameSpec, scanBlocks, numChunks, chunkExtent,
+                         inputVec, outputVec);
   }
 }
 } // namespace alpaka::example::scan

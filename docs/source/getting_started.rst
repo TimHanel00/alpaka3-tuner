@@ -132,7 +132,7 @@ set ``ALPAKA_TUNE_CONFIG`` before starting the program to use a different policy
 See :doc:`configuration`.
 
 Verify the README snippet
-~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The dedicated ``alpakaTune_readme_example`` test extracts the C++ code directly
 from the README, builds it, and runs it with the default YAML policy. CMake also

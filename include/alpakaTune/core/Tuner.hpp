@@ -16,6 +16,9 @@
 #include "alpakaTune/store/RuntimeHistory.hpp"
 #include "alpakaTune/strategy/StrategyFactory.hpp"
 #include "alpakaTune/tunable/Tunables.hpp"
+#ifdef ALPAKA_TUNE_METRICS
+#include "alpakaTune/metrics/MetricMeasurement.hpp"
+#endif
 
 #include <alpaka/alpaka.hpp>
 
@@ -67,29 +70,20 @@ struct BestImprovement {
   double elapsedSeconds{};
 };
 
-template <typename... Entries>
-inline constexpr std::size_t customMetricTokenCount =
-    (std::size_t{0u} + ... +
-     (isCustomMetricToken<std::remove_cvref_t<Entries>> ? 1u : 0u));
-
-template <typename... Entries> struct MetricPolicyFor {
-  using type = metric::Timing;
-};
-template <typename First, typename... Rest>
-struct MetricPolicyFor<First, Rest...> {
-  using type =
-      std::conditional_t<isCustomMetricToken<std::remove_cvref_t<First>>,
-                         std::remove_cvref_t<First>,
-                         typename MetricPolicyFor<Rest...>::type>;
-};
-template <typename... Entries>
-using SelectedMetricPolicy = typename MetricPolicyFor<Entries...>::type;
-
 template <typename Device, bool Enabled> struct MeasurementTimerStorage {};
 
 template <typename Device> struct MeasurementTimerStorage<Device, true> {
   std::optional<timing::KernelTimer<Device>> timer;
 };
+
+/** Device placeholder of a tuner whose context is not restricted to a device.
+ *
+ * Such a tuner takes its device from the current queue and shares one tuning
+ * context and persistent history between all devices of that queue type.
+ */
+struct UnboundDevice {};
+
+template <> struct MeasurementTimerStorage<UnboundDevice, true> {};
 
 /** @brief Normalized sigmoid used to admit adaptive revisits.
  *
@@ -161,6 +155,39 @@ inline constexpr bool isReservedLaunchName =
     sameName<Name, frameExtentName> || sameName<Name, numFramesName> ||
     sameName<Name, numThreadsName> || sameName<Name, numBlocksName>;
 
+/** Launch candidates must keep the dimension of the value they replace. */
+template <typename Candidate, typename Reference>
+inline constexpr bool matchesLaunchDimension =
+    alpaka::trait::GetVec_t<std::remove_cvref_t<Candidate>>::dim() ==
+    alpaka::trait::GetVec_t<std::remove_cvref_t<Reference>>::dim();
+
+/** Whether two launch specifications of one type carry the same values. */
+template <typename Spec>
+[[nodiscard]] auto sameLaunchValues(Spec const &lhs, Spec const &rhs) -> bool {
+  if constexpr (alpaka::onHost::isFrameSpec_v<Spec>)
+    return lhs.getNumFrames() == rhs.getNumFrames() &&
+           lhs.getFrameExtents() == rhs.getFrameExtents();
+  else
+    return lhs.getNumBlocks() == rhs.getNumBlocks() &&
+           lhs.getNumThreads() == rhs.getNumThreads();
+}
+
+/** Convert a launch candidate to the index type of the value it replaces. */
+template <typename Reference>
+[[nodiscard]] constexpr auto toLaunchIndexType(auto const &candidate) {
+  using Index = typename alpaka::trait::GetVec_t<
+      std::remove_cvref_t<Reference>>::value_type;
+  using Candidate = std::remove_cvref_t<decltype(candidate)>;
+  if constexpr (std::same_as<
+                    typename alpaka::trait::GetVec_t<Candidate>::value_type,
+                    Index>)
+    return candidate;
+  else if constexpr (alpaka::concepts::Vector<Candidate>)
+    return alpaka::pCast<Index>(candidate);
+  else
+    return static_cast<Index>(candidate);
+}
+
 template <typename T> [[nodiscard]] auto typeName() -> std::string {
 #if defined(__clang__) || defined(__GNUC__)
   std::string_view signature{__PRETTY_FUNCTION__};
@@ -199,6 +226,121 @@ template <typename T>
     return std::string{value.getName()};
   else
     return printable(value);
+}
+
+/** @brief The context arguments of makeTuner, searchable by category.
+ *
+ * Predicates receive std::type_identity<Argument> so that they remain constant
+ * expressions for arguments carrying runtime state.
+ */
+template <typename... Arguments> struct TuningContext {
+  std::tuple<Arguments...> arguments;
+
+  constexpr explicit TuningContext(Arguments const &...entries)
+      : arguments{entries...} {}
+
+  /** Index of the first device argument, or the argument count. */
+  static constexpr std::size_t deviceIndex = [] {
+    auto index = std::size_t{0u};
+    auto found = false;
+    ((found = found || alpaka::onHost::concepts::Device<Arguments>,
+      index += found ? 0u : 1u),
+     ...);
+    return index;
+  }();
+  /** Whether the context is restricted to, and checked against, a device. */
+  static constexpr bool hasDevice = deviceIndex < sizeof...(Arguments);
+  using DeviceType = typename std::conditional_t<
+      hasDevice,
+      std::tuple_element<deviceIndex, std::tuple<Arguments..., UnboundDevice>>,
+      std::type_identity<UnboundDevice>>::type;
+
+  /** The first device argument; only available when hasDevice. */
+  [[nodiscard]] constexpr auto getDevice() const -> DeviceType const &
+    requires hasDevice
+  {
+    return std::get<deviceIndex>(arguments);
+  }
+
+  /** All arguments matching the predicate, in argument order. */
+  constexpr auto filter(auto predicate) const {
+    return std::apply(
+        [&](auto const &...entries) {
+          return std::tuple_cat([&](auto const &entry) {
+            if constexpr (predicate(std::type_identity<ALPAKA_TYPEOF(entry)>{}))
+              return std::tuple{entry};
+            else
+              return std::tuple{};
+          }(entries)...);
+        },
+        arguments);
+  }
+
+  /** The first argument matching the predicate, or fallback. */
+  constexpr auto search(auto predicate, auto fallback) const {
+    auto const matches = filter(predicate);
+    if constexpr (std::tuple_size_v<ALPAKA_TYPEOF(matches)> == 0u)
+      return fallback;
+    else
+      return std::get<0>(matches);
+  }
+};
+template <typename... Arguments>
+TuningContext(Arguments const &...)
+    -> TuningContext<std::decay_t<Arguments const>...>;
+
+inline constexpr auto isMetricArgument = []<typename T>(std::type_identity<T>) {
+  return isCustomMetricToken<T>;
+};
+inline constexpr auto isIdentityArgument =
+    []<typename T>(std::type_identity<T>) { return !isCustomMetricToken<T>; };
+
+/** The object an argument describes: the handle target for HasGet handles. */
+[[nodiscard]] constexpr auto const &contextTarget(auto const &argument) {
+  if constexpr (alpaka::concepts::HasGet<decltype(argument)>)
+    return *argument.get();
+  else
+    return argument;
+}
+
+/** Identity names of one context argument.
+ *
+ * Every alpaka facet the argument reports (API, device kind, executor)
+ * contributes a name, so a queue, a device, a backend and the bare API tag
+ * restrict the context alike; any other value contributes its own name.
+ */
+[[nodiscard]] auto contextNames(auto const &argument)
+    -> std::vector<std::string> {
+  auto const &target = contextTarget(argument);
+  auto names = std::vector<std::string>{};
+  if constexpr (requires { alpaka::internal::getApi(target); })
+    names.push_back("api=" + printable(alpaka::internal::getApi(target)));
+  if constexpr (requires { alpaka::internal::getDeviceKind(target); })
+    names.push_back("deviceKind=" +
+                    printable(alpaka::internal::getDeviceKind(target)));
+  if constexpr (requires { alpaka::internal::getExecutor(target); })
+    names.push_back("executor=" +
+                    printable(alpaka::internal::getExecutor(target)));
+  if (names.empty() || requires { argument.getName(); })
+    names.push_back(typeName<ALPAKA_TYPEOF(argument)>() + "=" +
+                    identityName(argument));
+  return names;
+}
+
+/** Sorted identity names of a context, used when writing persistent data. */
+template <typename... Arguments>
+[[nodiscard]] auto contextNames(TuningContext<Arguments...> const &context)
+    -> std::vector<std::string> {
+  auto names = std::vector<std::string>{};
+  std::apply(
+      [&](auto const &...entries) {
+        (std::ranges::copy(contextNames(entries), std::back_inserter(names)),
+         ...);
+      },
+      context.filter(isIdentityArgument));
+  std::sort(names.begin(), names.end());
+  names.erase(std::unique(names.begin(), names.end()), names.end());
+  return names;
 }
 
 inline auto hashFingerprint(std::string_view text) -> std::string {
@@ -318,14 +460,41 @@ void forEachTupleType(Callable &&callable) {
 
 } // namespace detail
 
+namespace plugin {
+/** @brief Customization point: how Tuner::enqueue submits through a queue.
+ *
+ * A queue type that measures its own launches, such as alpakaMetrics::Queue,
+ * specializes this with enabled = true and
+ * @code
+ * static void enqueue(auto &tuner, Queue const &queue, auto const &spec,
+ *                     auto const &kernelBundle);
+ * @endcode
+ * Tuner::enqueue then delegates to it, so applications launch through such a
+ * queue exactly as through an alpaka queue. See <alpakaTune/metrics.hpp>.
+ */
+template <typename Queue> struct Enqueue {
+  static constexpr bool enabled = false;
+};
+} // namespace plugin
+
 /** @brief Device-bound owner of scheduling, measurement, and persistence.
  *
  * Each enqueue call performs exactly one application-requested kernel launch.
  * The tuner selects the candidate and may time it, but never decides how often
- * the surrounding application calls enqueue. One instance binds lazily to one
- * launch prototype and one persistent fingerprint.
+ * the surrounding application calls enqueue.
+ *
+ * @attention The first enqueue binds the instance to a kernel type, kernel
+ * argument types and a launch specification type (frame or thread layout,
+ * dimension, index type, compile-time extents, executor); later enqueues with
+ * other types throw. It never binds to values: neither the kernel arguments
+ * nor the FrameSpec/ThreadSpec values restrict the tuning context, because the
+ * problem size may be carried by either. When they change between enqueues,
+ * all launches feed one context and the selected configuration is the one that
+ * performed best across those changes, which depends on the application. To
+ * tune for an exact problem size, use one tuner instance per problem size, for
+ * example by passing the size as a context string to makeTuner().
  */
-template <typename TunablesType, typename Device, typename MetricPolicy>
+template <typename TunablesType, typename Context, typename MetricPolicy>
 class Tuner {
 public:
   using Traits = detail::TunablesTraits<TunablesType>;
@@ -344,7 +513,8 @@ public:
       Traits::template has<detail::numThreadsName>;
   static_assert(!(tunesFrameSpec && tunesThreadSpec),
                 "A tuner cannot combine FrameSpec and ThreadSpec parameters.");
-  using MeasurementTimer = detail::timing::KernelTimer<Device>;
+  using Device = typename Context::DeviceType;
+  static constexpr bool deviceBound = Context::hasDevice;
 
   /** @brief Construct a tuner from a validated policy and identity components.
    *
@@ -353,13 +523,11 @@ public:
    */
   Tuner(TunerConfig defaults, std::shared_ptr<detail::HistoryStore> history,
         std::shared_ptr<detail::CompleteHistoryStore> completeHistory,
-        TunablesType tunables, Device device,
-        std::vector<std::string> identityEntries, std::string metricName,
+        TunablesType tunables, Context context, std::string metricName,
         MetricPolicy metricPolicy = {})
       : m_defaults(std::move(defaults)), m_history(std::move(history)),
         m_completeHistory(std::move(completeHistory)),
-        m_tunables(std::move(tunables)), m_device(std::move(device)),
-        m_identityEntries(std::move(identityEntries)),
+        m_tunables(std::move(tunables)), m_context(std::move(context)),
         m_metricName(std::move(metricName)),
         m_metricPolicy(std::move(metricPolicy)),
         m_baseRandomSeed(m_defaults.randomSeed
@@ -398,12 +566,14 @@ public:
       return TuningMetricKind::timing;
   }
   /** @brief Timing clock, absent when the application owns measurement. */
-  [[nodiscard]] static constexpr auto runtimeMeasurementSource() noexcept
+  [[nodiscard]] auto runtimeMeasurementSource() const noexcept
       -> std::optional<RuntimeMeasurementSource> {
     if constexpr (usesCustomMetric)
       return std::nullopt;
+    else if constexpr (deviceBound)
+      return detail::timing::KernelTimer<Device>::measurementSource();
     else
-      return MeasurementTimer::measurementSource();
+      return m_unboundMeasurementSource;
   }
 
   /** Whether exploration ended. Adaptive selection continues afterward. */
@@ -667,6 +837,11 @@ public:
    * state, the launch may be a warm-up, measurement, adaptive revisit, or
    * terminal winner replay.
    *
+   * @attention frameSpec and the kernel arguments may change between calls;
+   * they do not restrict the tuning context (see Tuner). Every launch uses the
+   * current values. A measured configuration that is illegal for new launch
+   * values is rejected and the best remaining one is used instead.
+   *
    * @warning A measured GPU launch synchronizes the queue and commonly adds
    * approximately 20--40 microseconds of instrumentation overhead. After the
    * first measured runtime below 200 microseconds, info() exposes a persistent
@@ -680,6 +855,10 @@ public:
    */
   void enqueue(Queue const &queue, FrameSpec const &frameSpec,
                alpaka::KernelBundle<Kernel, Args...> const &prototype) {
+    if constexpr (plugin::Enqueue<Queue>::enabled) {
+      plugin::Enqueue<Queue>::enqueue(*this, queue, frameSpec, prototype);
+      return;
+    }
     if (m_budget) {
       static_cast<void>(enqueueBudgeted(queue, frameSpec, prototype, false));
       return;
@@ -689,6 +868,21 @@ public:
         tryFastReplay(queue, frameSpec, prototype))
       return;
     static_cast<void>(enqueueObserved(queue, frameSpec, prototype));
+  }
+
+  /** @brief Select and perform one launch of a kernel and its arguments.
+   *
+   * Mirrors alpaka's Queue::enqueue(spec, kernel, args...) and forwards to the
+   * KernelBundle overload.
+   */
+  template <typename Queue, typename LaunchSpec, typename Kernel,
+            typename... Args>
+    requires(!alpaka::concepts::KernelBundle<Kernel>)
+  void enqueue(Queue const &queue, LaunchSpec const &launchSpec,
+               Kernel const &kernel, Args &&...args) {
+    enqueue(queue, launchSpec,
+            alpaka::KernelBundle{kernel, alpaka::onHost::makeAccessibleOnAcc(
+                                             std::forward<Args>(args))...});
   }
 
   template <typename Queue, typename FrameSpec, typename Kernel,
@@ -706,9 +900,7 @@ public:
     if (m_budget)
       return enqueueBudgeted(queue, frameSpec, prototype);
     m_recommendationSecondsSinceLastLaunch = 0.0;
-    if (!(queue.getDevice() == m_device))
-      throw std::invalid_argument{
-          "The queue device does not match this tuner's device."};
+    bindQueueDevice(queue);
     validatePrototype(prototype);
     auto const fingerprint =
         makeFingerprint<FrameSpec, decltype(prototype)>(frameSpec, prototype);
@@ -716,9 +908,10 @@ public:
         fingerprint,
         detail::typeName<
             typename std::remove_cvref_t<decltype(prototype)>::KernelFn>(),
-        launchDescription(frameSpec));
+        launchDescription<FrameSpec>());
     bindLaunchValidator<Queue>(frameSpec, prototype);
     initialiseScheduling();
+    revalidateOnLaunchChange(frameSpec);
     reconcileUserInvalidations();
     reconcileMissingMetric();
     if (m_terminal &&
@@ -1159,33 +1352,23 @@ private:
   void bindBudgetContext(Queue const &queue, Spec const &spec,
                          Bundle const &bundle) {
     static constexpr char tag{};
-    if (!(queue.getDevice() == m_device))
-      throw std::invalid_argument{
-          "The queue device does not match this tuner's device."};
+    bindQueueDevice(queue);
     if (m_budgetContextTag) {
       if (m_budgetContextTag != &tag)
         throw std::logic_error{
-            "A tuner is bound to one kernel and one launch configuration."};
-      m_budgetContextValidator(&spec);
+            "A tuner is bound to one kernel, argument and launch "
+            "specification type."};
+      if (!launchValuesChanged(spec))
+        return;
+      bindLaunchValidator<Queue>(spec, bundle);
+      revalidateMeasuredCandidates();
       return;
     }
     validatePrototype(bundle);
     bindFingerprint(makeFingerprint(spec, bundle),
                     detail::typeName<typename Bundle::KernelFn>(),
-                    launchDescription(spec));
-    m_budgetContextValidator = [original = spec](void const *raw) {
-      auto const &current = *static_cast<Spec const *>(raw);
-      auto same = false;
-      if constexpr (alpaka::onHost::isFrameSpec_v<Spec>)
-        same = original.getNumFrames() == current.getNumFrames() &&
-               original.getFrameExtents() == current.getFrameExtents();
-      else
-        same = original.getNumBlocks() == current.getNumBlocks() &&
-               original.getNumThreads() == current.getNumThreads();
-      if (!same)
-        throw std::logic_error{
-            "A tuner is bound to one kernel and one launch configuration."};
-    };
+                    launchDescription<Spec>());
+    static_cast<void>(launchValuesChanged(spec));
     bindLaunchValidator<Queue>(spec, bundle);
     initialiseCompileVariants<Queue, Spec, Bundle>();
     initialiseScheduling();
@@ -1202,8 +1385,10 @@ private:
   auto enqueueBudgeted(Queue const &queue, Spec const &spec,
                        alpaka::KernelBundle<Kernel, Args...> const &bundle,
                        bool observed = true) -> LaunchObservation {
+    auto const contextBound = m_budgetContextTag != nullptr;
+    bindBudgetContext(queue, spec, bundle);
     auto const production =
-        m_budgetContextTag && m_explorationComplete && m_budgetIncumbent &&
+        contextBound && m_explorationComplete && m_budgetIncumbent &&
         !m_budgetEpochChanged &&
         (m_defaults.selection == SelectionPolicy::fixed ||
          m_budget->launches < m_budgetNextCheck) &&
@@ -1212,7 +1397,6 @@ private:
     auto const start = production ? std::chrono::steady_clock::time_point{}
                                   : std::chrono::steady_clock::now();
     m_recommendationSecondsSinceLastLaunch = 0.0;
-    bindBudgetContext(queue, spec, bundle);
     reconcileUserInvalidations();
     reconcileMissingMetric();
     if (!production)
@@ -1305,9 +1489,7 @@ private:
   tryFastReplay(Queue const &queue, FrameSpec const &frameSpec,
                 alpaka::KernelBundle<Kernel, Args...> const &prototype)
       -> bool {
-    if (!(queue.getDevice() == m_device))
-      throw std::invalid_argument{
-          "The queue device does not match this tuner's device."};
+    bindQueueDevice(queue);
     validatePrototype(prototype);
     auto const fingerprint =
         makeFingerprint<FrameSpec, decltype(prototype)>(frameSpec, prototype);
@@ -1315,9 +1497,10 @@ private:
         fingerprint,
         detail::typeName<
             typename std::remove_cvref_t<decltype(prototype)>::KernelFn>(),
-        launchDescription(frameSpec));
+        launchDescription<FrameSpec>());
     bindLaunchValidator<Queue>(frameSpec, prototype);
     initialiseScheduling();
+    revalidateOnLaunchChange(frameSpec);
     reconcileUserInvalidations();
     reconcileMissingMetric();
     if (!m_terminal)
@@ -1736,7 +1919,7 @@ private:
       -> LearnedModelContextDescriptor {
     auto descriptor = LearnedModelContextDescriptor{};
     descriptor.schemaVersion = m_space.usesCandidateCatalog() ? 2u : 1u;
-    auto const properties = m_device.getDeviceProperties();
+    auto const properties = contextDeviceProperties();
     descriptor.deviceClass = properties.warpSize > 1u ? LearnedDeviceClass::gpu
                                                       : LearnedDeviceClass::cpu;
     auto domainSizeFeature = std::log1p(static_cast<float>(m_candidateCount));
@@ -1761,7 +1944,7 @@ private:
          std::log1p(static_cast<float>(properties.sharedMemPerBlockBytes))},
     };
     auto identity = std::string{};
-    for (auto const &entry : m_identityEntries) {
+    for (auto const &entry : detail::contextNames(m_context)) {
       identity += entry;
       identity.push_back('\n');
     }
@@ -2899,9 +3082,10 @@ private:
             auto const &prototype = *static_cast<Bundle const *>(rawBundle);
             auto const bundle =
                 self.template rebuildBundle<CompileValues...>(prototype, tuple);
+            auto const &device = self.template contextDevice<Queue>();
             return self.template withLaunchSpec<CompileValues...>(
-                launch, bundle, tuple, [&](auto const &spec) {
-                  return self.hardwareLaunchLegal(spec, bundle);
+                device, launch, bundle, tuple, [&](auto const &spec) {
+                  return self.hardwareLaunchLegal(device, spec, bundle);
                 });
           });
       m_compileVariants.emplace_back(
@@ -3027,6 +3211,24 @@ private:
     }
   }
 
+  /** @brief Select a launch candidate in the shape of the value it replaces.
+   *
+   * Tunables are declared without a launch spec, so their values are matched
+   * to the FrameSpec or ThreadSpec passed to enqueue here: the dimension must
+   * agree, and the index type is converted to the spec's index type.
+   */
+  template <FixedString Name, typename... CompileValues, typename Reference>
+  [[nodiscard]] auto
+  checkedLaunchValue(std::array<std::size_t, dimensionCount> const &indices,
+                     Reference const &) const {
+    using Candidate = decltype(launchValueFor<Name, CompileValues...>(indices));
+    static_assert(detail::matchesLaunchDimension<Candidate, Reference>,
+                  "Launch tunable candidates must have the same dimension as "
+                  "the FrameSpec or ThreadSpec passed to enqueue.");
+    return detail::toLaunchIndexType<Reference>(
+        launchValueFor<Name, CompileValues...>(indices));
+  }
+
   template <typename Argument, typename... CompileValues>
   [[nodiscard]] auto rebuildArgument(
       Argument const &argument,
@@ -3051,25 +3253,26 @@ private:
         prototype.getArgs());
   }
 
-  template <typename... CompileValues, typename LaunchSpec, typename Bundle,
-            typename Callable>
+  template <typename... CompileValues, typename LaunchDevice,
+            typename LaunchSpec, typename Bundle, typename Callable>
   decltype(auto)
-  withLaunchSpec(LaunchSpec const &prototypeLaunch, Bundle const &bundle,
-                 CandidateIndices const &indices, Callable &&callable) const {
+  withLaunchSpec(LaunchDevice const &device, LaunchSpec const &prototypeLaunch,
+                 Bundle const &bundle, CandidateIndices const &indices,
+                 Callable &&callable) const {
 
     if constexpr (alpaka::onHost::isFrameSpec_v<
                       std::remove_cvref_t<LaunchSpec>>) {
       auto const numFrames = [&] {
         if constexpr (Traits::template has<detail::numFramesName>)
-          return launchValueFor<detail::numFramesName, CompileValues...>(
-              indices);
+          return checkedLaunchValue<detail::numFramesName, CompileValues...>(
+              indices, prototypeLaunch.getNumFrames());
         else
           return prototypeLaunch.getNumFrames();
       }();
       auto const frameExtent = [&] {
         if constexpr (Traits::template has<detail::frameExtentName>)
-          return launchValueFor<detail::frameExtentName, CompileValues...>(
-              indices);
+          return checkedLaunchValue<detail::frameExtentName, CompileValues...>(
+              indices, prototypeLaunch.getFrameExtents());
         else
           return prototypeLaunch.getFrameExtents();
       }();
@@ -3078,18 +3281,18 @@ private:
           std::remove_cvref_t<LaunchSpec>::getExecutor()};
       if constexpr (Traits::template has<detail::numThreadsName> ||
                     Traits::template has<detail::numBlocksName>) {
-        auto const derived = deriveThreadSpec(m_device, frame, bundle);
+        auto const derived = deriveThreadSpec(device, frame, bundle);
         auto const blocks = [&] {
           if constexpr (Traits::template has<detail::numBlocksName>)
-            return launchValueFor<detail::numBlocksName, CompileValues...>(
-                indices);
+            return checkedLaunchValue<detail::numBlocksName, CompileValues...>(
+                indices, derived.getNumBlocks());
           else
             return derived.getNumBlocks();
         }();
         auto const threads = [&] {
           if constexpr (Traits::template has<detail::numThreadsName>)
-            return launchValueFor<detail::numThreadsName, CompileValues...>(
-                indices);
+            return checkedLaunchValue<detail::numThreadsName, CompileValues...>(
+                indices, derived.getNumThreads());
           else
             return derived.getNumThreads();
         }();
@@ -3104,15 +3307,15 @@ private:
                              std::remove_cvref_t<LaunchSpec>>) {
       auto const blocks = [&] {
         if constexpr (Traits::template has<detail::numBlocksName>)
-          return launchValueFor<detail::numBlocksName, CompileValues...>(
-              indices);
+          return checkedLaunchValue<detail::numBlocksName, CompileValues...>(
+              indices, prototypeLaunch.getNumBlocks());
         else
           return prototypeLaunch.getNumBlocks();
       }();
       auto const threads = [&] {
         if constexpr (Traits::template has<detail::numThreadsName>)
-          return launchValueFor<detail::numThreadsName, CompileValues...>(
-              indices);
+          return checkedLaunchValue<detail::numThreadsName, CompileValues...>(
+              indices, prototypeLaunch.getNumThreads());
         else
           return prototypeLaunch.getNumThreads();
       }();
@@ -3127,8 +3330,72 @@ private:
     }
   }
 
-  template <typename Spec, typename Bundle>
-  [[nodiscard]] auto hardwareLaunchLegal(Spec const &spec,
+  /** @brief Check or record the device that a queue contributes.
+   *
+   * A device-bound tuner rejects queues of other devices. An unbound tuner
+   * records the first queue's device; it validates the shared candidate space
+   * against that device and launches on whichever device each queue uses.
+   */
+  template <typename Queue> void bindQueueDevice(Queue const &queue) {
+    if constexpr (deviceBound) {
+      if (!(queue.getDevice() == m_context.getDevice()))
+        throw std::invalid_argument{
+            "The queue device does not match this tuner's device."};
+    } else {
+      // An unbound context follows the device of the current queue, so
+      // candidate legality and device features never use another device's
+      // limits. The queue type, and with it the device type, is fixed by the
+      // first enqueue; only a device change refreshes the cached properties.
+      using QueueDevice = std::remove_cvref_t<decltype(queue.getDevice())>;
+      if (m_unboundDevice && *static_cast<QueueDevice const *>(
+                                 m_unboundDevice.get()) == queue.getDevice())
+        return;
+      auto device = std::make_shared<QueueDevice const>(queue.getDevice());
+      m_unboundDeviceProperties = device->getDeviceProperties();
+      if constexpr (!usesCustomMetric)
+        m_unboundMeasurementSource =
+            detail::timing::KernelTimer<QueueDevice>::measurementSource();
+      m_unboundDevice = std::move(device);
+    }
+  }
+
+  /** @brief Device that validates the candidate space of this context. */
+  template <typename Queue>
+  [[nodiscard]] auto contextDevice() const -> decltype(auto) {
+    if constexpr (deviceBound) {
+      return m_context.getDevice();
+    } else {
+      using QueueDevice = std::remove_cvref_t<
+          decltype(std::declval<Queue const &>().getDevice())>;
+      if (!m_unboundDevice)
+        throw std::logic_error{
+            "An unbound tuner takes its device from the current queue."};
+      return *static_cast<QueueDevice const *>(m_unboundDevice.get());
+    }
+  }
+
+  [[nodiscard]] auto contextDeviceProperties() const
+      -> alpaka::onHost::DeviceProperties {
+    if constexpr (deviceBound) {
+      return m_context.getDevice().getDeviceProperties();
+    } else {
+      if (!m_unboundDeviceProperties)
+        throw std::logic_error{
+            "An unbound tuner takes its device from the current queue."};
+      return *m_unboundDeviceProperties;
+    }
+  }
+
+  [[nodiscard]] auto contextDeviceName() const -> std::string {
+    if constexpr (deviceBound)
+      return detail::identityName(m_context.getDevice());
+    else
+      return "unbound";
+  }
+
+  template <typename LaunchDevice, typename Spec, typename Bundle>
+  [[nodiscard]] auto hardwareLaunchLegal(LaunchDevice const &device,
+                                         Spec const &spec,
                                          Bundle const &bundle) const -> bool {
     if constexpr (alpaka::onHost::isFrameSpec_v<Spec>) {
       auto const extents = spec.getFrameExtents();
@@ -3141,10 +3408,10 @@ private:
           return false;
         elements *= static_cast<std::size_t>(extents[d]);
       }
-      return hardwareLaunchLegal(deriveThreadSpec(m_device, spec, bundle),
+      return hardwareLaunchLegal(device, deriveThreadSpec(device, spec, bundle),
                                  bundle);
     } else {
-      auto const properties = m_device.getDeviceProperties();
+      auto const properties = device.getDeviceProperties();
       auto const threads = spec.getNumThreads();
       auto const blocks = spec.getNumBlocks();
       constexpr auto dimensions = ALPAKA_TYPEOF(threads)::dim();
@@ -3196,10 +3463,11 @@ private:
     auto const bundle = rebuildBundle<CompileValues...>(prototype, indices);
 
     auto launch = [&](auto const &launchQueue) {
+      auto const device = launchQueue.getDevice();
       withLaunchSpec<CompileValues...>(
-          prototypeLaunch, bundle, indices, [&](auto const &spec) {
+          device, prototypeLaunch, bundle, indices, [&](auto const &spec) {
             if constexpr (Traits::generatesCandidates)
-              if (!hardwareLaunchLegal(spec, bundle))
+              if (!hardwareLaunchLegal(device, spec, bundle))
                 throw std::invalid_argument{
                     "The selected launch geometry exceeds current kernel or "
                     "device resources."};
@@ -3220,11 +3488,31 @@ private:
     if constexpr (usesCustomMetric) {
       launch(queue);
     } else {
+#ifdef ALPAKA_TUNE_METRICS
+      if (m_defaults.metric != Metric::runtime) {
+        auto const sample =
+            m_metricsQueue.measure(m_defaults, queue, m_kernelName, launch);
+        runtimeSeconds = sample.seconds;
+        recordInstrumentationOverheadWarning(sample.seconds);
+        recordMetric(candidate, sample.score, beginActivation, endActivation);
+        return;
+      }
+#endif
       if constexpr (std::same_as<ALPAKA_TYPEOF(queue.getTiming()),
                                  alpaka::timing::Enabled>) {
-        if (!m_measurementTimer.timer)
-          m_measurementTimer.timer.emplace(m_device);
-        runtimeSeconds = m_measurementTimer.timer->measure(queue, launch);
+        if constexpr (deviceBound) {
+          if (!m_measurementTimer.timer) {
+            auto device = m_context.getDevice();
+            m_measurementTimer.timer.emplace(device);
+          }
+          runtimeSeconds = m_measurementTimer.timer->measure(queue, launch);
+        } else {
+          // Devices of an unbound tuner may change between launches.
+          auto device = queue.getDevice();
+          auto timer =
+              detail::timing::KernelTimer<ALPAKA_TYPEOF(device)>{device};
+          runtimeSeconds = timer.measure(queue, launch);
+        }
       } else {
         throw std::invalid_argument{
             "A measured tuning launch requires a timing-enabled queue."};
@@ -3319,29 +3607,18 @@ private:
     identity << "kernel=" << detail::typeName<typename BundleType::KernelFn>()
              << '\n';
     identity << "bundle=" << detail::typeName<BundleType>() << '\n';
-    identity << "device=" << detail::identityName(m_device) << '\n';
+    identity << "device=" << contextDeviceName() << '\n';
     identity << "metric=" << tuningMetricKindName(metricKind()) << ':'
              << m_metricName << '\n';
     identity << "executor="
              << detail::printable(
                     std::remove_cvref_t<LaunchSpec>::getExecutor())
              << '\n';
-    if constexpr (alpaka::onHost::concepts::FrameSpec<
-                      std::remove_cvref_t<LaunchSpec>>) {
-      identity << "frame=" << detail::printable(launchSpec.getNumFrames())
-               << ':' << detail::printable(launchSpec.getFrameExtents())
-               << '\n';
-    } else if constexpr (alpaka::onHost::concepts::ThreadSpec<
-                             std::remove_cvref_t<LaunchSpec>>) {
-      identity << "thread=" << detail::printable(launchSpec.getNumBlocks())
-               << ':' << detail::printable(launchSpec.getNumThreads()) << '\n';
-    } else {
-      static_assert(alpaka::onHost::concepts::ThreadOrFrameSpec<
-                        std::remove_cvref_t<LaunchSpec>>,
-                    "alpakaTune::Tuner::enqueue requires "
-                    "alpaka::onHost::FrameSpec or ThreadSpec.");
-    }
-    for (auto const &entry : m_identityEntries)
+    // Launch values are not part of the identity, exactly like kernel
+    // argument values: the problem size may live in either of them. See the
+    // "Tuning context" documentation of makeTuner().
+    identity << "launch=" << launchDescription<LaunchSpec>() << '\n';
+    for (auto const &entry : detail::contextNames(m_context))
       identity << "context=" << entry << '\n';
     std::apply(
         [&identity](auto const &...entries) {
@@ -3405,7 +3682,7 @@ private:
     identity << "launch=" << m_launchSpecification << '\n';
     identity << "metric=" << tuningMetricKindName(metricKind()) << ':'
              << m_metricName << '\n';
-    for (auto const &entry : m_identityEntries)
+    for (auto const &entry : detail::contextNames(m_context))
       identity << "context=" << entry << '\n';
     std::apply(
         [&identity](auto const &...entries) {
@@ -3441,29 +3718,64 @@ private:
     }
   }
 
+  /** @brief Type of a launch specification: frame or thread layout, vector
+   * types (dimension, index type and compile-time extents) and executor.
+   * Its runtime values are deliberately absent. */
   template <typename LaunchSpec>
-  [[nodiscard]] static auto launchDescription(LaunchSpec const &launchSpec)
-      -> std::string {
+  [[nodiscard]] static auto launchDescription() -> std::string {
+    using Spec = std::remove_cvref_t<LaunchSpec>;
+    static_assert(alpaka::onHost::concepts::ThreadOrFrameSpec<Spec>,
+                  "alpakaTune::Tuner::enqueue requires "
+                  "alpaka::onHost::FrameSpec or ThreadSpec.");
     std::ostringstream description;
-    if constexpr (alpaka::onHost::concepts::FrameSpec<
-                      std::remove_cvref_t<LaunchSpec>>)
-      description << "FrameSpec{"
-                  << detail::printable(launchSpec.getNumFrames()) << ','
-                  << detail::printable(launchSpec.getFrameExtents())
-                  << ", executor="
-                  << detail::printable(
-                         std::remove_cvref_t<LaunchSpec>::getExecutor())
-                  << '}';
-    else if constexpr (alpaka::onHost::concepts::ThreadSpec<
-                           std::remove_cvref_t<LaunchSpec>>)
-      description << "ThreadSpec{"
-                  << detail::printable(launchSpec.getNumBlocks()) << ','
-                  << detail::printable(launchSpec.getNumThreads())
-                  << ", executor="
-                  << detail::printable(
-                         std::remove_cvref_t<LaunchSpec>::getExecutor())
-                  << '}';
+    if constexpr (alpaka::onHost::concepts::FrameSpec<Spec>)
+      description
+          << "FrameSpec{"
+          << detail::typeName<decltype(std::declval<Spec>().getNumFrames())>()
+          << ','
+          << detail::typeName<
+                 decltype(std::declval<Spec>().getFrameExtents())>();
+    else
+      description
+          << "ThreadSpec{"
+          << detail::typeName<decltype(std::declval<Spec>().getNumBlocks())>()
+          << ','
+          << detail::typeName<decltype(std::declval<Spec>().getNumThreads())>();
+    description << ", executor=" << detail::printable(Spec::getExecutor())
+                << '}';
     return description.str();
+  }
+
+  /** @brief Records the launch values; true on the first call or a change. */
+  template <typename Spec>
+  [[nodiscard]] auto launchValuesChanged(Spec const &spec) -> bool {
+    if (m_lastLaunch &&
+        detail::sameLaunchValues(*static_cast<Spec const *>(m_lastLaunch.get()),
+                                 spec))
+      return false;
+    m_lastLaunch = std::make_shared<Spec const>(spec);
+    return true;
+  }
+
+  /** @brief Re-validates measured candidates after the launch values changed.
+   *
+   * The context is not restricted to launch values, so a measured candidate
+   * may be illegal for the new values; it is rejected for the rest of the
+   * context and the best remaining measured candidate replaces it. */
+  template <typename Spec> void revalidateOnLaunchChange(Spec const &spec) {
+    if (launchValuesChanged(spec))
+      revalidateMeasuredCandidates();
+  }
+
+  void revalidateMeasuredCandidates() {
+    validateKnownCandidates();
+    if (m_budget) {
+      refreshBudgetIncumbent();
+    } else if (m_bestCandidate != std::numeric_limits<std::size_t>::max() &&
+               m_rejected.at(m_bestCandidate)) {
+      m_bestCandidate = currentBestCandidate().value_or(
+          std::numeric_limits<std::size_t>::max());
+    }
   }
 
   void bindFingerprint(std::string const &fingerprint, std::string kernelName,
@@ -3474,7 +3786,8 @@ private:
       m_launchSpecification = std::move(launchSpecification);
     } else if (m_fingerprint != fingerprint) {
       throw std::logic_error{
-          "A tuner is bound to one kernel and one launch configuration."};
+          "A tuner is bound to one kernel, argument and launch "
+          "specification type."};
     }
   }
 
@@ -4390,9 +4703,9 @@ private:
               std::chrono::system_clock::now().time_since_epoch()}
               .count();
     cache["metadata"] = {
-        {"identity_entries", m_identityEntries},
+        {"identity_entries", detail::contextNames(m_context)},
         {"kernel", m_kernelName},
-        {"device", detail::identityName(m_device)},
+        {"device", contextDeviceName()},
         {"launch_specification", m_launchSpecification},
         {"metric",
          {{"kind", tuningMetricKindName(metricKind())},
@@ -4526,7 +4839,8 @@ private:
   double m_budgetPendingHostCost{};
   double m_budgetPendingIncumbent{};
   void const *m_budgetContextTag{};
-  std::function<void(void const *)> m_budgetContextValidator;
+  /** Most recent launch specification; its type is fixed by the context. */
+  std::shared_ptr<void const> m_lastLaunch;
   std::size_t m_budgetCachedDispatch{};
   std::size_t m_budgetDispatchCandidate{
       std::numeric_limits<std::size_t>::max()};
@@ -4537,9 +4851,18 @@ private:
   std::shared_ptr<detail::HistoryStore> m_history;
   std::shared_ptr<detail::CompleteHistoryStore> m_completeHistory;
   TunablesType m_tunables;
-  Device m_device;
+  /** makeTuner's context arguments, including the bound device if any.
+   * Immutable: a different context requires a new tuner instance. */
+  Context const m_context;
   detail::MeasurementTimerStorage<Device, !usesCustomMetric> m_measurementTimer;
-  std::vector<std::string> m_identityEntries;
+  /** First queue device of an unbound tuner; empty for a device-bound one. */
+  std::shared_ptr<void const> m_unboundDevice;
+  std::optional<alpaka::onHost::DeviceProperties> m_unboundDeviceProperties;
+  std::optional<RuntimeMeasurementSource> m_unboundMeasurementSource;
+#ifdef ALPAKA_TUNE_METRICS
+  /** alpakaMetrics queue used when TunerConfig::metric is not runtime. */
+  metrics::detail::MeasurementQueue m_metricsQueue;
+#endif
   std::string m_metricName;
   [[no_unique_address]] MetricPolicy m_metricPolicy;
   std::vector<std::size_t> m_dimensionSizes;
@@ -4622,62 +4945,77 @@ private:
 #endif
 };
 
-/** @brief Construct a device-bound tuner from an explicit policy.
+/** @brief Construct a tuner from an explicit policy.
  *
  * @param config Tuner policy, validated before construction.
  * @param tunables Runtime, compile-time, and launch-shape candidate bundle.
- * @param device Physical device to which subsequent queues must belong.
- * @param identityEntries Additional stable workload identity components and,
- * optionally, one customMetric() compile-time policy token.
+ * @param contextArguments Components restricting the tuning context. Their
+ * order does not affect the persistent fingerprint.
+ * - the first alpaka::onHost::concepts::Device binds the tuner to that
+ *   device; enqueue then rejects queues of other devices.
+ * - every argument restricts the context by the alpaka facets it reports
+ *   (API, device kind, executor), looked through get() for handles such as
+ *   devices and queues; a queue, a backend and the bare API tag therefore
+ *   restrict it alike. Strings and other values restrict it by their name.
+ * - at most one customMetric() token selects an application-owned metric.
  *
- * Identity-entry order does not affect the persistent fingerprint.
+ * @attention The context is never restricted by launch or kernel argument
+ * values. A tuner enqueued with changing FrameSpec values or problem sizes
+ * selects the configuration that performed best across all of them. To tune
+ * for an exact problem size, create one tuner per size, e.g.
+ * makeTuner(config, tunables, device, "n=4096").
+ *
+ * @warning Without a device argument the tuner is not bound to a device. It
+ * accepts queues of any device of the first queue's type and validates each
+ * launch against the device of the queue it is enqueued on. All devices share
+ * one tuning context and persistent history, so measurements and retired
+ * candidates of one device steer the others. Pass the device, or at least an
+ * API, device kind or string, to keep measurements of different devices
+ * apart.
  */
-template <typename TunablesType, typename Device, typename... IdentityEntries>
+template <typename TunablesType, typename... ContextArguments>
   requires detail::isTunableBundle<TunablesType>
 [[nodiscard]] auto makeTuner(TunerConfig config, TunablesType tunables,
-                             Device device,
-                             IdentityEntries const &...identityEntries) {
-  static_assert(detail::customMetricTokenCount<IdentityEntries...> <= 1u,
-                "makeTuner accepts at most one customMetric() token.");
-  using MetricPolicy = detail::SelectedMetricPolicy<IdentityEntries...>;
-  auto metricPolicy = [&] {
-    if constexpr (std::same_as<MetricPolicy, metric::Timing>)
-      return metric::Timing{};
-    else
-      return std::get<MetricPolicy const &>(std::tie(identityEntries...));
-  }();
+                             ContextArguments const &...contextArguments) {
+  auto context = detail::TuningContext{contextArguments...};
+  static_assert(
+      std::tuple_size_v<decltype(context.filter(detail::isMetricArgument))> <=
+          1u,
+      "makeTuner accepts at most one customMetric() token.");
+  auto metricPolicy =
+      context.search(detail::isMetricArgument, metric::Timing{});
+  using MetricPolicy = decltype(metricPolicy);
   config.validate();
-  auto names = std::vector<std::string>{};
-  names.reserve(sizeof...(IdentityEntries));
   auto metricName = std::string{"runtime_seconds"};
-  auto consumeEntry = [&](auto const &entry) {
-    using Entry = std::remove_cvref_t<decltype(entry)>;
-    if constexpr (detail::isCustomMetricToken<Entry>)
-      metricName = entry.name;
-    else
-      names.push_back(detail::typeName<Entry>() + "=" +
-                      detail::identityName(entry));
-  };
-  (consumeEntry(identityEntries), ...);
-  std::sort(names.begin(), names.end());
+  if constexpr (!std::same_as<MetricPolicy, metric::Timing>) {
+    if (config.metric != Metric::runtime)
+      throw std::invalid_argument{
+          "customMetric() and TunerConfig::metric select competing metrics."};
+    metricName = metricPolicy.name;
+  } else if (config.metric != Metric::runtime) {
+    metricName = metricIdentity(config);
+  }
   auto history = detail::historyStore(config.history.file, config.history.read,
                                       config.history.write);
   auto completeHistory = detail::completeHistoryStore(
       config.completeHistory.file, config.completeHistory.read,
       config.completeHistory.write);
-  return Tuner<TunablesType, Device, MetricPolicy>{
-      std::move(config),     std::move(history),     std::move(completeHistory),
-      std::move(tunables),   std::move(device),      std::move(names),
-      std::move(metricName), std::move(metricPolicy)};
+  return Tuner<TunablesType, ALPAKA_TYPEOF(context), MetricPolicy>{
+      std::move(config),      std::move(history), std::move(completeHistory),
+      std::move(tunables),    std::move(context), std::move(metricName),
+      std::move(metricPolicy)};
 }
 
-/** @brief Construct a tuner using the process default YAML configuration. */
-template <typename TunablesType, typename Device, typename... IdentityEntries>
+/** @brief Construct a tuner using the process default YAML configuration.
+ *
+ * Accepts the same context arguments as the TunerConfig overload, including
+ * its warning for tuners without a device argument.
+ */
+template <typename TunablesType, typename... ContextArguments>
   requires detail::isTunableBundle<TunablesType>
-[[nodiscard]] auto makeTuner(TunablesType tunables, Device device,
-                             IdentityEntries const &...identityEntries) {
-  return makeTuner(tunerConfig(), std::move(tunables), std::move(device),
-                   identityEntries...);
+[[nodiscard]] auto makeTuner(TunablesType tunables,
+                             ContextArguments const &...contextArguments) {
+  return makeTuner(tunerConfig(), std::move(tunables), contextArguments...);
 }
 
 } // namespace alpakaTune

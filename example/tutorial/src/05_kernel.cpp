@@ -102,30 +102,23 @@ void testVectorAddKernel(alpaka::onHost::concepts::Device auto device,
   // launch the 1-dimensional kernel with scalar size
   auto frameSpec = alpaka::onHost::FrameSpec{32u, 32u, computeExec};
   auto const tunables = alpakaTune::TunableBundle{
-      alpakaTune::tuneNumFrames(
-          frameSpec,
-          alpakaTune::generate::linSpace(
-              Vec1D{1u}, Vec1D{frameSpec.getNumFrames()}, Vec1D{1u})),
+      alpakaTune::tuneNumFrames(alpakaTune::generate::linSpace(
+          Vec1D{1u}, Vec1D{frameSpec.getNumFrames()}, Vec1D{1u})),
       alpakaTune::tuneFrameExtent(
-          frameSpec,
           alpakaTune::generate::linSpace(Vec1D{1u}, Vec1D{512u}, Vec1D{1u}))};
-  auto scalarTuning = alpakaTune::makeTuner(
-      tunables, device, frameSpec.getExecutor(), "tutorial/05/scalar");
-  auto vectorTuning = alpakaTune::makeTuner(
-      tunables, device, frameSpec.getExecutor(), "tutorial/05/vector");
+  auto scalarTuning =
+      alpakaTune::makeTuner(tunables, device, "tutorial/05/scalar");
+  auto vectorTuning =
+      alpakaTune::makeTuner(tunables, device, "tutorial/05/vector");
   verify(scalarTuning.info().candidateCount >= 2000u);
   verify(vectorTuning.info().candidateCount >= 2000u);
 
   std::cout << "Testing VectorAddKernel with scalar indices with a grid of "
             << frameSpec << "\n";
-  auto const scalarBundle =
-      alpaka::KernelBundle{VectorAddKernel{}, in1_d, in2_d, out_d, size};
-  std::size_t scalarExecutions = 0u;
-  while (alpakaTune::example::applicationRunsRemain(scalarExecutions,
-                                                    scalarTuning)) {
-    scalarTuning.enqueue(tuningQueue, frameSpec, scalarBundle);
-    ++scalarExecutions;
-  }
+  for (std::size_t runs = 0u;
+       alpakaTune::example::applicationRunsRemain(runs, scalarTuning); ++runs)
+    scalarTuning.enqueue(tuningQueue, frameSpec, VectorAddKernel{}, in1_d,
+                         in2_d, out_d, size);
 
   // copy the results from the device to the host
   alpaka::onHost::memcpy(queue, out_h, out_d);
@@ -147,14 +140,10 @@ void testVectorAddKernel(alpaka::onHost::concepts::Device auto device,
 
   std::cout << "Testing VectorAddKernel with vector indices with a grid of "
             << frameSpec << "\n";
-  auto const vectorBundle = alpaka::KernelBundle{VectorAddKernel1D{}, in1_d,
-                                                 in2_d, out_d, Vec1D{size}};
-  std::size_t vectorExecutions = 0u;
-  while (alpakaTune::example::applicationRunsRemain(vectorExecutions,
-                                                    vectorTuning)) {
-    vectorTuning.enqueue(tuningQueue, frameSpec, vectorBundle);
-    ++vectorExecutions;
-  }
+  for (std::size_t runs = 0u;
+       alpakaTune::example::applicationRunsRemain(runs, vectorTuning); ++runs)
+    vectorTuning.enqueue(tuningQueue, frameSpec, VectorAddKernel1D{}, in1_d,
+                         in2_d, out_d, Vec1D{size});
 
   // copy the results from the device to the host
   alpaka::onHost::memcpy(queue, out_h, out_d);
@@ -221,28 +210,22 @@ void testVectorAddKernel3D(alpaka::onHost::concepts::Device auto device,
   // launch the 3-dimensional kernel
   auto frameSpec =
       alpaka::onHost::FrameSpec{Vec3D{5, 5, 1}, Vec3D{4, 4, 4}, computeExec};
-  auto const tunables = alpakaTune::TunableBundle{
-      alpakaTune::tuneNumFrames(frameSpec, alpakaTune::generate::linSpace(
-                                               Vec3D::fill(1u),
-                                               Vec3D{frameSpec.getNumFrames()},
-                                               Vec3D::fill(1u))),
-      alpakaTune::tuneFrameExtent(
-          frameSpec, alpakaTune::generate::linSpace(
-                         Vec3D::fill(1u), Vec3D::fill(5u), Vec3D::fill(1u)))};
-  auto tuner = alpakaTune::makeTuner(tunables, device, frameSpec.getExecutor(),
-                                     "tutorial/05/3d");
+  auto tuner = alpakaTune::makeTuner(
+      alpakaTune::TunableBundle{
+          alpakaTune::tuneNumFrames(alpakaTune::generate::linSpace(
+              Vec3D::fill(1u), Vec3D{frameSpec.getNumFrames()},
+              Vec3D::fill(1u))),
+          alpakaTune::tuneFrameExtent(alpakaTune::generate::linSpace(
+              Vec3D::fill(1u), Vec3D::fill(5u), Vec3D::fill(1u)))},
+      device, "tutorial/05/3d");
   verify(tuner.info().candidateCount >= 2000u);
   std::cout << "Testing VectorAddKernel3D with vector indices with a grid of "
             << frameSpec << "\n";
 
-  auto const kernelBundle =
-      alpaka::KernelBundle{VectorAddKernel3D{}, in1_d, in2_d, out_d, ndsize};
-  std::size_t completedExecutions = 0u;
-  while (
-      alpakaTune::example::applicationRunsRemain(completedExecutions, tuner)) {
-    tuner.enqueue(tuningQueue, frameSpec, kernelBundle);
-    ++completedExecutions;
-  }
+  for (std::size_t runs = 0u;
+       alpakaTune::example::applicationRunsRemain(runs, tuner); ++runs)
+    tuner.enqueue(tuningQueue, frameSpec, VectorAddKernel3D{}, in1_d, in2_d,
+                  out_d, ndsize);
 
   // copy the results from the device to the host
   alpaka::onHost::memcpy(queue, out_h, out_d);

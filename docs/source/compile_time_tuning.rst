@@ -52,7 +52,7 @@ vectors, both Alpaka ``CVec`` and ``std::integer_sequence`` are accepted:
    using Small = alpaka::CVec<std::size_t, 32u>;
    using Large = std::integer_sequence<std::size_t, 64u>;
    auto tunables = alpakaTune::TunableBundle{
-       alpakaTune::tuneFrameExtent(frame, alpakaTune::CTypes<Small, Large>{})};
+       alpakaTune::tuneFrameExtent(alpakaTune::CTypes<Small, Large>{})};
 
 The sequence is materialized as a ``CVec`` for launch and restriction
 predicates. This tunes the frame extent and leaves frame count fixed. Add

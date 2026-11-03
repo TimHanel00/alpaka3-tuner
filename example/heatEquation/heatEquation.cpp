@@ -575,12 +575,10 @@ auto tune(alpaka::onHost::concepts::Device auto &device, auto const &queue,
   config.history = {.read = false, .write = false};
   config.completeHistory = {.read = false, .write = false};
   auto tuner = alpakaTune::makeTuner(
-      config, tunables, device, executor,
+      config, tunables, device,
       alpakaTune::elapsedTimeMetric("batched_stencil_seconds"),
       "heatEquation/v" + std::to_string(catalogVersion) + "/fp64/" +
           std::to_string(p.size));
-  auto const prototype =
-      alpaka::KernelBundle{TunedStencil{}, input, output, p, variantName};
   auto const launchSpec = alpaka::onHost::ThreadSpec{
       Vec{baseline.getNumBlocks()}, Vec{baseline.getNumThreads()}, executor};
   auto decode = [&](auto const &normalized) {
@@ -617,7 +615,8 @@ auto tune(alpaka::onHost::concepts::Device auto &device, auto const &queue,
   while (!tuner.completed()) {
     if (++launches > *config.maximumExecutions)
       throw std::runtime_error{"Bounded tuner launch count exceeded"};
-    tuner.enqueue(queue, launchSpec, prototype);
+    tuner.enqueue(queue, launchSpec, TunedStencil{}, input, output, p,
+                  variantName);
     auto const choice = decode(tuner.lastConfig().configuration);
     auto const seconds = dispatch(choice.variant, [&](auto variant) {
       return measure(device, queue,

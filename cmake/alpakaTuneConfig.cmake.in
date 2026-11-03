@@ -68,6 +68,7 @@ if("metrics" IN_LIST alpakaTune_FIND_COMPONENTS AND NOT TARGET alpakaTune::metri
     set_target_properties(
         alpakaTune::metrics
         PROPERTIES INTERFACE_LINK_LIBRARIES "alpakaTune::alpakaTune;alpakaMetrics::alpakaMetrics"
+                   INTERFACE_COMPILE_DEFINITIONS "ALPAKA_TUNE_METRICS=1"
     )
 endif()
 check_required_components(alpakaTune)

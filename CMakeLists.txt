@@ -101,6 +101,8 @@ if(alpakaTune_DEP_METRICS)
     add_library(alpakaTune_metrics INTERFACE)
     add_library(alpakaTune::metrics ALIAS alpakaTune_metrics)
     target_link_libraries(alpakaTune_metrics INTERFACE alpakaTune::alpakaTune alpakaMetrics::alpakaMetrics)
+    # Every translation unit of a consumer must agree on built-in metric support.
+    target_compile_definitions(alpakaTune_metrics INTERFACE ALPAKA_TUNE_METRICS=1)
 endif()
 
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})

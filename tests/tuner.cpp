@@ -219,6 +219,33 @@ auto main() -> int {
       firstContextSequence == randomSequence("seed-context-b"))
     return EXIT_FAILURE;
 
+  {
+    // An unbound tuner follows the device of each queue it is enqueued on.
+    auto unbound = alpakaTune::makeTuner(contextSeedConfig, tunables);
+    auto otherDevice = selector.makeDevice(0u);
+    auto otherQueue =
+        alpakaTune::makeQueue(otherDevice, alpaka::queueKind::nonBlocking,
+                              alpakaTune::timing::enabled);
+    for (std::size_t launch = 0u; launch < 4u; ++launch)
+      unbound.enqueue(launch % 2u ? otherQueue : queue, frameSpec, bundle);
+    alpaka::onHost::wait(queue);
+    alpaka::onHost::wait(otherQueue);
+    if (unbound.info().measuredCandidateCount == 0u)
+      return EXIT_FAILURE;
+  }
+  {
+    // Launch values, like kernel argument values, never restrict the context:
+    // changing the FrameSpec values continues the same tuning context.
+    auto shapes = alpakaTune::makeTuner(contextSeedConfig, tunables, device);
+    auto const twoFrames =
+        alpaka::onHost::FrameSpec{Index{2u}, Index{1u}, executor};
+    for (std::size_t launch = 0u; launch < 6u; ++launch)
+      shapes.enqueue(queue, launch % 2u ? twoFrames : frameSpec, bundle);
+    alpaka::onHost::wait(queue);
+    if (shapes.info().executionCount != 6u)
+      return EXIT_FAILURE;
+  }
+
   auto tuner = alpakaTune::makeTuner(
       alpakaTune::TunerConfig::fromYaml(configuration), tunables, device,
       alpaka::deviceKind::cpu, alpaka::api::host, executor, "tuner-test");
@@ -335,12 +362,10 @@ auto main() -> int {
   // required, yet the tuner rebuilds the FrameSpec for each candidate.
   auto const frameTunables = alpakaTune::constrain(
       alpakaTune::TunableBundle{
-          alpakaTune::tuneNumFrames(frameSpec,
-                                    alpakaTune::RVals<Index>{std::vector<Index>{
-                                        Index{1u}, Index{2u}}}),
-          alpakaTune::tuneFrameExtent(
-              frameSpec, alpakaTune::RVals<Index>{std::vector<Index>{
-                             Index{1u}, Index{2u}}})},
+          alpakaTune::tuneNumFrames(alpakaTune::RVals<Index>{
+              std::vector<Index>{Index{1u}, Index{2u}}}),
+          alpakaTune::tuneFrameExtent(alpakaTune::RVals<Index>{
+              std::vector<Index>{Index{1u}, Index{2u}}})},
       alpakaTune::restrict(
           numFrames, frameExtent,
           [](alpaka::concepts::VectorOrScalar auto const &frames,
@@ -451,9 +476,9 @@ auto main() -> int {
   auto const threadSpec = alpaka::onHost::ThreadSpec{
       StaticLaunchValue{}, StaticLaunchValue{}, executor};
   auto const numBlocksTunable = alpakaTune::tuneNumBlocks(
-      threadSpec, alpakaTune::CTypes<StaticLaunchValue, SequenceLaunchValue>{});
+      alpakaTune::CTypes<StaticLaunchValue, SequenceLaunchValue>{});
   auto const numThreadsTunable = alpakaTune::tuneNumThreads(
-      threadSpec, alpakaTune::CTypes<StaticLaunchValue, SequenceLaunchValue>{});
+      alpakaTune::CTypes<StaticLaunchValue, SequenceLaunchValue>{});
   auto const threadTunables =
       alpakaTune::TunableBundle{alpakaTune::makeThreadSpecTuning(
           numBlocksTunable, numThreadsTunable,

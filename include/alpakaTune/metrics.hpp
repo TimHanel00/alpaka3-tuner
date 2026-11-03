@@ -4,36 +4,15 @@
 
 #include <alpakaMetrics/alpakaMetrics.hpp>
 #include <alpakaTune/alpakaTune.hpp>
+#include <alpakaTune/metrics/MetricMeasurement.hpp>
 
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 
 /** Optional, explicit launch measurement and scoring integration. */
 namespace alpakaTune::metrics {
-namespace detail {
-/** Captures the selected kernel's returned handle, without inspecting history.
- */
-template <typename Queue> class CapturingQueue {
-public:
-  CapturingQueue(Queue const &queue,
-                 std::optional<alpakaMetrics::Measurement> &measurement)
-      : m_queue(queue), m_measurement(measurement) {}
-  auto getDevice() const { return m_queue.getDevice(); }
-  auto getTiming() const { return m_queue.getTiming(); }
-  auto getQueueKind() const { return m_queue.getQueueKind(); }
-
-  void enqueue(alpaka::onHost::concepts::ThreadOrFrameSpec auto const &spec,
-               alpaka::concepts::KernelBundle auto const &bundle) const {
-    m_measurement.emplace(m_queue.enqueue(spec, bundle));
-  }
-  void enqueue(auto const &event) const { m_queue.enqueue(event); }
-
-private:
-  Queue const &m_queue;
-  std::optional<alpakaMetrics::Measurement> &m_measurement;
-};
-} // namespace detail
 
 /** Stable handle tied to the tuner execution that produced it. */
 template <typename Tuner> class MeasuredLaunch {
@@ -85,3 +64,30 @@ void provideMetrics(Tuner &tuner, MeasuredLaunch<Tuner> const &launch) {
   tuner.provideMetrics(launch.getResults());
 }
 } // namespace alpakaTune::metrics
+
+/** @brief alpakaMetrics plugin: Tuner::enqueue measures through the queue.
+ *
+ * With this header included, tuner.enqueue(metricsQueue, spec, kernel, ...)
+ * launches the selected kernel once, scores its measurement with the tuner's
+ * customMetric() objective, and clears the queue's retained measurements. A
+ * tuner using the default runtime metric times the launch as usual.
+ */
+template <typename Queue>
+struct alpakaTune::plugin::Enqueue<alpakaMetrics::Queue<Queue>> {
+  static constexpr bool enabled = true;
+
+  static void enqueue(auto &tuner, alpakaMetrics::Queue<Queue> const &queue,
+                      auto const &spec, auto const &kernelBundle) {
+    if constexpr (std::remove_cvref_t<decltype(tuner)>::usesCustomMetric) {
+      auto const launch = metrics::enqueue(tuner, queue, spec, kernelBundle);
+      metrics::provideMetrics(tuner, launch);
+      queue.clearMeasurements();
+    } else {
+      // Default timing still launches through the metrics queue; the
+      // forwarding queue only keeps this specialization from recursing.
+      std::optional<alpakaMetrics::Measurement> measurement;
+      tuner.enqueue(metrics::detail::CapturingQueue{queue, measurement}, spec,
+                    kernelBundle);
+    }
+  }
+};

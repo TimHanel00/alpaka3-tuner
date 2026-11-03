@@ -67,8 +67,7 @@ Launch helpers accept the policy as their third argument. For a two-dimensional
 .. code-block:: cpp
 
    auto tunables = alpakaTune::TunableBundle{
-       alpakaTune::tuneFrameExtent(
-           frame, alpakaTune::CTypes<Small, Large>{}, alpakaTune::mdPolicy::listed)};
+       alpakaTune::tuneFrameExtent(alpakaTune::CTypes<Small, Large>{}, alpakaTune::mdPolicy::listed)};
 
 ``tuneNumFrames``, ``tuneNumBlocks``, and ``tuneNumThreads`` accept the same
 policy. ``listed`` limits choices within one vector; use a relation when
@@ -85,10 +84,8 @@ and ``frame``, replace its tunable bundle with:
 
    auto tunables = alpakaTune::TunableBundle{
        candidates,
-       alpakaTune::tuneNumFrames(
-           frame, alpakaTune::RVals<Index>{Index{1u}, Index{2u}, Index{4u}}),
-       alpakaTune::tuneFrameExtent(
-           frame, alpakaTune::RVals<Index>{Index{32u}, Index{64u}, Index{128u}})};
+       alpakaTune::tuneNumFrames(alpakaTune::RVals<Index>{Index{1u}, Index{2u}, Index{4u}}),
+       alpakaTune::tuneFrameExtent(alpakaTune::RVals<Index>{Index{32u}, Index{64u}, Index{128u}})};
 
 The helpers use reserved launch names; **do not** add their markers to the
 kernel arguments. They replace the relevant fields in the launch specification.
@@ -103,8 +100,8 @@ exact coverage. Attach that requirement explicitly:
 .. code-block:: cpp
 
    auto launchChoices = alpakaTune::makeFrameSpecTuning(
-       alpakaTune::tuneFrameExtent(frame, extentCandidates),
-       alpakaTune::tuneNumFrames(frame, frameCountCandidates),
+       alpakaTune::tuneFrameExtent(extentCandidates),
+       alpakaTune::tuneNumFrames(frameCountCandidates),
        alpakaTune::preserveCoverage(frame));
 
 Here the two candidate lists are application-defined. ``preserveCoverage``

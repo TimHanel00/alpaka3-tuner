@@ -4,7 +4,7 @@ file(GLOB_RECURSE _alpakaTune_headers RELATIVE "${_alpakaTune_header_root}" "${_
 set(_alpakaTune_generated_root "${CMAKE_CURRENT_BINARY_DIR}/generated")
 set(_alpakaTune_generated_sources "")
 foreach(_header IN LISTS _alpakaTune_headers)
-    if(_header STREQUAL "alpakaTune/metrics.hpp" AND NOT alpakaTune_DEP_METRICS)
+    if(_header MATCHES "^alpakaTune/metrics(\.hpp|/)" AND NOT alpakaTune_DEP_METRICS)
         continue()
     endif()
     set(_source "${_alpakaTune_generated_root}/${_header}.cpp")

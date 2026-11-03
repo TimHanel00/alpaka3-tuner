@@ -20,16 +20,14 @@ Build and dependency ownership
        -DalpakaMetrics_DEP_PAPI=OFF
    cmake --build build-metrics
 
-``alpakaTune_DEP_METRICS`` defaults to ``OFF``. With it enabled, alpakaTune
+``alpakaTune_DEP_METRICS`` defaults to ``OFF``. alpakaTune owns the Alpaka
+revision in both modes and fetches the Alpaka 3.0.0 release
+(``eb677e8d7f70d79b35df25d9002f94ba669b6f44``). With metrics enabled it then
 fetches `alpakaMetrics
-<https://github.com/TimHanel00/alpakaMetrics/tree/b2f3fbf5086f875a1fea41dabe198df8bf76f7f1>`_
-first and uses its Alpaka dependency. The metrics project's pinned source owns
-that revision; the tuner does not populate its standalone Alpaka dependency.
-Both libraries and all consumers share one ``alpaka::alpaka`` target.
-
-With metrics disabled, the fallback remains Alpaka revision
-``b7d339d07056a9a2a6c4051cc3927157bc5f0d51``. Metrics and PAPI are not fetched or
-discovered in this configuration.
+<https://github.com/TimHanel00/alpakaMetrics/tree/b2f3fbf5086f875a1fea41dabe198df8bf76f7f1>`_,
+which only fetches Alpaka itself when no ``alpaka::alpaka`` target exists, so
+both libraries and all consumers share the tuner's ``alpaka::alpaka`` target.
+With metrics disabled, metrics and PAPI are not fetched or discovered.
 
 An existing build directory can be switched without removing its cache:
 
@@ -40,11 +38,8 @@ An existing build directory can be switched without removing its cache:
    cmake -S . -B build-metrics -DalpakaTune_DEP_METRICS=ON
    cmake --build build-metrics
 
-Reconfiguration regenerates the active target graph. Dependencies owned by
-metrics occupy a separate FetchContent directory from the standalone fallback;
-inactive directories remain cached. A standalone Alpaka source override and
-stale metrics-revision cache entries do not override metrics ownership when
-metrics is enabled.
+Reconfiguration regenerates the active target graph. Dependencies of metrics
+occupy a separate FetchContent directory; inactive directories remain cached.
 
 PAPI is independent of the integration option. Set
 ``alpakaMetrics_DEP_PAPI=ON`` for counters. Upstream defaults to bundled PAPI;
@@ -53,8 +48,31 @@ options control additional native events. Disabling PAPI retains queue elapsed
 time and the adapter. Counter availability also depends on hardware and access
 permissions; successful configuration does not guarantee collection.
 
-Using configured queues
------------------------
+Selecting the metric
+--------------------
+
+The minimized metric is tuner policy and belongs to ``TunerConfig``:
+
+.. code-block:: cpp
+
+   auto config = alpakaTune::tunerConfig();
+   config.metric = alpakaTune::Metric::instructions;
+   auto tuner = alpakaTune::makeTuner(config, alpakaTune::TunableBundle{...}, device);
+   tuner.enqueue(queue, frameSpec, Kernel{}, args...); // a plain alpaka queue
+
+``Metric::runtime`` (the default) uses the tuner's event timing. ``elapsedTime``,
+``instructions``, ``l2Misses`` and ``weighted`` measure each tuning launch
+through an alpakaMetrics queue that the tuner wraps around the application's
+queue; ``weightedMetric`` holds the counter, weights and scales of
+``weighted``. YAML spells them ``tuning.metric`` and ``tuning.weighted_metric``.
+The metric and its settings are part of the persistent identity. A metric other
+than ``runtime`` requires linking ``alpakaTune::metrics`` and is rejected by
+``TunerConfig::validate()`` otherwise; counter metrics cannot drive a runtime
+budget, and ``customMetric()`` cannot be combined with a configured metric.
+The selection is a runtime branch per measured launch.
+
+Application-scored objectives
+-----------------------------
 
 Link the optional ``alpakaTune::metrics`` CMake target and include
 ``<alpakaTune/metrics.hpp>``. An installed consumer requests
@@ -103,10 +121,12 @@ Runnable examples
 All three examples retain runtime as their default. Additional objectives are
 ``elapsed-time``, ``instructions``, ``l2-misses``, and ``weighted``:
 
-* ``vectorAdd`` introduces the configured queue and defaults to instructions as
-  its weighted counter.
+The ``--objective`` options only set ``TunerConfig::metric``; the examples
+enqueue on ordinary alpaka queues.
+
+* ``vectorAdd`` defaults to instructions as its weighted counter.
 * ``heatEquation2D`` tunes only the stencil; its boundary launch is fixed and
-  uses the same underlying queue. L2 misses are its default weighted counter.
+  uses the same queue. L2 misses are its default weighted counter.
 * ``matrixMultiplication`` compares tiling choices under instructions or cache
   misses, with L2 misses as its default weighted counter.
 

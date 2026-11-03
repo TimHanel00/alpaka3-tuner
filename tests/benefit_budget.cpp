@@ -168,9 +168,16 @@ TEST_CASE(
   alpaka::onHost::wait(queue);
   CHECK(host.getMdSpan()[0u] == 50);
   CHECK(host.getMdSpan()[1u] == 0);
+  // Launch values never restrict the context; only launch types bind it.
   auto differentFrame =
       alpaka::onHost::FrameSpec{Vec{2u}, Vec{1u}, alpaka::exec::cpuSerial};
-  CHECK_THROWS(tuner.enqueue(queue, differentFrame, bundle));
+  CHECK_NOTHROW(tuner.enqueue(queue, differentFrame, bundle));
+  CHECK(tuner.info().executionCount == 51u);
+  auto differentType = alpaka::onHost::FrameSpec{alpaka::Vec{std::uint32_t{1u}},
+                                                 alpaka::Vec{std::uint32_t{1u}},
+                                                 alpaka::exec::cpuSerial};
+  CHECK_THROWS_AS(tuner.enqueue(queue, differentType, bundle),
+                  std::logic_error);
   tuner.setRemainingLaunches(0u);
   CHECK(tuner.enqueueObserved(queue, frame, bundle).purpose ==
         alpakaTune::LaunchPurpose::production);

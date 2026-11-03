@@ -209,16 +209,13 @@ auto example(T_Cfg const &cfg, size_t numElements, size_t numberOfRuns,
   uint32_t elementsPerWorker = getNumElemPerThread<Data>(queue);
   auto dataBlocking = onHost::FrameSpec{
       divCeil(extent, frameExtent * elementsPerWorker), frameExtent, exec};
-  auto const tunables = alpakaTune::TunableBundle{
-      alpakaTune::tuneNumFrames(
-          dataBlocking,
-          alpakaTune::generate::linSpace(
+  auto tuner = alpakaTune::makeTuner(
+      alpakaTune::TunableBundle{
+          alpakaTune::tuneNumFrames(alpakaTune::generate::linSpace(
               IdxVec{1u}, IdxVec{dataBlocking.getNumFrames()}, IdxVec{1u})),
-      alpakaTune::tuneFrameExtent(
-          dataBlocking, alpakaTune::generate::linSpace(IdxVec{1u}, IdxVec{512u},
-                                                       IdxVec{1u}))};
-  auto tuner = alpakaTune::makeTuner(tunables, devAcc,
-                                     dataBlocking.getExecutor(), "grayScale");
+          alpakaTune::tuneFrameExtent(alpakaTune::generate::linSpace(
+              IdxVec{1u}, IdxVec{512u}, IdxVec{1u}))},
+      devAcc, "grayScale");
   if (tuner.info().candidateCount < 2000u)
     throw std::logic_error{
         "grayScale must expose at least 2000 tuning configurations"};
@@ -237,9 +234,8 @@ auto example(T_Cfg const &cfg, size_t numElements, size_t numberOfRuns,
     onHost::wait(queue);
 
     auto const beginKernelT = std::chrono::high_resolution_clock::now();
-    tuner.enqueue(
-        tuningQueue, dataBlocking,
-        KernelBundle{kernel, bufAccARGB, static_cast<size_t>(extent[0])});
+    tuner.enqueue(tuningQueue, dataBlocking, kernel, bufAccARGB,
+                  static_cast<size_t>(extent[0]));
     onHost::wait(queue);
     auto const endKernelT = std::chrono::high_resolution_clock::now();
     double const kernelRuntime =

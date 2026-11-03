@@ -115,8 +115,6 @@ auto optimizeImpl(alpaka::onHost::concepts::Device auto device,
                                    executor, budgetSeconds, maximumError,
                                    workload);
   }();
-  auto const bundle = alpaka::KernelBundle{RunCalculation{}, &calculator,
-                                           maximumSplits, pointsPerTile};
   auto outcome = Optimization{};
   outcome.candidateCount = tuner.info().candidateCount;
   // Bound the search, including replacement winners rejected during replay.
@@ -125,7 +123,8 @@ auto optimizeImpl(alpaka::onHost::concepts::Device auto device,
   for (std::size_t launch = 0u; launch < launchLimit; ++launch) {
     bool const replay = tuner.completed();
     try {
-      tuner.enqueue(queue, frame, bundle);
+      tuner.enqueue(queue, frame, RunCalculation{}, &calculator, maximumSplits,
+                    pointsPerTile);
     } catch (std::exception const &) {
       if (tuner.completed() &&
           tuner.completionReason() ==

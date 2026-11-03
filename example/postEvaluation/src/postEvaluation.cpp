@@ -67,18 +67,18 @@ auto run(auto const &backend) -> int {
   auto deviceResult = alpaka::onHost::allocLike(device, hostResult);
   auto const frameSpec =
       alpaka::onHost::FrameSpec{1u, 1u, alpaka::getExecutor(backend)};
-  auto const tunables = alpakaTune::TunableBundle{
-      termCount(alpakaTune::RVals<std::uint32_t>::list(
-          candidateTerms[0u], candidateTerms[1u], candidateTerms[2u],
-          candidateTerms[3u]))};
-  auto tuner = alpakaTune::makeTuner(tuningConfig(), tunables, device, backend,
-                                     "post-evaluation-pi");
-  auto const bundle = alpaka::KernelBundle{ApproximatePiKernel{},
-                                           deviceResult.getMdSpan(), termCount};
+  auto tuner =
+      alpakaTune::makeTuner(tuningConfig(),
+                            alpakaTune::TunableBundle{termCount(
+                                alpakaTune::RVals<std::uint32_t>::list(
+                                    candidateTerms[0u], candidateTerms[1u],
+                                    candidateTerms[2u], candidateTerms[3u]))},
+                            device, "post-evaluation-pi");
 
   constexpr auto maximumError = 2.0e-5;
   while (!tuner.completed()) {
-    tuner.enqueue(tuningQueue, frameSpec, bundle);
+    tuner.enqueue(tuningQueue, frameSpec, ApproximatePiKernel{},
+                  deviceResult.getMdSpan(), termCount);
     alpaka::onHost::memcpy(queue, hostResult, deviceResult);
     alpaka::onHost::wait(queue);
 

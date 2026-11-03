@@ -144,18 +144,15 @@ int exampleDispatch(auto const cfg, uint32_t numElements, auto const &mean,
       onHost::getFrameSpec(device, computeExec, Vec{blockSizeNormal});
   using LaunchVec = typename std::remove_cvref_t<ALPAKA_TYPEOF(
       frameSpec.getNumFrames())>::UniVec;
-  auto const tunables = alpakaTune::TunableBundle{
-      alpakaTune::tuneNumFrames(
-          frameSpec,
-          alpakaTune::generate::linSpace(LaunchVec::fill(1u),
-                                         LaunchVec{frameSpec.getNumFrames()},
-                                         LaunchVec::fill(1u))),
-      alpakaTune::tuneFrameExtent(
-          frameSpec, alpakaTune::generate::linSpace(LaunchVec::fill(1u),
-                                                    LaunchVec::fill(512u),
-                                                    LaunchVec::fill(1u)))};
-  auto tuner = alpakaTune::makeTuner(tunables, device, frameSpec.getExecutor(),
-                                     "randomInit/normal");
+  auto tuner = alpakaTune::makeTuner(
+      alpakaTune::TunableBundle{
+          alpakaTune::tuneNumFrames(alpakaTune::generate::linSpace(
+              LaunchVec::fill(1u), LaunchVec{frameSpec.getNumFrames()},
+              LaunchVec::fill(1u))),
+          alpakaTune::tuneFrameExtent(alpakaTune::generate::linSpace(
+              LaunchVec::fill(1u), LaunchVec::fill(512u),
+              LaunchVec::fill(1u)))},
+      device, "randomInit/normal");
   assert(tuner.info().candidateCount >= 2000u);
 
   auto queue =
@@ -163,14 +160,10 @@ int exampleDispatch(auto const cfg, uint32_t numElements, auto const &mean,
 
   std::cout << "- Testing RandomInitKernelNormal with a grid of " << frameSpec
             << "\n";
-  auto const kernelBundle = alpaka::KernelBundle{
-      RandomInitKernelNormal{}, outArray_d.getMdSpan(), mean, stdDev};
-  std::size_t completedExecutions = 0u;
-  while (
-      alpakaTune::example::applicationRunsRemain(completedExecutions, tuner)) {
-    tuner.enqueue(queue, frameSpec, kernelBundle);
-    ++completedExecutions;
-  }
+  for (std::size_t runs = 0u;
+       alpakaTune::example::applicationRunsRemain(runs, tuner); ++runs)
+    tuner.enqueue(queue, frameSpec, RandomInitKernelNormal{},
+                  outArray_d.getMdSpan(), mean, stdDev);
 
   onHost::wait(queue);
   onHost::memcpy(queue, outArray_h, outArray_d);
